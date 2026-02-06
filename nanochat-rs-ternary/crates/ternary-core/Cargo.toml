@@ -1,0 +1,9 @@
+[package]
+name = "ternary-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = { workspace = true }
+memmap2 = { workspace = true }
+rayon = { workspace = true }

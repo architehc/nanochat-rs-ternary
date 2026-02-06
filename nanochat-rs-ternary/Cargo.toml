@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.dependencies]
+bytemuck = { version = "1.14", features = ["derive"] }
+memmap2 = "0.9"
+rayon = "1.8"
+half = "2.3"

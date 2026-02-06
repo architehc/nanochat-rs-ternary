@@ -1,0 +1,11 @@
+[package]
+name = "nanochat-model"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ternary-core = { path = "../ternary-core" }
+ternary-kernels = { path = "../ternary-kernels" }
+mhc-lite = { path = "../mhc-lite" }
+half = { workspace = true }
+bytemuck = { workspace = true }

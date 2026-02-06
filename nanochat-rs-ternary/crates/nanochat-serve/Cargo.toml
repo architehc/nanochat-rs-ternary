@@ -1,0 +1,9 @@
+[package]
+name = "nanochat-serve"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nanochat-model = { path = "../nanochat-model" }
+ternary-core = { path = "../ternary-core" }
+mhc-lite = { path = "../mhc-lite" }

@@ -1,0 +1,9 @@
+/nanochat-rs-ternary/target/
+__pycache__/
+*.pyc
+*.egg-info/
+.env
+*.gguf
+*.bin
+*.pt
+*.npy
