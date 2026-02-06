@@ -7,3 +7,28 @@ bytemuck = { version = "1.14", features = ["derive"] }
 memmap2 = "0.9"
 rayon = "1.8"
 half = "2.3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Root package for integration tests and benchmarks
+[package]
+name = "nanochat-rs-ternary"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ternary-core = { path = "crates/ternary-core" }
+ternary-kernels = { path = "crates/ternary-kernels" }
+mhc-lite = { path = "crates/mhc-lite" }
+nanochat-model = { path = "crates/nanochat-model" }
+nanochat-serve = { path = "crates/nanochat-serve" }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "gemv_bench"
+harness = false
+
+[[bench]]
+name = "mhc_overhead"
+harness = false
