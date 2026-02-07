@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;
 use axum::response::sse::{Event, Sse};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use tokio::sync::mpsc;
@@ -26,11 +26,16 @@ pub struct AppState {
 /// Build the Axum router.
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/", get(chat_ui))
         .route("/health", get(health))
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+async fn chat_ui() -> Html<&'static str> {
+    Html(CHAT_HTML)
 }
 
 async fn health() -> &'static str {
@@ -183,6 +188,154 @@ async fn stream_completion(
     Sse::new(ReceiverStream::new(rx))
 }
 
+const CHAT_HTML: &str = r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nanochat</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column}
+header{background:#16213e;padding:12px 20px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #0f3460}
+header h1{font-size:18px;color:#e94560;font-weight:600}
+#model-name{font-size:13px;color:#888;margin-left:auto}
+#messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:80%;padding:10px 14px;border-radius:12px;line-height:1.5;font-size:14px;white-space:pre-wrap;word-break:break-word}
+.msg.user{align-self:flex-end;background:#0f3460;color:#e0e0e0;border-bottom-right-radius:4px}
+.msg.assistant{align-self:flex-start;background:#16213e;color:#e0e0e0;border-bottom-left-radius:4px}
+.msg.system{align-self:center;color:#888;font-size:12px;font-style:italic}
+#input-area{background:#16213e;padding:12px 20px;border-top:1px solid #0f3460;display:flex;gap:10px;align-items:flex-end}
+#prompt{flex:1;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:8px;padding:10px 14px;font-size:14px;font-family:inherit;resize:none;min-height:44px;max-height:120px;outline:none}
+#prompt:focus{border-color:#e94560}
+#send-btn{background:#e94560;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;cursor:pointer;font-weight:600;white-space:nowrap}
+#send-btn:hover{background:#c73e54}
+#send-btn:disabled{background:#555;cursor:not-allowed}
+#controls{display:flex;gap:16px;padding:6px 20px;background:#16213e;font-size:12px;color:#888;align-items:center}
+#controls label{display:flex;align-items:center;gap:4px}
+#controls input[type=range]{width:80px;accent-color:#e94560}
+#controls select,#controls input[type=number]{background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;padding:2px 6px;font-size:12px}
+.typing{opacity:0.6}
+</style>
+</head>
+<body>
+<header>
+<h1>nanochat</h1>
+<span id="model-name">loading...</span>
+</header>
+<div id="messages"></div>
+<div id="controls">
+<label>Temp <input type="range" id="temp" min="0" max="2" step="0.1" value="0.8"><span id="temp-val">0.8</span></label>
+<label>Max tokens <input type="number" id="max-tok" value="256" min="1" max="2048" style="width:60px"></label>
+<label>Top-p <input type="range" id="top-p" min="0" max="1" step="0.05" value="0.9"><span id="top-p-val">0.9</span></label>
+</div>
+<div id="input-area">
+<textarea id="prompt" rows="1" placeholder="Type a message... (Enter to send, Shift+Enter for newline)"></textarea>
+<button id="send-btn" onclick="sendMessage()">Send</button>
+</div>
+<script>
+const msgs=document.getElementById('messages');
+const prompt=document.getElementById('prompt');
+const sendBtn=document.getElementById('send-btn');
+const tempSlider=document.getElementById('temp');
+const tempVal=document.getElementById('temp-val');
+const topPSlider=document.getElementById('top-p');
+const topPVal=document.getElementById('top-p-val');
+let chatHistory=[];
+let generating=false;
+
+tempSlider.oninput=()=>tempVal.textContent=tempSlider.value;
+topPSlider.oninput=()=>topPVal.textContent=topPSlider.value;
+
+fetch('/v1/models').then(r=>r.json()).then(d=>{
+  document.getElementById('model-name').textContent=d.data?.[0]?.id||'unknown';
+}).catch(()=>{});
+
+prompt.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}
+});
+prompt.addEventListener('input',()=>{
+  prompt.style.height='auto';
+  prompt.style.height=Math.min(prompt.scrollHeight,120)+'px';
+});
+
+function addMsg(role,content,cls){
+  const d=document.createElement('div');
+  d.className='msg '+cls;
+  d.textContent=content;
+  msgs.appendChild(d);
+  msgs.scrollTop=msgs.scrollHeight;
+  return d;
+}
+
+async function sendMessage(){
+  if(generating)return;
+  const text=prompt.value.trim();
+  if(!text)return;
+  prompt.value='';
+  prompt.style.height='auto';
+
+  addMsg('user',text,'user');
+  chatHistory.push({role:'user',content:text});
+
+  const assistantDiv=addMsg('assistant','','assistant typing');
+  generating=true;
+  sendBtn.disabled=true;
+
+  try{
+    const res=await fetch('/v1/chat/completions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        messages:chatHistory,
+        temperature:parseFloat(tempSlider.value),
+        top_p:parseFloat(topPSlider.value),
+        max_tokens:parseInt(document.getElementById('max-tok').value)||256,
+        stream:true
+      })
+    });
+
+    const reader=res.body.getReader();
+    const decoder=new TextDecoder();
+    let fullText='';
+    let buf='';
+
+    while(true){
+      const{done,value}=await reader.read();
+      if(done)break;
+      buf+=decoder.decode(value,{stream:true});
+      const lines=buf.split('\n');
+      buf=lines.pop()||'';
+      for(const line of lines){
+        if(!line.startsWith('data: '))continue;
+        const data=line.slice(6).trim();
+        if(data==='[DONE]')break;
+        try{
+          const chunk=JSON.parse(data);
+          const c=chunk.choices?.[0]?.delta?.content;
+          if(c){fullText+=c;assistantDiv.textContent=fullText;}
+        }catch{}
+      }
+    }
+
+    assistantDiv.classList.remove('typing');
+    if(!fullText)fullText='(empty response)';
+    assistantDiv.textContent=fullText;
+    chatHistory.push({role:'assistant',content:fullText});
+  }catch(err){
+    assistantDiv.textContent='Error: '+err.message;
+    assistantDiv.classList.remove('typing');
+  }
+
+  generating=false;
+  sendBtn.disabled=false;
+  msgs.scrollTop=msgs.scrollHeight;
+  prompt.focus();
+}
+</script>
+</body>
+</html>"##;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +370,26 @@ mod tests {
             tokenizer,
             model_name: "nanochat-test".to_string(),
         })
+    }
+
+    #[tokio::test]
+    async fn test_chat_ui() {
+        let state = make_test_state();
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 100000)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("nanochat"));
+        assert!(html.contains("/v1/chat/completions"));
+        assert!(html.contains("<!DOCTYPE html>"));
     }
 
     #[tokio::test]

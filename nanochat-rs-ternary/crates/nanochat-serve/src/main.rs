@@ -117,6 +117,7 @@ async fn main() {
     });
     tracing::info!("Listening on http://{addr}");
     tracing::info!("Endpoints:");
+    tracing::info!("  GET  /                    (chat UI)");
     tracing::info!("  POST /v1/chat/completions");
     tracing::info!("  GET  /v1/models");
     tracing::info!("  GET  /health");
