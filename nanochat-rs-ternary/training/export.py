@@ -148,19 +148,25 @@ def export_gguf(model: NanochatTernary, path: str):
 def export_checkpoint(checkpoint_path: str, gguf_path: str, mhc_path: str,
                       config_name: str = 'd20'):
     """Full export pipeline: checkpoint -> GGUF + mHC binary."""
-    # Load config
-    if config_name == 'd20':
-        config = NanochatConfig.d20()
-    elif config_name == '125m':
-        config = NanochatConfig.nano_125m()
-    elif config_name == '560m':
-        config = NanochatConfig.nano_560m()
-    else:
-        raise ValueError(f"Unknown config: {config_name}")
-
-    # Load model
+    # Load checkpoint first to get config (may have overridden vocab_size)
     print(f"Loading checkpoint: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+
+    if 'config' in checkpoint and checkpoint['config'] is not None:
+        config = checkpoint['config']
+        print(f"Using config from checkpoint (vocab_size={config.vocab_size})")
+    else:
+        # Fallback to preset
+        if config_name == 'd20':
+            config = NanochatConfig.d20()
+        elif config_name == '125m':
+            config = NanochatConfig.nano_125m()
+        elif config_name == '560m':
+            config = NanochatConfig.nano_560m()
+        else:
+            raise ValueError(f"Unknown config: {config_name}")
+
+    # Load model
     model = NanochatTernary(config)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
@@ -244,4 +250,8 @@ def main():
 
 
 if __name__ == '__main__':
-    _self_test()
+    import sys
+    if len(sys.argv) > 1:
+        main()
+    else:
+        _self_test()

@@ -24,6 +24,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
+import tiktoken
+
 from model import NanochatConfig, NanochatTernary
 from mhc_lite import measure_composite_gain
 
@@ -72,6 +74,69 @@ class SyntheticTextDataset(Dataset):
         seq = self.data[idx]
         # Input: seq[:-1], Target: seq[1:]
         return seq[:-1], seq[1:]
+
+
+# =============================================================================
+# TinyStories Dataset (real data for actual training)
+# =============================================================================
+
+class TinyStoriesDataset(Dataset):
+    """Loads TinyStories from HuggingFace, tokenizes with tiktoken GPT-2.
+
+    Each sample is a contiguous chunk of seq_len+1 tokens from the corpus,
+    split into input[:-1] and target[1:] for next-token prediction.
+
+    The full corpus is tokenized once and concatenated into a single flat
+    token buffer, then sliced into non-overlapping chunks.
+    """
+
+    def __init__(self, seq_len: int, split: str = 'train',
+                 max_stories: int = 0, cache_dir: str = None):
+        from datasets import load_dataset
+
+        self.seq_len = seq_len
+        self.enc = tiktoken.get_encoding('gpt2')
+        self.vocab_size = self.enc.n_vocab  # 50257
+
+        # Load dataset
+        print(f"Loading TinyStories ({split} split)...")
+        ds = load_dataset('roneneldan/TinyStories', split=split,
+                          cache_dir=cache_dir, trust_remote_code=False)
+
+        # Optionally limit number of stories for faster iteration
+        if max_stories > 0:
+            ds = ds.select(range(min(max_stories, len(ds))))
+        print(f"  Stories: {len(ds):,}")
+
+        # Tokenize all stories and concatenate into flat buffer
+        print("Tokenizing...")
+        all_tokens = []
+        eot = self.enc.eot_token  # end-of-text separator
+        for i, example in enumerate(ds):
+            text = example['text']
+            if text.strip():
+                tokens = self.enc.encode_ordinary(text)
+                all_tokens.extend(tokens)
+                all_tokens.append(eot)
+            if (i + 1) % 200000 == 0:
+                print(f"  Tokenized {i+1:,} stories ({len(all_tokens):,} tokens)...")
+
+        print(f"  Total tokens: {len(all_tokens):,}")
+
+        # Slice into non-overlapping chunks of seq_len+1
+        chunk_size = seq_len + 1  # +1 for target shift
+        n_chunks = len(all_tokens) // chunk_size
+        # Trim to exact multiple
+        all_tokens = all_tokens[:n_chunks * chunk_size]
+        self.data = torch.tensor(all_tokens, dtype=torch.long).reshape(n_chunks, chunk_size)
+        print(f"  Chunks: {n_chunks:,} (seq_len={seq_len})")
+
+    def __len__(self):
+        return self.data.shape[0]
+
+    def __getitem__(self, idx):
+        chunk = self.data[idx]
+        return chunk[:-1], chunk[1:]
 
 
 # =============================================================================
@@ -186,8 +251,28 @@ def train(args):
     else:
         raise ValueError(f"Unknown config: {args.config}")
 
+    # Dataset (load first so we can override vocab_size if needed)
+    seq_len = min(config.max_seq_len, args.seq_len)
+
+    if args.dataset == 'tinystories':
+        dataset = TinyStoriesDataset(
+            seq_len=seq_len,
+            split='train',
+            max_stories=args.max_stories,
+        )
+        # Override vocab_size to match tiktoken GPT-2
+        config.vocab_size = dataset.vocab_size
+        print(f"Using TinyStories dataset (vocab_size overridden to {config.vocab_size})")
+    else:
+        dataset = SyntheticTextDataset(
+            vocab_size=config.vocab_size,
+            seq_len=seq_len + 1,  # +1 for target shift
+            num_samples=args.num_samples,
+        )
+        print(f"Using synthetic dataset")
+
     print(f"Config: {args.config} (dim={config.dim}, layers={config.n_layers}, "
-          f"heads={config.n_heads}, streams={config.mhc_n_streams})")
+          f"heads={config.n_heads}, vocab={config.vocab_size}, streams={config.mhc_n_streams})")
 
     # Model
     model = NanochatTernary(config).to(device)
@@ -196,16 +281,14 @@ def train(args):
           f"(linear={counts['linear']:,}, mhc={counts['mhc']:,}, "
           f"embed={counts['embed']:,}, norm={counts['norm']:,})")
 
-    # Dataset
-    seq_len = min(config.max_seq_len, args.seq_len)
-    dataset = SyntheticTextDataset(
-        vocab_size=config.vocab_size,
-        seq_len=seq_len + 1,  # +1 for target shift
-        num_samples=args.num_samples,
-    )
+    # GPU memory report
+    if device.type == 'cuda':
+        mem_mb = torch.cuda.memory_allocated() / 1024 / 1024
+        print(f"GPU memory after model load: {mem_mb:.0f} MB")
+
     dataloader = DataLoader(
         dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=0, pin_memory=(device.type == 'cuda'),
+        num_workers=2, pin_memory=(device.type == 'cuda'),
     )
 
     # Optimizer
@@ -213,19 +296,22 @@ def train(args):
         model, lr=args.lr, mhc_lr=args.mhc_lr, weight_decay=args.weight_decay,
     )
     optimizer = torch.optim.AdamW(param_groups)
-    total_steps = args.epochs * len(dataloader)
+    total_steps = args.epochs * (len(dataloader) // args.grad_accum_steps)
 
-    print(f"\nTraining: {args.epochs} epochs, {len(dataloader)} steps/epoch, "
-          f"{total_steps} total steps")
+    print(f"\nTraining: {args.epochs} epochs, {len(dataloader)} micro-steps/epoch, "
+          f"{total_steps} optimizer steps")
     print(f"LR: linear={args.lr}, mhc={args.mhc_lr}, wd={args.weight_decay}")
-    print(f"Batch size: {args.batch_size}, Seq len: {seq_len}")
+    print(f"Batch size: {args.batch_size} x {args.grad_accum_steps} accum = "
+          f"{args.batch_size * args.grad_accum_steps} effective, Seq len: {seq_len}")
     print(f"Grad clip: {args.grad_clip}")
     print()
 
     # Training
     global_step = 0
+    micro_step = 0
     best_loss = float('inf')
     loss_history = []
+    accum_steps = args.grad_accum_steps
 
     for epoch in range(args.epochs):
         model.train()
@@ -237,12 +323,13 @@ def train(args):
             input_ids = input_ids.to(device)
             target_ids = target_ids.to(device)
 
-            # LR schedule
-            lr_mult = wsd_schedule(global_step, args.warmup_steps, total_steps)
-            for group in optimizer.param_groups:
-                if '_base_lr' not in group:
-                    group['_base_lr'] = group['lr']
-                group['lr'] = group['_base_lr'] * lr_mult
+            # LR schedule (update on optimizer steps, not micro steps)
+            if micro_step % accum_steps == 0:
+                lr_mult = wsd_schedule(global_step, args.warmup_steps, total_steps)
+                for group in optimizer.param_groups:
+                    if '_base_lr' not in group:
+                        group['_base_lr'] = group['lr']
+                    group['lr'] = group['_base_lr'] * lr_mult
 
             # Forward
             logits = model(input_ids)
@@ -250,49 +337,60 @@ def train(args):
                 logits.reshape(-1, config.vocab_size),
                 target_ids.reshape(-1),
             )
-
-            # Backward
-            optimizer.zero_grad()
-            loss.backward()
-
-            # Gradient clipping
-            if args.grad_clip > 0:
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), args.grad_clip
-                )
-            else:
-                grad_norm = sum(
-                    p.grad.norm().item() ** 2 for p in model.parameters()
-                    if p.grad is not None
-                ) ** 0.5
-
-            optimizer.step()
+            # Scale loss for gradient accumulation
+            scaled_loss = loss / accum_steps
+            scaled_loss.backward()
 
             # Logging
             batch_loss = loss.item()
             batch_tokens = target_ids.numel()
             epoch_loss += batch_loss * batch_tokens
             epoch_tokens += batch_tokens
-            loss_history.append(batch_loss)
+            micro_step += 1
 
-            if global_step % args.log_interval == 0:
-                elapsed = time.time() - t0
-                tokens_per_sec = epoch_tokens / max(elapsed, 1e-6)
-                current_lr = optimizer.param_groups[0]['lr']
-                print(f"  step {global_step:5d} | loss {batch_loss:.4f} | "
-                      f"grad_norm {grad_norm:.4f} | lr {current_lr:.2e} | "
-                      f"{tokens_per_sec:.0f} tok/s")
+            # Optimizer step every accum_steps
+            if micro_step % accum_steps == 0:
+                # Gradient clipping
+                if args.grad_clip > 0:
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), args.grad_clip
+                    )
+                else:
+                    grad_norm = sum(
+                        p.grad.norm().item() ** 2 for p in model.parameters()
+                        if p.grad is not None
+                    ) ** 0.5
 
-            # mHC diagnostics
-            if global_step > 0 and global_step % args.diag_interval == 0:
-                diag = measure_composite_gain(model)
-                gain = diag.get('composite_gain', 0)
-                ds_viol = diag.get('ds_violations', 'none')
-                print(f"  [mHC] composite_gain={gain:.4f} | ds_violations={ds_viol}")
-                if gain > 2.0:
-                    print(f"  WARNING: composite gain {gain:.2f} > 2.0!")
+                optimizer.step()
+                optimizer.zero_grad()
 
-            global_step += 1
+                # GPU memory report after first optimizer step
+                if global_step == 0 and device.type == 'cuda':
+                    peak_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+                    curr_mb = torch.cuda.memory_allocated() / 1024 / 1024
+                    print(f"  GPU memory after first batch: {curr_mb:.0f} MB current, "
+                          f"{peak_mb:.0f} MB peak")
+
+                loss_history.append(batch_loss)
+
+                if global_step % args.log_interval == 0:
+                    elapsed = time.time() - t0
+                    tokens_per_sec = epoch_tokens / max(elapsed, 1e-6)
+                    current_lr = optimizer.param_groups[0]['lr']
+                    print(f"  step {global_step:5d} | loss {batch_loss:.4f} | "
+                          f"grad_norm {grad_norm:.4f} | lr {current_lr:.2e} | "
+                          f"{tokens_per_sec:.0f} tok/s")
+
+                # mHC diagnostics
+                if global_step > 0 and global_step % args.diag_interval == 0:
+                    diag = measure_composite_gain(model)
+                    gain = diag.get('composite_gain', 0)
+                    ds_viol = diag.get('ds_violations', 'none')
+                    print(f"  [mHC] composite_gain={gain:.4f} | ds_violations={ds_viol}")
+                    if gain > 2.0:
+                        print(f"  WARNING: composite gain {gain:.2f} > 2.0!")
+
+                global_step += 1
 
         # Epoch summary
         avg_loss = epoch_loss / max(epoch_tokens, 1)
@@ -315,6 +413,11 @@ def train(args):
                 print(f"  Loss decreasing: {early:.4f} -> {recent:.4f}")
             else:
                 print(f"  WARNING: Loss not decreasing: {early:.4f} -> {recent:.4f}")
+
+    # Save final checkpoint
+    if args.save_path:
+        save_checkpoint(model, optimizer, args.epochs - 1, global_step, args.save_path)
+        print(f"Saved final checkpoint to {args.save_path}")
 
     # Final diagnostics
     print("\n" + "=" * 60)
@@ -356,6 +459,11 @@ def main():
     parser.add_argument('--config', type=str, default='d20',
                         choices=['d20', '125m', '560m'],
                         help='Model config preset')
+    parser.add_argument('--dataset', type=str, default='synthetic',
+                        choices=['synthetic', 'tinystories'],
+                        help='Dataset: synthetic (random patterns) or tinystories (real data)')
+    parser.add_argument('--max_stories', type=int, default=0,
+                        help='Limit TinyStories to N stories (0 = all)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--batch_size', type=int, default=16)
@@ -366,6 +474,8 @@ def main():
                         help='Learning rate for mHC/norm/embed params')
     parser.add_argument('--weight_decay', type=float, default=0.1)
     parser.add_argument('--grad_clip', type=float, default=1.0)
+    parser.add_argument('--grad_accum_steps', type=int, default=1,
+                        help='Gradient accumulation steps (effective batch = batch_size * accum)')
     parser.add_argument('--warmup_steps', type=int, default=100)
     parser.add_argument('--num_samples', type=int, default=10000)
     parser.add_argument('--log_interval', type=int, default=10)
