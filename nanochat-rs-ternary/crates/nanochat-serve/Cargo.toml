@@ -8,6 +8,7 @@ nanochat-model = { path = "../nanochat-model" }
 ternary-core = { path = "../ternary-core" }
 mhc-lite = { path = "../mhc-lite" }
 half = { workspace = true }
+rayon = { workspace = true }
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"

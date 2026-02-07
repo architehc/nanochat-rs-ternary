@@ -23,70 +23,80 @@ pub struct ModelConfig {
     pub mhc_n_streams: usize,
     /// RoPE theta
     pub rope_theta: f32,
+    /// Number of experts (None = dense FFN)
+    pub n_experts: Option<usize>,
+    /// Number of active experts per token
+    pub n_active_experts: Option<usize>,
+    /// Fraction of layers using DeltaNet attention (None = all standard MHA)
+    pub deltanet_ratio: Option<f32>,
+    /// Whether embedding and LM head weights are tied
+    pub weight_tied: bool,
 }
 
 impl ModelConfig {
     /// ~20M param debug/test config
     pub fn d20() -> Self {
         Self {
-            dim: 256,
-            n_layers: 6,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 32000,
-            max_seq_len: 512,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
+            dim: 256, n_layers: 6, n_heads: 4, n_kv_heads: 4,
+            ffn_mult: 2.667, vocab_size: 32000, max_seq_len: 512,
+            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0,
+            n_experts: None, n_active_experts: None, deltanet_ratio: None,
+            weight_tied: false,
         }
     }
 
     /// ~125M param config (trained on TinyStories)
     pub fn nano_125m() -> Self {
         Self {
-            dim: 768,
-            n_layers: 12,
-            n_heads: 12,
-            n_kv_heads: 12,
-            ffn_mult: 2.667,
-            vocab_size: 50257,
-            max_seq_len: 2048,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
+            dim: 768, n_layers: 12, n_heads: 12, n_kv_heads: 12,
+            ffn_mult: 2.667, vocab_size: 50257, max_seq_len: 2048,
+            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0,
+            n_experts: None, n_active_experts: None, deltanet_ratio: None,
+            weight_tied: false,
         }
     }
 
     /// ~560M param config
     pub fn nano_560m() -> Self {
         Self {
-            dim: 1024,
-            n_layers: 24,
-            n_heads: 16,
-            n_kv_heads: 16,
-            ffn_mult: 2.667,
-            vocab_size: 32000,
-            max_seq_len: 2048,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
+            dim: 1024, n_layers: 24, n_heads: 16, n_kv_heads: 16,
+            ffn_mult: 2.667, vocab_size: 32000, max_seq_len: 2048,
+            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0,
+            n_experts: None, n_active_experts: None, deltanet_ratio: None,
+            weight_tied: false,
         }
     }
 
     /// ~7B param config
     pub fn nano_7b() -> Self {
         Self {
-            dim: 4096,
-            n_layers: 32,
-            n_heads: 32,
-            n_kv_heads: 8,
-            ffn_mult: 2.667,
-            vocab_size: 128256,
-            max_seq_len: 8192,
-            group_size: 128,
-            mhc_n_streams: 4,
-            rope_theta: 500000.0,
+            dim: 4096, n_layers: 32, n_heads: 32, n_kv_heads: 8,
+            ffn_mult: 2.667, vocab_size: 128256, max_seq_len: 8192,
+            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0,
+            n_experts: None, n_active_experts: None, deltanet_ratio: None,
+            weight_tied: false,
+        }
+    }
+
+    /// ~25B param MoE config
+    pub fn moe_25b() -> Self {
+        Self {
+            dim: 4096, n_layers: 32, n_heads: 32, n_kv_heads: 8,
+            ffn_mult: 2.667, vocab_size: 128256, max_seq_len: 8192,
+            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0,
+            n_experts: Some(8), n_active_experts: Some(2), deltanet_ratio: None,
+            weight_tied: false,
+        }
+    }
+
+    /// ~80B param MoE config
+    pub fn moe_80b() -> Self {
+        Self {
+            dim: 8192, n_layers: 64, n_heads: 64, n_kv_heads: 8,
+            ffn_mult: 2.667, vocab_size: 128256, max_seq_len: 8192,
+            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0,
+            n_experts: Some(16), n_active_experts: Some(2), deltanet_ratio: None,
+            weight_tied: false,
         }
     }
 

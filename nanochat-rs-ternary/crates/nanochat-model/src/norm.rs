@@ -50,6 +50,22 @@ impl RMSNorm {
             out[i] = x[i] * rms_inv * self.weight[i];
         }
     }
+
+    /// Batched RMSNorm: process `seq_len` tokens.
+    ///
+    /// x_batch:   [seq_len * dim]
+    /// out_batch: [seq_len * dim]
+    pub fn forward_batch(&self, x_batch: &[f32], seq_len: usize, out_batch: &mut [f32]) {
+        let dim = self.weight.len();
+        assert_eq!(x_batch.len(), seq_len * dim);
+        assert_eq!(out_batch.len(), seq_len * dim);
+
+        for t in 0..seq_len {
+            let x = &x_batch[t * dim..(t + 1) * dim];
+            let out = &mut out_batch[t * dim..(t + 1) * dim];
+            self.forward(x, out);
+        }
+    }
 }
 
 #[cfg(test)]

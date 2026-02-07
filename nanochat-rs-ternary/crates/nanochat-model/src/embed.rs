@@ -53,6 +53,22 @@ impl Embedding {
             self.forward_token(tid, &mut out[t * self.dim..(t + 1) * self.dim]);
         }
     }
+
+    /// Use embedding weights as LM head (weight tying).
+    /// Computes logits[v] = sum_d(x[d] * weight[v * dim + d]) for all v.
+    /// This is an FP32 matmul (no ternary quantization).
+    pub fn forward_as_lm_head(&self, x: &[f32], logits: &mut [f32]) {
+        assert_eq!(x.len(), self.dim);
+        assert_eq!(logits.len(), self.vocab_size);
+        for v in 0..self.vocab_size {
+            let row = &self.weight[v * self.dim..(v + 1) * self.dim];
+            let mut sum = 0.0f32;
+            for d in 0..self.dim {
+                sum += x[d] * row[d];
+            }
+            logits[v] = sum;
+        }
+    }
 }
 
 #[cfg(test)]

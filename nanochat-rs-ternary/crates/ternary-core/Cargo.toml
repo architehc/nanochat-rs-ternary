@@ -7,3 +7,4 @@ edition = "2021"
 bytemuck = { workspace = true }
 memmap2 = { workspace = true }
 rayon = { workspace = true }
+libc = "0.2"

@@ -23,4 +23,5 @@
 
 /// Re-export the main GEMV interface from cpu module.
 pub use crate::cpu::gemv;
+pub use crate::cpu::gemv_parallel;
 pub use crate::cpu::gemv_scalar_ref;

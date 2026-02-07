@@ -651,6 +651,7 @@ dependencies = [
  "mhc-lite",
  "nanochat-model",
  "rand",
+ "rayon",
  "serde",
  "serde_json",
  "ternary-core",
@@ -1046,6 +1047,7 @@ name = "ternary-core"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "libc",
  "memmap2",
  "rayon",
 ]

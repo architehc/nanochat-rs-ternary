@@ -45,6 +45,22 @@ impl BitLinear {
         // Ternary GEMV
         cpu::gemv(&self.pw, &x_q, act_scale, out);
     }
+
+    /// Batched forward pass for prefill: process `seq_len` tokens.
+    ///
+    /// x_batch:   [seq_len * cols] — flattened token activations
+    /// seq_len:   number of tokens
+    /// out_batch: [seq_len * rows] — flattened output buffer
+    pub fn forward_batch(&self, x_batch: &[f32], seq_len: usize, out_batch: &mut [f32]) {
+        assert_eq!(x_batch.len(), seq_len * self.cols);
+        assert_eq!(out_batch.len(), seq_len * self.rows);
+
+        for t in 0..seq_len {
+            let x = &x_batch[t * self.cols..(t + 1) * self.cols];
+            let out = &mut out_batch[t * self.rows..(t + 1) * self.rows];
+            self.forward(x, out);
+        }
+    }
 }
 
 /// Quantize activations to INT8 using per-token absmax scaling.
@@ -116,6 +132,45 @@ mod tests {
             out.iter().any(|&v| v != 0.0),
             "all-zero output — GEMV not working"
         );
+    }
+
+    #[test]
+    fn test_bitlinear_forward_batch() {
+        let rows = 128;
+        let cols = 128;
+        let gs = 128;
+        let seq_len = 4;
+
+        let weights = vec![1.0f32; rows * cols];
+        let bl = BitLinear::from_float(&weights, rows, cols, gs);
+
+        // Create batch input
+        let mut x_batch = vec![0.0f32; seq_len * cols];
+        for t in 0..seq_len {
+            for c in 0..cols {
+                x_batch[t * cols + c] = (t as f32 + 1.0) * 0.1;
+            }
+        }
+
+        // Batched forward
+        let mut out_batch = vec![0.0f32; seq_len * rows];
+        bl.forward_batch(&x_batch, seq_len, &mut out_batch);
+
+        // Compare with per-token forward
+        for t in 0..seq_len {
+            let x = &x_batch[t * cols..(t + 1) * cols];
+            let mut out_single = vec![0.0f32; rows];
+            bl.forward(x, &mut out_single);
+
+            let batch_out = &out_batch[t * rows..(t + 1) * rows];
+            for r in 0..rows {
+                assert!(
+                    (batch_out[r] - out_single[r]).abs() < 1e-6,
+                    "token {}, row {}: batch={} vs single={}",
+                    t, r, batch_out[r], out_single[r]
+                );
+            }
+        }
     }
 
     #[test]

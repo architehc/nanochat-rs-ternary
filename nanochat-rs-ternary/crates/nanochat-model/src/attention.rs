@@ -197,6 +197,93 @@ impl Attention {
         // Output projection
         self.wo.forward(&attn_out, out);
     }
+
+    /// Batched forward pass for prefill: process `seq_len` tokens with causal attention.
+    ///
+    /// x_batch:   [seq_len * dim] — flattened input tokens
+    /// seq_len:   number of tokens to process
+    /// cache:     KV cache (will be filled with all seq_len positions)
+    /// rope:      RoPE frequencies
+    /// start_pos: starting position offset (0 for fresh prefill)
+    /// out_batch: [seq_len * dim] — flattened output
+    pub fn forward_batch(
+        &self,
+        x_batch: &[f32],
+        seq_len: usize,
+        cache: &mut KvCache,
+        rope: &RopeFreqs,
+        start_pos: usize,
+        out_batch: &mut [f32],
+    ) {
+        let dim = self.wq.cols;
+        let kv_dim = self.n_kv_heads * self.head_dim;
+
+        // 1. Project all Q, K, V for all tokens
+        let mut all_q = vec![0.0f32; seq_len * dim];
+        let mut all_k = vec![0.0f32; seq_len * kv_dim];
+        let mut all_v = vec![0.0f32; seq_len * kv_dim];
+
+        self.wq.forward_batch(x_batch, seq_len, &mut all_q);
+        self.wk.forward_batch(x_batch, seq_len, &mut all_k);
+        self.wv.forward_batch(x_batch, seq_len, &mut all_v);
+
+        // 2. Apply RoPE and fill KV cache for each position
+        for t in 0..seq_len {
+            let pos = start_pos + t;
+            let q_slice = &mut all_q[t * dim..(t + 1) * dim];
+            let k_slice = &mut all_k[t * kv_dim..(t + 1) * kv_dim];
+            let v_slice = &all_v[t * kv_dim..(t + 1) * kv_dim];
+
+            rope.apply(q_slice, self.n_heads, self.head_dim, pos);
+            rope.apply(k_slice, self.n_kv_heads, self.head_dim, pos);
+
+            cache.append_kv(k_slice, v_slice);
+        }
+
+        // 3. Causal attention: query at position t attends to [0..start_pos+t+1]
+        let scale = 1.0 / (self.head_dim as f32).sqrt();
+
+        for t in 0..seq_len {
+            let causal_len = start_pos + t + 1; // number of KV positions visible
+            let q_base = t * dim;
+            let out_base = t * dim;
+
+            let mut attn_out = vec![0.0f32; dim];
+
+            for h in 0..self.n_heads {
+                let kv_h = h / self.n_rep;
+                let q_offset = q_base + h * self.head_dim;
+                let kv_offset = kv_h * self.head_dim;
+
+                // Compute attention scores
+                let mut scores = vec![0.0f32; causal_len];
+                for s in 0..causal_len {
+                    let k_base = s * kv_dim + kv_offset;
+                    let mut dot = 0.0f32;
+                    for d in 0..self.head_dim {
+                        dot += all_q[q_offset + d] * cache.k[k_base + d];
+                    }
+                    scores[s] = dot * scale;
+                }
+
+                // Softmax
+                softmax_inplace(&mut scores);
+
+                // Weighted sum of values
+                let h_out_offset = h * self.head_dim;
+                for s in 0..causal_len {
+                    let v_base = s * kv_dim + kv_offset;
+                    let w = scores[s];
+                    for d in 0..self.head_dim {
+                        attn_out[h_out_offset + d] += w * cache.v[v_base + d];
+                    }
+                }
+            }
+
+            // Output projection for this token
+            self.wo.forward(&attn_out, &mut out_batch[out_base..out_base + dim]);
+        }
+    }
 }
 
 /// In-place softmax.
@@ -273,6 +360,52 @@ mod tests {
         let sum: f32 = x.iter().sum();
         assert!((sum - 1.0).abs() < 1e-5);
         assert!(x[2] > x[1] && x[1] > x[0]);
+    }
+
+    #[test]
+    fn test_attention_forward_batch_matches_sequential() {
+        let config = ModelConfig::d20();
+        let attn = Attention::new_random(&config);
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        let dim = config.dim;
+        let seq_len = 4;
+
+        // Create input: seq_len tokens
+        let mut x_batch = vec![0.0f32; seq_len * dim];
+        for t in 0..seq_len {
+            for d in 0..dim {
+                x_batch[t * dim + d] = ((t * dim + d) as f32 / (seq_len * dim) as f32) - 0.5;
+            }
+        }
+
+        // Sequential forward (reference)
+        let mut cache_seq = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
+        let mut out_seq_all = vec![0.0f32; seq_len * dim];
+        for t in 0..seq_len {
+            let x = &x_batch[t * dim..(t + 1) * dim];
+            let out = &mut out_seq_all[t * dim..(t + 1) * dim];
+            attn.forward(x, &mut cache_seq, &rope, t, out);
+        }
+
+        // Batched forward
+        let mut cache_batch = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
+        let mut out_batch = vec![0.0f32; seq_len * dim];
+        attn.forward_batch(&x_batch, seq_len, &mut cache_batch, &rope, 0, &mut out_batch);
+
+        // Compare: each token's output should match
+        for t in 0..seq_len {
+            let max_diff: f32 = (0..dim)
+                .map(|d| (out_seq_all[t * dim + d] - out_batch[t * dim + d]).abs())
+                .fold(0.0f32, f32::max);
+            assert!(
+                max_diff < 1e-5,
+                "token {}: batched vs sequential max_diff={} (should be < 1e-5)",
+                t, max_diff
+            );
+        }
+
+        // KV cache lengths should match
+        assert_eq!(cache_seq.len, cache_batch.len);
     }
 
     #[test]

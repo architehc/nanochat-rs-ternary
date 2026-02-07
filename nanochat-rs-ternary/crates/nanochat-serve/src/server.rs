@@ -203,6 +203,10 @@ mod tests {
             group_size: 128,
             mhc_n_streams: 2,
             rope_theta: 10000.0,
+            n_experts: None,
+            n_active_experts: None,
+            deltanet_ratio: None,
+            weight_tied: false,
         };
         let engine = InferenceEngine::new_random(config);
 

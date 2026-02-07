@@ -28,6 +28,7 @@ import tiktoken
 
 from model import NanochatConfig, NanochatTernary
 from mhc_lite import measure_composite_gain
+from optimizers import Muon, Lion
 
 
 # =============================================================================
@@ -233,6 +234,44 @@ def build_param_groups(model: NanochatTernary, lr: float, mhc_lr: float,
     return groups
 
 
+def build_muon_lion_optimizers(model: NanochatTernary, lr: float, mhc_lr: float,
+                                weight_decay: float) -> list:
+    """Build Muon + Lion optimizers from param groups.
+
+    Muon handles 2D+ linear weight matrices (with Newton-Schulz orthogonalization).
+    Lion handles 1D params: mHC, norms, embeddings (sign-based updates).
+
+    Returns a list of optimizers to step together.
+    """
+    param_groups = build_param_groups(model, lr=lr, mhc_lr=mhc_lr,
+                                       weight_decay=weight_decay)
+
+    muon_params = []
+    lion_params_groups = []
+
+    for group in param_groups:
+        if group['name'] == 'linear':
+            muon_params.append({
+                'params': group['params'],
+                'lr': group['lr'],
+            })
+        else:
+            lion_params_groups.append({
+                'params': group['params'],
+                'lr': group['lr'],
+                'weight_decay': group['weight_decay'],
+            })
+
+    optimizers = []
+    if muon_params:
+        optimizers.append(Muon(muon_params, lr=lr, momentum=0.95, ns_steps=5))
+    if lion_params_groups:
+        optimizers.append(Lion(lion_params_groups, lr=mhc_lr, betas=(0.9, 0.99),
+                               weight_decay=0.0))
+
+    return optimizers
+
+
 # =============================================================================
 # Training Loop
 # =============================================================================
@@ -292,10 +331,19 @@ def train(args):
     )
 
     # Optimizer
-    param_groups = build_param_groups(
-        model, lr=args.lr, mhc_lr=args.mhc_lr, weight_decay=args.weight_decay,
-    )
-    optimizer = torch.optim.AdamW(param_groups)
+    if args.optimizer == 'muon_lion':
+        optimizers = build_muon_lion_optimizers(
+            model, lr=args.lr, mhc_lr=args.mhc_lr, weight_decay=args.weight_decay,
+        )
+        optimizer_names = [type(o).__name__ for o in optimizers]
+        print(f"Optimizers: {', '.join(optimizer_names)} (Muon+Lion split)")
+    else:
+        param_groups = build_param_groups(
+            model, lr=args.lr, mhc_lr=args.mhc_lr, weight_decay=args.weight_decay,
+        )
+        optimizers = [torch.optim.AdamW(param_groups)]
+        print(f"Optimizer: AdamW")
+
     total_steps = args.epochs * (len(dataloader) // args.grad_accum_steps)
 
     print(f"\nTraining: {args.epochs} epochs, {len(dataloader)} micro-steps/epoch, "
@@ -326,10 +374,11 @@ def train(args):
             # LR schedule (update on optimizer steps, not micro steps)
             if micro_step % accum_steps == 0:
                 lr_mult = wsd_schedule(global_step, args.warmup_steps, total_steps)
-                for group in optimizer.param_groups:
-                    if '_base_lr' not in group:
-                        group['_base_lr'] = group['lr']
-                    group['lr'] = group['_base_lr'] * lr_mult
+                for opt in optimizers:
+                    for group in opt.param_groups:
+                        if '_base_lr' not in group:
+                            group['_base_lr'] = group['lr']
+                        group['lr'] = group['_base_lr'] * lr_mult
 
             # Forward
             logits = model(input_ids)
@@ -361,8 +410,9 @@ def train(args):
                         if p.grad is not None
                     ) ** 0.5
 
-                optimizer.step()
-                optimizer.zero_grad()
+                for opt in optimizers:
+                    opt.step()
+                    opt.zero_grad()
 
                 # GPU memory report after first optimizer step
                 if global_step == 0 and device.type == 'cuda':
@@ -376,7 +426,7 @@ def train(args):
                 if global_step % args.log_interval == 0:
                     elapsed = time.time() - t0
                     tokens_per_sec = epoch_tokens / max(elapsed, 1e-6)
-                    current_lr = optimizer.param_groups[0]['lr']
+                    current_lr = optimizers[0].param_groups[0]['lr']
                     print(f"  step {global_step:5d} | loss {batch_loss:.4f} | "
                           f"grad_norm {grad_norm:.4f} | lr {current_lr:.2e} | "
                           f"{tokens_per_sec:.0f} tok/s")
@@ -402,7 +452,7 @@ def train(args):
         if avg_loss < best_loss:
             best_loss = avg_loss
             if args.save_path:
-                save_checkpoint(model, optimizer, epoch, global_step, args.save_path)
+                save_checkpoint(model, optimizers, epoch, global_step, args.save_path)
                 print(f"  Saved checkpoint to {args.save_path}")
 
         # Loss sanity check
@@ -416,7 +466,7 @@ def train(args):
 
     # Save final checkpoint
     if args.save_path:
-        save_checkpoint(model, optimizer, args.epochs - 1, global_step, args.save_path)
+        save_checkpoint(model, optimizers, args.epochs - 1, global_step, args.save_path)
         print(f"Saved final checkpoint to {args.save_path}")
 
     # Final diagnostics
@@ -438,12 +488,24 @@ def train(args):
     return model
 
 
-def save_checkpoint(model, optimizer, epoch, step, path):
-    """Save training checkpoint."""
+def save_checkpoint(model, optimizers, epoch, step, path):
+    """Save training checkpoint.
+
+    Args:
+        model: The model to save.
+        optimizers: A list of optimizers, or a single optimizer.
+        epoch: Current epoch number.
+        step: Current global step.
+        path: File path to save to.
+    """
     os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
+    if isinstance(optimizers, list):
+        opt_state = [o.state_dict() for o in optimizers]
+    else:
+        opt_state = optimizers.state_dict()
     torch.save({
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
+        'optimizer_state_dict': opt_state,
         'epoch': epoch,
         'step': step,
         'config': model.config,
@@ -480,6 +542,9 @@ def main():
     parser.add_argument('--num_samples', type=int, default=10000)
     parser.add_argument('--log_interval', type=int, default=10)
     parser.add_argument('--diag_interval', type=int, default=100)
+    parser.add_argument('--optimizer', type=str, default='adamw',
+                        choices=['adamw', 'muon_lion'],
+                        help='Optimizer: adamw (default) or muon_lion (Muon for linear, Lion for rest)')
     parser.add_argument('--save_path', type=str, default='',
                         help='Path to save checkpoint (empty = no save)')
 

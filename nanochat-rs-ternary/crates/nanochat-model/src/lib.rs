@@ -3,6 +3,7 @@ pub mod embed;
 pub mod norm;
 pub mod bitlinear;
 pub mod attention;
+pub mod deltanet;
 pub mod ffn;
 pub mod block;
 pub mod model;

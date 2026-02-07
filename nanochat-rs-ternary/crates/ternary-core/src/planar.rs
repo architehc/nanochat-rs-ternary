@@ -17,14 +17,75 @@ use std::ptr::NonNull;
 use crate::pack::{pack_matrix, PackedMatrix};
 
 // ============================================================
+// NUMA FFI declarations (Linux only, gated on has_numa cfg)
+// ============================================================
+
+#[cfg(all(target_os = "linux", has_numa))]
+extern "C" {
+    fn numa_available() -> libc::c_int;
+    fn numa_alloc_onnode(size: libc::size_t, node: libc::c_int) -> *mut libc::c_void;
+    fn numa_free(start: *mut libc::c_void, size: libc::size_t);
+    fn numa_max_node() -> libc::c_int;
+}
+
+/// Check if NUMA is available at runtime.
+///
+/// Returns true if libnuma is linked and NUMA is active on the system.
+/// Always returns false on non-Linux or when compiled without libnuma.
+pub fn numa_is_available() -> bool {
+    #[cfg(all(target_os = "linux", has_numa))]
+    {
+        // numa_available() returns 0 on success, -1 on failure
+        unsafe { numa_available() >= 0 }
+    }
+    #[cfg(not(all(target_os = "linux", has_numa)))]
+    {
+        false
+    }
+}
+
+/// Returns the maximum NUMA node index, or 0 if NUMA is not available.
+pub fn numa_max_node_id() -> usize {
+    #[cfg(all(target_os = "linux", has_numa))]
+    {
+        if numa_is_available() {
+            let max = unsafe { numa_max_node() };
+            if max >= 0 { max as usize } else { 0 }
+        } else {
+            0
+        }
+    }
+    #[cfg(not(all(target_os = "linux", has_numa)))]
+    {
+        0
+    }
+}
+
+// ============================================================
 // AlignedVec — 128-byte aligned allocation
 // ============================================================
 
+/// Allocation source for AlignedVec: standard allocator or NUMA node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AllocSource {
+    /// Standard aligned allocation via std::alloc
+    Standard,
+    /// NUMA-aware allocation on a specific node (Linux only)
+    #[cfg(all(target_os = "linux", has_numa))]
+    Numa { node: usize },
+}
+
 /// A vector with guaranteed 128-byte alignment, suitable for AVX-512 NT-loads.
+///
+/// Supports optional NUMA-aware allocation for dual-socket systems.
+/// When allocated with `new_on_node()`, memory is placed on the specified
+/// NUMA node for first-touch locality. Falls back to standard allocation
+/// if NUMA is not available.
 pub struct AlignedVec<T: Copy + Default> {
     ptr: NonNull<T>,
     len: usize,
     cap: usize,
+    alloc_source: AllocSource,
 }
 
 // Safety: AlignedVec owns its data
@@ -35,7 +96,7 @@ impl<T: Copy + Default> AlignedVec<T> {
     /// Allocate a zeroed, 128-byte aligned vector of `len` elements.
     pub fn new_zeroed(len: usize) -> Self {
         if len == 0 {
-            return Self { ptr: NonNull::dangling(), len: 0, cap: 0 };
+            return Self { ptr: NonNull::dangling(), len: 0, cap: 0, alloc_source: AllocSource::Standard };
         }
 
         let size = std::mem::size_of::<T>() * len;
@@ -47,10 +108,114 @@ impl<T: Copy + Default> AlignedVec<T> {
         let raw = unsafe { alloc::alloc_zeroed(layout) };
         let ptr = NonNull::new(raw as *mut T).expect("allocation failed");
 
+        // Advise huge pages for large buffers (>= 2MB)
+        #[cfg(target_os = "linux")]
+        {
+            if size >= 2 * 1024 * 1024 {
+                unsafe {
+                    libc::madvise(raw as *mut libc::c_void, size, libc::MADV_HUGEPAGE);
+                }
+            }
+        }
+
         Self {
             ptr,
             len,
             cap: len,
+            alloc_source: AllocSource::Standard,
+        }
+    }
+
+    /// Allocate a zeroed, 128-byte aligned vector of `len` elements on a specific NUMA node.
+    ///
+    /// On dual-socket EPYC systems, this pins the allocation to the specified socket's
+    /// local memory for optimal bandwidth. The NUMA node index is typically 0 for socket 0
+    /// and 1 for socket 1, but this depends on the system topology.
+    ///
+    /// Falls back to `new_zeroed()` if:
+    /// - NUMA is not available at runtime
+    /// - The platform is not Linux
+    /// - The requested node exceeds the maximum node index
+    /// - The NUMA allocation fails
+    ///
+    /// The resulting allocation maintains 128-byte alignment because `numa_alloc_onnode`
+    /// returns page-aligned (4096+) memory via mmap, which exceeds our 128-byte requirement.
+    pub fn new_on_node(len: usize, node: usize) -> Self {
+        if len == 0 {
+            return Self::new_zeroed(0);
+        }
+
+        #[cfg(all(target_os = "linux", has_numa))]
+        {
+            if !numa_is_available() {
+                return Self::new_zeroed(len);
+            }
+
+            let max_node = numa_max_node_id();
+            if node > max_node {
+                return Self::new_zeroed(len);
+            }
+
+            let elem_size = std::mem::size_of::<T>();
+            let size = elem_size * len;
+
+            // numa_alloc_onnode returns page-aligned (4096+) memory via mmap,
+            // which is automatically >= 128-byte aligned.
+            let raw = unsafe { numa_alloc_onnode(size, node as libc::c_int) };
+            if raw.is_null() {
+                // NUMA allocation failed, fall back to standard
+                return Self::new_zeroed(len);
+            }
+
+            // Zero the memory (Linux mmap typically returns zeroed pages,
+            // but be explicit for safety)
+            unsafe {
+                std::ptr::write_bytes(raw as *mut u8, 0, size);
+            }
+
+            let ptr = NonNull::new(raw as *mut T).expect("NUMA alloc returned null");
+
+            // Verify page alignment satisfies our 128-byte requirement
+            debug_assert!(
+                raw as usize % 128 == 0,
+                "numa_alloc_onnode returned non-128-byte-aligned pointer: {:#x}",
+                raw as usize
+            );
+
+            // Advise huge pages for large buffers (>= 2MB)
+            if size >= 2 * 1024 * 1024 {
+                unsafe {
+                    libc::madvise(raw, size as libc::size_t, libc::MADV_HUGEPAGE);
+                }
+            }
+
+            Self {
+                ptr,
+                len,
+                cap: size, // Store byte size for numa_free in Drop
+                alloc_source: AllocSource::Numa { node },
+            }
+        }
+
+        #[cfg(not(all(target_os = "linux", has_numa)))]
+        {
+            let _ = node;
+            Self::new_zeroed(len)
+        }
+    }
+
+    /// Returns the NUMA node this allocation was placed on, if any.
+    pub fn numa_node(&self) -> Option<usize> {
+        #[cfg(all(target_os = "linux", has_numa))]
+        {
+            match self.alloc_source {
+                AllocSource::Numa { node } => Some(node),
+                _ => None,
+            }
+        }
+        #[cfg(not(all(target_os = "linux", has_numa)))]
+        {
+            None
         }
     }
 
@@ -96,10 +261,21 @@ impl<T: Copy + Default> Drop for AlignedVec<T> {
         if self.cap == 0 {
             return;
         }
-        let size = std::mem::size_of::<T>() * self.cap;
-        let layout = Layout::from_size_align(size, 128).unwrap();
-        unsafe {
-            alloc::dealloc(self.ptr.as_ptr() as *mut u8, layout);
+        match self.alloc_source {
+            AllocSource::Standard => {
+                let size = std::mem::size_of::<T>() * self.cap;
+                let layout = Layout::from_size_align(size, 128).unwrap();
+                unsafe {
+                    alloc::dealloc(self.ptr.as_ptr() as *mut u8, layout);
+                }
+            }
+            #[cfg(all(target_os = "linux", has_numa))]
+            AllocSource::Numa { .. } => {
+                // For NUMA allocations, cap stores the byte size passed to numa_alloc_onnode
+                unsafe {
+                    numa_free(self.ptr.as_ptr() as *mut libc::c_void, self.cap);
+                }
+            }
         }
     }
 }
@@ -112,7 +288,12 @@ impl<T: Copy + Default + std::fmt::Debug> std::fmt::Debug for AlignedVec<T> {
 
 impl<T: Copy + Default> Clone for AlignedVec<T> {
     fn clone(&self) -> Self {
-        let mut new = Self::new_zeroed(self.len);
+        // Preserve NUMA placement when cloning
+        let mut new = match self.alloc_source {
+            AllocSource::Standard => Self::new_zeroed(self.len),
+            #[cfg(all(target_os = "linux", has_numa))]
+            AllocSource::Numa { node } => Self::new_on_node(self.len, node),
+        };
         if self.len > 0 {
             new.copy_from_slice(self);
         }
@@ -453,6 +634,18 @@ mod tests {
     }
 
     #[test]
+    fn test_huge_pages_large_alloc() {
+        // Allocate > 2MB to trigger MADV_HUGEPAGE advisory
+        let n = 1024 * 1024; // 4MB of f32
+        let v: AlignedVec<f32> = AlignedVec::new_zeroed(n);
+        assert_eq!(v.len(), n);
+        assert_eq!(v.as_ptr() as usize % 128, 0);
+        // Verify memory is zeroed and accessible
+        assert_eq!(v[0], 0.0);
+        assert_eq!(v[n - 1], 0.0);
+    }
+
+    #[test]
     fn test_planar_weights_from_packed() {
         let rows = 4;
         let cols = 128;
@@ -465,5 +658,115 @@ mod tests {
         assert_eq!(pw.rows, rows);
         assert_eq!(pw.cols, cols);
         assert_eq!(pw.data.len(), rows * (cols / 4));
+    }
+
+    // ============================================================
+    // NUMA tests
+    // ============================================================
+
+    #[test]
+    fn test_numa_available_check() {
+        // Informational test: reports whether NUMA is available on this system
+        let available = numa_is_available();
+        let max_node = numa_max_node_id();
+        println!(
+            "NUMA available: {}, max node: {}",
+            available, max_node
+        );
+        // This test always passes — it just reports NUMA status
+        if available {
+            assert!(max_node < 256, "unreasonable max_node value: {}", max_node);
+        } else {
+            // When NUMA is not available, max_node should be 0
+            assert_eq!(max_node, 0);
+        }
+    }
+
+    #[test]
+    fn test_alloc_on_node_0() {
+        // Attempt NUMA allocation on node 0
+        let v: AlignedVec<u8> = AlignedVec::new_on_node(256, 0);
+        assert_eq!(v.len(), 256);
+        // Must maintain 128-byte alignment regardless of NUMA availability
+        assert_eq!(
+            v.as_ptr() as usize % 128,
+            0,
+            "NUMA allocation not 128-byte aligned"
+        );
+        // Memory must be zeroed
+        for &b in v.iter() {
+            assert_eq!(b, 0, "NUMA allocation not zeroed");
+        }
+
+        if numa_is_available() {
+            assert_eq!(v.numa_node(), Some(0));
+        } else {
+            // Fell back to standard allocation
+            assert_eq!(v.numa_node(), None);
+        }
+    }
+
+    #[test]
+    fn test_numa_alloc_on_node_f32() {
+        // Test NUMA allocation with f32 type
+        let v: AlignedVec<f32> = AlignedVec::new_on_node(64, 0);
+        assert_eq!(v.len(), 64);
+        assert_eq!(v.as_ptr() as usize % 128, 0);
+        // Verify zeroed
+        for &val in v.iter() {
+            assert_eq!(val, 0.0);
+        }
+    }
+
+    #[test]
+    fn test_numa_alloc_write_read() {
+        // Verify NUMA-allocated memory is read/writable
+        let mut v: AlignedVec<f32> = AlignedVec::new_on_node(4, 0);
+        v[0] = 1.0;
+        v[1] = 2.0;
+        v[2] = 3.0;
+        v[3] = 4.0;
+        assert_eq!(v[0], 1.0);
+        assert_eq!(v[3], 4.0);
+    }
+
+    #[test]
+    fn test_numa_alloc_empty() {
+        let v: AlignedVec<u8> = AlignedVec::new_on_node(0, 0);
+        assert!(v.is_empty());
+        assert_eq!(v.numa_node(), None); // empty alloc is standard
+    }
+
+    #[test]
+    fn test_numa_alloc_invalid_node_falls_back() {
+        // Requesting a node beyond max should fall back to standard alloc
+        let v: AlignedVec<u8> = AlignedVec::new_on_node(256, 999);
+        assert_eq!(v.len(), 256);
+        assert_eq!(v.as_ptr() as usize % 128, 0);
+        // Should have fallen back to standard since node 999 doesn't exist
+        assert_eq!(v.numa_node(), None);
+    }
+
+    #[test]
+    fn test_numa_alloc_clone_preserves_node() {
+        let mut v: AlignedVec<f32> = AlignedVec::new_on_node(4, 0);
+        v[0] = 42.0;
+        let v2 = v.clone();
+        assert_eq!(v2[0], 42.0);
+        assert_eq!(v2.len(), 4);
+        assert_eq!(v2.as_ptr() as usize % 128, 0);
+        // Clone should preserve the NUMA node
+        assert_eq!(v.numa_node(), v2.numa_node());
+    }
+
+    #[test]
+    fn test_numa_alloc_large_buffer() {
+        // Test large NUMA allocation (triggers huge page advisory)
+        let n = 1024 * 1024; // 4MB of f32
+        let v: AlignedVec<f32> = AlignedVec::new_on_node(n, 0);
+        assert_eq!(v.len(), n);
+        assert_eq!(v.as_ptr() as usize % 128, 0);
+        assert_eq!(v[0], 0.0);
+        assert_eq!(v[n - 1], 0.0);
     }
 }

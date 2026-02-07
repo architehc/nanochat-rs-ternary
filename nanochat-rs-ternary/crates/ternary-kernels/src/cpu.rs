@@ -1,5 +1,6 @@
 //! Safe Rust wrappers over the C FFI ternary GEMV kernels.
 
+use rayon::prelude::*;
 use ternary_core::planar::PlanarWeights;
 
 /// C struct matching the PlanarWeights layout expected by ternary_gemv.c
@@ -85,6 +86,49 @@ pub fn gemv_scalar_ref(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f3
     }
 }
 
+/// Parallel GEMV: split M (rows) dimension across threads using rayon.
+///
+/// Each chunk calls `gemv_dp4a_ref` (scalar, row-major) on its row slice.
+/// Falls back to single-threaded `gemv()` for small M.
+///
+/// # Arguments
+/// * `pw` - Planar ternary weights
+/// * `x` - Quantized INT8 activations [cols]
+/// * `act_scale` - Activation scale factor
+/// * `y` - Output buffer [rows], caller-allocated
+pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
+    assert_eq!(x.len(), pw.cols, "x.len() != cols");
+    assert_eq!(y.len(), pw.rows, "y.len() != rows");
+
+    const PARALLEL_THRESHOLD: usize = 256;
+    const ROWS_PER_CHUNK: usize = 64;
+
+    if pw.rows < PARALLEL_THRESHOLD {
+        return gemv(pw, x, act_scale, y);
+    }
+
+    let kp = pw.cols / 4;
+    let gprow = pw.cols / pw.group_size;
+
+    y.par_chunks_mut(ROWS_PER_CHUNK).enumerate().for_each(|(chunk_idx, y_chunk)| {
+        let row_start = chunk_idx * ROWS_PER_CHUNK;
+        let chunk_rows = y_chunk.len();
+
+        unsafe {
+            gemv_dp4a_ref(
+                pw.data.as_ptr().add(row_start * kp),
+                pw.scales_rm.as_ptr().add(row_start * gprow),
+                x.as_ptr(),
+                act_scale,
+                y_chunk.as_mut_ptr(),
+                chunk_rows as i32,
+                pw.cols as i32,
+                pw.group_size as i32,
+            );
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +189,51 @@ mod tests {
                 max_diff
             );
         }
+    }
+
+    #[test]
+    fn test_gemv_parallel_matches_single_thread() {
+        for &(m, k) in &[(512, 512), (1024, 256), (256, 128)] {
+            let (pw, x) = make_test_weights(m, k);
+            let act_scale = 1.0 / 127.0;
+
+            let mut y_single = vec![0.0f32; m];
+            let mut y_parallel = vec![0.0f32; m];
+
+            gemv_scalar_ref(&pw, &x, act_scale, &mut y_single);
+            gemv_parallel(&pw, &x, act_scale, &mut y_parallel);
+
+            let max_diff: f32 = y_single
+                .iter()
+                .zip(y_parallel.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+
+            assert!(
+                max_diff < 1e-5,
+                "[{}x{}] parallel vs scalar max diff: {}",
+                m, k, max_diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_gemv_parallel_small_m_fallback() {
+        // M < 256 should fallback to single-threaded gemv
+        let (pw, x) = make_test_weights(64, 128);
+        let mut y_ref = vec![0.0f32; 64];
+        let mut y_par = vec![0.0f32; 64];
+
+        gemv_scalar_ref(&pw, &x, 1.0 / 127.0, &mut y_ref);
+        gemv_parallel(&pw, &x, 1.0 / 127.0, &mut y_par);
+
+        let max_diff: f32 = y_ref
+            .iter()
+            .zip(y_par.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+
+        assert!(max_diff < 1e-4, "fallback max diff: {}", max_diff);
     }
 
     #[test]
