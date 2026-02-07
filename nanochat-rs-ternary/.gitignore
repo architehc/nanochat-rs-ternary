@@ -1,0 +1,5 @@
+# Model checkpoints (large binary files)
+training/checkpoints/
+
+# Rust build artifacts
+target/
