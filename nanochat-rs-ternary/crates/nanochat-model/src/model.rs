@@ -1,12 +1,16 @@
 //! Full nanochat model: embed -> mHC expand -> blocks -> mHC collapse -> norm -> head.
 
-use crate::attention::{KvCache, RopeFreqs};
+use std::io;
+
+use crate::attention::{Attention, KvCache, RopeFreqs};
 use crate::bitlinear::BitLinear;
 use crate::block::TransformerBlock;
 use crate::config::ModelConfig;
 use crate::embed::Embedding;
+use crate::ffn::FeedForward;
 use crate::norm::RMSNorm;
 use mhc_lite::MhcLiteN2;
+use ternary_core::gguf::{GgufFile, GgufValue};
 
 /// Full nanochat-rs ternary model.
 #[derive(Debug)]
@@ -49,6 +53,157 @@ impl NanochatModel {
             rope,
             kv_caches,
             config,
+        }
+    }
+
+    /// Load model from GGUF weights + mHC binary file.
+    pub fn from_gguf(gguf_path: &str, mhc_path: &str) -> io::Result<Self> {
+        let gguf = GgufFile::open(gguf_path)?;
+
+        // Extract config from GGUF metadata
+        let config = Self::config_from_gguf(&gguf)?;
+        let group_size = config.group_size;
+
+        // Load embeddings (FP16 -> F32)
+        let tok_embed = Self::load_embedding(&gguf, "tok_embed.weight")?;
+
+        // Load mHC parameters
+        let (_, mhc_layers) = mhc_lite::load_mhc_file(mhc_path)?;
+
+        // Load transformer blocks
+        let mut blocks = Vec::with_capacity(config.n_layers);
+        for i in 0..config.n_layers {
+            let prefix = format!("blocks.{i}");
+
+            // Attention weights
+            let wq = BitLinear::new(gguf.load_planar_weights(
+                &format!("{prefix}.attention.wq.weight"), group_size)?);
+            let wk = BitLinear::new(gguf.load_planar_weights(
+                &format!("{prefix}.attention.wk.weight"), group_size)?);
+            let wv = BitLinear::new(gguf.load_planar_weights(
+                &format!("{prefix}.attention.wv.weight"), group_size)?);
+            let wo = BitLinear::new(gguf.load_planar_weights(
+                &format!("{prefix}.attention.wo.weight"), group_size)?);
+
+            let attention = Attention {
+                wq, wk, wv, wo,
+                n_heads: config.n_heads,
+                n_kv_heads: config.n_kv_heads,
+                head_dim: config.head_dim(),
+                n_rep: config.n_rep(),
+            };
+
+            // FFN weights
+            let w_gate = BitLinear::new(gguf.load_planar_weights(
+                &format!("{prefix}.ffn.w_gate.weight"), group_size)?);
+            let w_up = BitLinear::new(gguf.load_planar_weights(
+                &format!("{prefix}.ffn.w_up.weight"), group_size)?);
+            let w_down = BitLinear::new(gguf.load_planar_weights(
+                &format!("{prefix}.ffn.w_down.weight"), group_size)?);
+
+            let ffn = FeedForward {
+                w_gate, w_up, w_down,
+                ffn_dim: config.ffn_dim(),
+            };
+
+            // Norms
+            let norm_attn = Self::load_norm(&gguf, &format!("{prefix}.norm_attn.weight"))?;
+            let norm_ffn = Self::load_norm(&gguf, &format!("{prefix}.norm_ffn.weight"))?;
+
+            // mHC params (order: attn_0, ffn_0, attn_1, ffn_1, ...)
+            let mhc_attn = Self::extract_mhc_n2(&mhc_layers, i * 2)?;
+            let mhc_ffn = Self::extract_mhc_n2(&mhc_layers, i * 2 + 1)?;
+
+            blocks.push(TransformerBlock {
+                mhc_attn, mhc_ffn,
+                norm_attn, norm_ffn,
+                attention, ffn,
+                dim: config.dim,
+            });
+        }
+
+        // Final norm
+        let norm_final = Self::load_norm(&gguf, "norm_final.weight")?;
+
+        // LM head
+        let lm_head = BitLinear::new(
+            gguf.load_planar_weights("lm_head.weight", group_size)?);
+
+        // RoPE and KV caches
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        let kv_caches: Vec<_> = (0..config.n_layers)
+            .map(|_| KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim()))
+            .collect();
+
+        Ok(Self {
+            tok_embed, blocks, norm_final, lm_head, rope, kv_caches, config,
+        })
+    }
+
+    fn config_from_gguf(gguf: &GgufFile) -> io::Result<ModelConfig> {
+        let get_u32 = |key: &str| -> io::Result<usize> {
+            match gguf.metadata.get(key) {
+                Some(GgufValue::U32(v)) => Ok(*v as usize),
+                _ => Err(io::Error::new(io::ErrorKind::NotFound,
+                    format!("missing GGUF metadata: {key}"))),
+            }
+        };
+        Ok(ModelConfig {
+            dim: get_u32("nanochat.dim")?,
+            n_layers: get_u32("nanochat.n_layers")?,
+            n_heads: get_u32("nanochat.n_heads")?,
+            n_kv_heads: get_u32("nanochat.n_heads")?, // MHA: same as n_heads
+            ffn_mult: 2.667,
+            vocab_size: get_u32("nanochat.vocab_size")?,
+            max_seq_len: 2048,
+            group_size: get_u32("nanochat.group_size")?,
+            mhc_n_streams: get_u32("nanochat.mhc_n_streams")?,
+            rope_theta: 10000.0,
+        })
+    }
+
+    fn load_embedding(gguf: &GgufFile, name: &str) -> io::Result<Embedding> {
+        let tensor = gguf.tensors.iter().find(|t| t.name == name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound,
+                format!("tensor '{name}' not found")))?;
+
+        let vocab_size = tensor.dims[0] as usize;
+        let dim = tensor.dims[1] as usize;
+        let data = gguf.tensor_data(tensor);
+
+        // FP16 -> F32 conversion
+        let weight: Vec<f32> = data.chunks_exact(2)
+            .map(|c| half::f16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32())
+            .collect();
+
+        if weight.len() != vocab_size * dim {
+            return Err(io::Error::new(io::ErrorKind::InvalidData,
+                format!("embedding size mismatch: {} vs {}", weight.len(), vocab_size * dim)));
+        }
+
+        Ok(Embedding { weight, vocab_size, dim })
+    }
+
+    fn load_norm(gguf: &GgufFile, name: &str) -> io::Result<RMSNorm> {
+        let tensor = gguf.tensors.iter().find(|t| t.name == name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound,
+                format!("tensor '{name}' not found")))?;
+
+        let data = gguf.tensor_data(tensor);
+        let weight: Vec<f32> = data.chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+
+        Ok(RMSNorm { weight, eps: 1e-6 })
+    }
+
+    fn extract_mhc_n2(layers: &[mhc_lite::MhcLayerParams], idx: usize) -> io::Result<MhcLiteN2> {
+        match layers.get(idx) {
+            Some(mhc_lite::MhcLayerParams::N2(mhc)) => Ok(mhc.clone()),
+            Some(_) => Err(io::Error::new(io::ErrorKind::InvalidData,
+                format!("expected N2 mHC at index {idx}"))),
+            None => Err(io::Error::new(io::ErrorKind::InvalidData,
+                format!("mHC index {idx} out of range (have {})", layers.len()))),
         }
     }
 

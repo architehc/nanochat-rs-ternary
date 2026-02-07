@@ -7,3 +7,18 @@ edition = "2021"
 nanochat-model = { path = "../nanochat-model" }
 ternary-core = { path = "../ternary-core" }
 mhc-lite = { path = "../mhc-lite" }
+half = { workspace = true }
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tiktoken-rs = "0.6"
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tower-http = { version = "0.5", features = ["cors"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

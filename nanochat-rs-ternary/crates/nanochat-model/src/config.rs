@@ -42,6 +42,22 @@ impl ModelConfig {
         }
     }
 
+    /// ~125M param config (trained on TinyStories)
+    pub fn nano_125m() -> Self {
+        Self {
+            dim: 768,
+            n_layers: 12,
+            n_heads: 12,
+            n_kv_heads: 12,
+            ffn_mult: 2.667,
+            vocab_size: 50257,
+            max_seq_len: 2048,
+            group_size: 128,
+            mhc_n_streams: 2,
+            rope_theta: 10000.0,
+        }
+    }
+
     /// ~560M param config
     pub fn nano_560m() -> Self {
         Self {

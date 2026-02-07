@@ -111,6 +111,7 @@ fn e2e_generate_greedy() {
         top_k: 0,
         top_p: 1.0,
         max_tokens: 10,
+        seed: None,
     };
 
     let output = engine.generate(&[1, 5, 10], &params);
@@ -132,6 +133,7 @@ fn e2e_generate_with_temperature() {
         top_k: 50,
         top_p: 0.9,
         max_tokens: 10,
+        seed: Some(42),
     };
 
     let output = engine.generate(&[1, 2, 3], &params);
@@ -154,6 +156,7 @@ fn e2e_generate_deterministic() {
         top_k: 0,
         top_p: 1.0,
         max_tokens: 5,
+        seed: None,
     };
 
     let output_a = engine_a.generate(&[1, 10], &params);
