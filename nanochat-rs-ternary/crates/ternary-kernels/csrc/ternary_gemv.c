@@ -32,6 +32,8 @@
 #include <math.h>
 #include <time.h>
 
+#include "ternary_gemv_avx2.h"
+
 // ============================================================
 // CPU FEATURE DETECTION (FIX 1: OSXSAVE/XGETBV gating)
 // ============================================================
@@ -43,6 +45,7 @@
 #define ARCH_X86_64 0
 #endif
 
+static int cpu_has_avx2       = 0;
 static int cpu_has_avx512bw   = 0;
 static int cpu_has_avx512vbmi = 0;
 
@@ -60,15 +63,22 @@ static void detect_cpu_features(void) {
     int has_osxsave = (ecx >> 27) & 1;
     if (!has_osxsave) return;
 
-    // Step 3: XGETBV — check OS enabled ZMM state
+    // Step 3: XGETBV — check OS enabled AVX/ZMM state
     // XCR0 bits: SSE=1, AVX=2, opmask=5, zmm_hi256=6, hi16_zmm=7
-    // We need (xcr0 & 0xE6) == 0xE6
     unsigned int xcr0_lo, xcr0_hi;
     __asm__ __volatile__("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
-    if ((xcr0_lo & 0xE6) != 0xE6) return;  // OS hasn't enabled ZMM state
 
     // Step 4: Check actual CPU feature flags
     __cpuid_count(7, 0, eax, ebx, ecx, edx);
+
+    // AVX2 requires OSXSAVE + YMM state enabled (XCR0 bits 1+2)
+    if ((xcr0_lo & 0x06) == 0x06) {
+        cpu_has_avx2 = (ebx >> 5) & 1;       // AVX2: EBX bit 5
+    }
+
+    // AVX-512 requires ZMM state: (xcr0 & 0xE6) == 0xE6
+    if ((xcr0_lo & 0xE6) != 0xE6) return;
+
     cpu_has_avx512bw   = (ebx >> 30) & 1;   // AVX-512 BW: EBX bit 30
     cpu_has_avx512vbmi = (ecx >> 1) & 1;     // AVX-512 VBMI: ECX bit 1
 
@@ -665,6 +675,7 @@ void gemv_dual_vpermb(
 typedef enum {
     KERN_VPERMW,
     KERN_VPERMB,
+    KERN_AVX2,
     KERN_LUT,
     KERN_SCALAR
 } KernelType;
@@ -681,6 +692,11 @@ static void select_kernel(void) {
     // But if someone manually overrides flags:
     if (cpu_has_avx512vbmi) {
         selected_kernel = KERN_VPERMB;
+        return;
+    }
+    // AVX2 PSHUFB: better than LUT-Grouped which degrades at large K
+    if (cpu_has_avx2) {
+        selected_kernel = KERN_AVX2;
         return;
     }
 #endif
@@ -723,6 +739,10 @@ void ternary_gemv(
         gemv_dual_vpermb(pw->data_colmaj, pw->scales_gm, x, act_scale,
                          y, M, K, gs, pw->rows_padded);
         return;
+    case KERN_AVX2:
+        gemv_avx2(pw->data_colmaj, pw->scales_gm, x, act_scale,
+                  y, M, K, gs, pw->rows_padded);
+        return;
 #endif
     case KERN_LUT:
         gemv_lut_grouped(pw->data, pw->scales_rm, x, act_scale, y, M, K, gs);
@@ -738,6 +758,7 @@ const char *kernel_name(KernelType k) {
     switch (k) {
     case KERN_VPERMW:  return "VPERMW fused (AVX-512 BW)";
     case KERN_VPERMB:  return "Dual-VPERMB (AVX-512 VBMI)";
+    case KERN_AVX2:    return "AVX2 PSHUFB (AVX2+FMA)";
     case KERN_LUT:     return "LUT-Grouped (portable)";
     case KERN_SCALAR:  return "dp4a scalar (portable)";
     default:           return "unknown";
@@ -794,6 +815,22 @@ static TestResult verify_shape(const char *label, int M, int K, int gs) {
            md < 1e-4f ? "✓" : "✗");
 
 #if ARCH_X86_64
+    if (cpu_has_avx2) {
+        float *ya = (float *)calloc(M, sizeof(float));
+        gemv_avx2(pw.data_colmaj, pw.scales_gm, x, as, ya, M, K, gs,
+                  pw.rows_padded);
+        md = 0;
+        for (int i = 0; i < M; i++) {
+            float d = fabsf(yr[i] - ya[i]);
+            if (d > md) md = d;
+        }
+        res.total++;
+        if (md < 1e-4f) res.pass++; else res.fail++;
+        printf("    %-28s dp4a vs AVX2:   %.1e %s\n", label, md,
+               md < 1e-4f ? "✓" : "✗");
+        free(ya);
+    }
+
     if (cpu_has_avx512bw) {
         float *yv = (float *)calloc(M, sizeof(float));
         gemv_vpermw(pw.data_colmaj, pw.scales_gm, x, as, yv, M, K, gs,
@@ -959,6 +996,7 @@ int main(void) {
     printf("╚══════════════════════════════════════════════════════════════╝\n\n");
 
     printf("  CPU Features (CPUID + XGETBV verified):\n");
+    printf("    AVX2+FMA:     %s\n", cpu_has_avx2        ? "✓" : "✗");
     printf("    AVX-512 BW:   %s\n", cpu_has_avx512bw   ? "✓" : "✗");
     printf("    AVX-512 VBMI: %s\n", cpu_has_avx512vbmi  ? "✓" : "✗");
     printf("    Selected:     %s\n", kernel_name(selected_kernel));
@@ -1046,6 +1084,10 @@ int main(void) {
               gemv_lut_grouped(pw.data, pw.scales_rm, x, as, y, M, K, gs));
 
 #if ARCH_X86_64
+        if (cpu_has_avx2)
+            BENCH("AVX2 PSHUFB",
+                  gemv_avx2(pw.data_colmaj, pw.scales_gm, x, as, y,
+                            M, K, gs, pw.rows_padded));
         if (cpu_has_avx512bw)
             BENCH("VPERMW fused ★PRIMARY",
                   gemv_vpermw(pw.data_colmaj, pw.scales_gm, x, as, y,
@@ -1069,8 +1111,9 @@ int main(void) {
     printf("═══ Kernel Dispatch Chain (v3.3.1 — XGETBV + lazy init) ═══\n\n");
     printf("  1. VPERMW fused    (AVX-512 BW)   ★ PRIMARY  [64-row, LUT hoisted]\n");
     printf("  2. Dual-VPERMB     (AVX-512 VBMI)   alt       [32-row, LUT hoisted]\n");
-    printf("  3. LUT-Grouped     (portable)        collapses at large K\n");
-    printf("  4. dp4a scalar     (portable)        competitive fallback\n\n");
+    printf("  3. AVX2 PSHUFB     (AVX2+FMA)        [32-row, PSHUFB LUT]\n");
+    printf("  4. LUT-Grouped     (portable)        collapses at large K\n");
+    printf("  5. dp4a scalar     (portable)        competitive fallback\n\n");
     printf("  API: ternary_gemv(&pw, x, act_scale, y) — auto-dispatches\n\n");
     printf("  Safety:\n");
     printf("    OSXSAVE + XGETBV(0) & 0xE6 == 0xE6 (ZMM state enabled)\n");

@@ -146,6 +146,9 @@ fn triangle_invalid_codepoints() {
 }
 
 /// Scale-only test: verify per-group scaling is correct.
+/// Tolerance is 1e-4 to allow for FP rounding differences between kernels
+/// that use different data layouts (row-major scalar vs col-major AVX2/AVX-512)
+/// and different operation order (scalar multiply vs FMA).
 #[test]
 fn triangle_scale_only() {
     let rows = 64;
@@ -166,7 +169,7 @@ fn triangle_scale_only() {
         for r in 0..rows {
             let diff = (y_scalar[r] - y_ffi[r]).abs();
             assert!(
-                diff < 1e-5,
+                diff < 1e-4,
                 "scale={} row {}: scalar={}, ffi={}, diff={}",
                 act_scale, r, y_scalar[r], y_ffi[r], diff
             );
