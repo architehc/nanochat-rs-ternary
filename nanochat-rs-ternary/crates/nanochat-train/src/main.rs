@@ -34,11 +34,24 @@ enum Commands {
         #[arg(long)]
         checkpoint_dir: Option<String>,
 
+        /// Resume training from a checkpoint directory
         #[arg(long)]
         resume: Option<String>,
 
-        #[arg(long, default_value = "10")]
+        #[arg(long, default_value = "50")]
         log_interval: usize,
+
+        /// Save checkpoint every N steps (0 = only at end)
+        #[arg(long, default_value = "1000")]
+        checkpoint_interval: usize,
+
+        /// Number of CPU threads (default: all available)
+        #[arg(long)]
+        threads: Option<usize>,
+
+        /// Number of synthetic samples (default: 100000)
+        #[arg(long, default_value = "100000")]
+        n_samples: usize,
 
         #[arg(long, default_value = "cpu")]
         device: String,
@@ -69,10 +82,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             batch_size,
             seq_len,
             checkpoint_dir,
-            resume: _,
-            log_interval: _,
+            resume,
+            log_interval,
+            checkpoint_interval,
+            threads,
+            n_samples,
             device,
         } => {
+            // Set thread count before anything else
+            if let Some(n) = threads {
+                std::env::set_var("RAYON_NUM_THREADS", n.to_string());
+                println!("Threads: {} (set via RAYON_NUM_THREADS)", n);
+            } else {
+                let n = std::thread::available_parallelism()
+                    .map(|p| p.get())
+                    .unwrap_or(1);
+                println!("Threads: {} (auto-detected)", n);
+            }
+
             let device = match device.as_str() {
                 "cpu" => candle_core::Device::Cpu,
                 #[cfg(feature = "cuda")]
@@ -87,8 +114,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "d20" => nanochat_train::config::TrainConfig::d20(),
                 "nano-125m" | "nano_125m" => nanochat_train::config::TrainConfig::nano_125m(),
                 "nano-1b" | "nano_1b" => nanochat_train::config::TrainConfig::nano_1b(),
+                "tiny-cpu" | "tiny_cpu" => nanochat_train::config::TrainConfig::tiny_cpu(),
                 other => {
-                    eprintln!("Unknown config: {}. Use d20, nano-125m, or nano-1b.", other);
+                    eprintln!("Unknown config: {}. Use d20, nano-125m, nano-1b, or tiny-cpu.", other);
                     std::process::exit(1);
                 }
             };
@@ -107,67 +135,97 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Batch size: {}", cfg.batch_size);
             println!("Seq len: {}", effective_seq_len);
             println!("Epochs: {}", epochs);
+            println!("Log interval: {} steps", log_interval);
+            println!("Checkpoint interval: {} steps", checkpoint_interval);
             println!();
 
-            let mut trainer = nanochat_train::train::Trainer::new(cfg.clone(), device)?;
-            println!("Model initialized. Total params: {}", trainer.model.param_count());
+            // Resume from checkpoint if specified
+            let mut trainer = if let Some(ref ckpt_dir) = resume {
+                println!("Resuming from checkpoint: {}", ckpt_dir);
+                let meta_json = std::fs::read_to_string(format!("{}/meta.json", ckpt_dir))?;
+                let meta: nanochat_train::checkpoint::CheckpointMeta =
+                    serde_json::from_str(&meta_json)?;
+
+                // Reconstruct model with same config
+                let mut trainer = nanochat_train::train::Trainer::new(meta.config, device)?;
+                trainer
+                    .varmap
+                    .load(format!("{}/model.safetensors", ckpt_dir))?;
+                trainer.global_step = meta.step;
+                println!(
+                    "Resumed at step {} (loss={:.4})",
+                    meta.step, meta.loss
+                );
+                trainer
+            } else {
+                nanochat_train::train::Trainer::new(cfg.clone(), device)?
+            };
+
+            println!(
+                "Model initialized. Total params: {}",
+                trainer.model.param_count()
+            );
 
             // Create dataset
             let ds: Box<dyn nanochat_train::data::Dataset> = match dataset.as_str() {
-                "synthetic" => {
-                    Box::new(nanochat_train::data::SyntheticDataset::new(
-                        cfg.vocab_size as u32,
-                        effective_seq_len,
-                        10_000,
-                        42,
-                    ))
-                }
+                "synthetic" => Box::new(nanochat_train::data::SyntheticDataset::new(
+                    cfg.vocab_size as u32,
+                    effective_seq_len,
+                    n_samples,
+                    42,
+                )),
                 "tokens" => {
                     let path = data_path.expect("--data-path required for tokens dataset");
-                    Box::new(nanochat_train::data::dataset::TokenFileDataset::from_binary_file(
-                        std::path::Path::new(&path),
-                        effective_seq_len,
-                    )?)
+                    Box::new(
+                        nanochat_train::data::dataset::TokenFileDataset::from_binary_file(
+                            std::path::Path::new(&path),
+                            effective_seq_len,
+                        )?,
+                    )
                 }
                 other => {
-                    eprintln!("Unknown dataset: {}. Use 'synthetic' or 'tokens'.", other);
+                    eprintln!(
+                        "Unknown dataset: {}. Use 'synthetic' or 'tokens'.",
+                        other
+                    );
                     std::process::exit(1);
                 }
             };
 
             println!("Dataset: {} samples", ds.len());
+            let tokens_per_epoch =
+                ds.len() as f64 * effective_seq_len as f64;
+            println!(
+                "Tokens per epoch: {:.1}M",
+                tokens_per_epoch / 1e6
+            );
             println!();
 
-            for epoch in 0..epochs {
-                let start = std::time::Instant::now();
-                let avg_loss = trainer.train_epoch(ds.as_ref(), epoch)?;
-                let elapsed = start.elapsed();
-                println!(
-                    "Epoch {}/{}: avg_loss={:.4} time={:.1}s step={}",
-                    epoch + 1, epochs, avg_loss, elapsed.as_secs_f64(), trainer.global_step
-                );
-
-                if let Some(ref dir) = checkpoint_dir {
-                    let path = format!("{}/epoch_{}", dir, epoch + 1);
-                    nanochat_train::checkpoint::save_checkpoint(
-                        &trainer.varmap, &cfg, trainer.global_step, avg_loss, &path,
-                    )?;
-                    println!("  Checkpoint saved to {}", path);
-                }
-            }
-
-            println!("\nTraining complete! Final step: {}", trainer.global_step);
+            // Run training loop with per-step logging
+            trainer.train_loop(
+                ds.as_ref(),
+                epochs,
+                log_interval,
+                checkpoint_dir.as_deref(),
+                checkpoint_interval,
+            )?;
         }
 
-        Commands::Export { checkpoint, gguf, mhc } => {
+        Commands::Export {
+            checkpoint,
+            gguf,
+            mhc,
+        } => {
             let device = candle_core::Device::Cpu;
 
             println!("Loading checkpoint from {}...", checkpoint);
             let meta_json = std::fs::read_to_string(format!("{}/meta.json", checkpoint))?;
-            let meta: nanochat_train::checkpoint::CheckpointMeta = serde_json::from_str(&meta_json)?;
+            let meta: nanochat_train::checkpoint::CheckpointMeta =
+                serde_json::from_str(&meta_json)?;
 
             let mut varmap = candle_nn::VarMap::new();
-            let vb = candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
+            let vb =
+                candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
             let model = nanochat_train::model::NanochatTrainModel::new(&meta.config, vb)?;
 
             // Load saved weights

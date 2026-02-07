@@ -126,6 +126,37 @@ impl TrainConfig {
         }
     }
 
+    /// Tiny CPU-friendly config (~2M params, vocab=4096).
+    /// Designed for fast training iteration on CPU.
+    pub fn tiny_cpu() -> Self {
+        Self {
+            dim: 256,
+            n_layers: 4,
+            n_heads: 4,
+            n_kv_heads: 4,
+            ffn_mult: 2.0,
+            vocab_size: 4096,
+            max_seq_len: 256,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+
+            lr: 0.02,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 8,
+            grad_accum_steps: 1,
+            warmup_steps: 50,
+            total_steps: 5000,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 3,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+        }
+    }
+
     /// Medium model (~125M params).
     pub fn nano_125m() -> Self {
         Self {

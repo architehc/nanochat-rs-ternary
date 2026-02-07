@@ -2,6 +2,7 @@
 
 use candle_core::{DType, Device, Result, Tensor, Var};
 use candle_nn::VarMap;
+use std::time::Instant;
 
 use crate::config::TrainConfig;
 use crate::data::{Dataset, DataLoader};
@@ -14,6 +15,7 @@ pub struct StepStats {
     pub loss: f64,
     pub grad_norm: f64,
     pub lr: f64,
+    pub tokens_per_sec: f64,
 }
 
 /// Main trainer holding model + optimizers.
@@ -89,6 +91,8 @@ impl Trainer {
 
     /// Execute a single training step.
     pub fn train_step(&mut self, input_ids: &Tensor, target_ids: &Tensor) -> Result<StepStats> {
+        let step_start = Instant::now();
+
         // Forward
         let logits = self.model.forward(input_ids)?;
 
@@ -126,10 +130,15 @@ impl Trainer {
         self.lion.set_lr(self.base_lr_lion * mult);
 
         let loss_val = loss.to_scalar::<f32>()? as f64;
+        let elapsed = step_start.elapsed().as_secs_f64();
+        let n_tokens = (batch * seq_len) as f64;
+        let tokens_per_sec = if elapsed > 0.0 { n_tokens / elapsed } else { 0.0 };
+
         Ok(StepStats {
             loss: loss_val,
             grad_norm,
             lr: self.base_lr_muon * mult,
+            tokens_per_sec,
         })
     }
 
@@ -154,6 +163,118 @@ impl Trainer {
         }
 
         Ok(if n_steps > 0 { total_loss / n_steps as f64 } else { 0.0 })
+    }
+
+    /// Production training loop with per-step logging and checkpointing.
+    pub fn train_loop(
+        &mut self,
+        dataset: &dyn Dataset,
+        epochs: usize,
+        log_interval: usize,
+        checkpoint_dir: Option<&str>,
+        checkpoint_interval: usize,
+    ) -> Result<()> {
+        let train_start = Instant::now();
+        let mut running_loss = 0.0;
+        let mut running_gnorm = 0.0;
+        let mut running_toks = 0.0;
+        let mut interval_steps = 0usize;
+
+        for epoch in 0..epochs {
+            let epoch_start = Instant::now();
+            let loader = DataLoader::new(
+                dataset,
+                self.config.batch_size,
+                true,
+                (epoch as u64) * 1000 + self.global_step as u64,
+                &self.device,
+            );
+            let mut batch_idx = 0;
+
+            for batch in loader {
+                let (input_ids, target_ids) = batch?;
+                let stats = self.train_step(&input_ids, &target_ids)?;
+
+                running_loss += stats.loss;
+                running_gnorm += stats.grad_norm;
+                running_toks += stats.tokens_per_sec;
+                interval_steps += 1;
+                batch_idx += 1;
+
+                if self.global_step % log_interval == 0 && interval_steps > 0 {
+                    let avg_loss = running_loss / interval_steps as f64;
+                    let avg_gnorm = running_gnorm / interval_steps as f64;
+                    let avg_toks = running_toks / interval_steps as f64;
+                    let elapsed = train_start.elapsed().as_secs_f64();
+                    println!(
+                        "[{:>6}/{:<6}] loss={:.4} lr={:.6} gnorm={:.2} tok/s={:.0} elapsed={:.0}s",
+                        self.global_step,
+                        self.config.total_steps,
+                        avg_loss,
+                        stats.lr,
+                        avg_gnorm,
+                        avg_toks,
+                        elapsed,
+                    );
+                    running_loss = 0.0;
+                    running_gnorm = 0.0;
+                    running_toks = 0.0;
+                    interval_steps = 0;
+                }
+
+                // Checkpoint
+                if checkpoint_interval > 0
+                    && self.global_step % checkpoint_interval == 0
+                {
+                    if let Some(dir) = checkpoint_dir {
+                        let path = format!("{}/step_{}", dir, self.global_step);
+                        crate::checkpoint::save_checkpoint(
+                            &self.varmap,
+                            &self.config,
+                            self.global_step,
+                            running_loss / interval_steps.max(1) as f64,
+                            &path,
+                        )
+                        .map_err(|e| candle_core::Error::Msg(format!("checkpoint save: {}", e)))?;
+                        println!("  -> checkpoint saved to {}", path);
+                    }
+                }
+            }
+
+            let epoch_elapsed = epoch_start.elapsed().as_secs_f64();
+            println!(
+                "--- Epoch {}/{} done ({} batches, {:.1}s) step={} ---",
+                epoch + 1,
+                epochs,
+                batch_idx,
+                epoch_elapsed,
+                self.global_step,
+            );
+        }
+
+        // Final checkpoint
+        if let Some(dir) = checkpoint_dir {
+            let path = format!("{}/final", dir);
+            crate::checkpoint::save_checkpoint(
+                &self.varmap,
+                &self.config,
+                self.global_step,
+                0.0,
+                &path,
+            )
+            .map_err(|e| candle_core::Error::Msg(format!("checkpoint save: {}", e)))?;
+            println!("Final checkpoint saved to {}", path);
+        }
+
+        let total_elapsed = train_start.elapsed().as_secs_f64();
+        println!(
+            "\nTraining complete! steps={} elapsed={:.1}s ({:.1}m)",
+            self.global_step,
+            total_elapsed,
+            total_elapsed / 60.0,
+        );
+
+        Ok(())
     }
 }
 
