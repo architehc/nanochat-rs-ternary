@@ -1,0 +1,262 @@
+//! Full training model: embedding -> blocks -> LM head.
+
+use candle_core::{Result, Tensor};
+#[cfg(test)]
+use candle_core::DType;
+use candle_nn::{self, Module, VarBuilder};
+
+use crate::attention::precompute_rope_freqs;
+use crate::block::TransformerBlockTrain;
+use crate::config::TrainConfig;
+use crate::layers::RMSNormTrain;
+use crate::mhc::MhcLiteN2Train;
+
+/// Parameter groups for split optimizers (Muon for linear, Lion for rest).
+pub struct ParamGroups {
+    pub linear: Vec<Tensor>,
+    pub mhc: Vec<Tensor>,
+    pub norm: Vec<Tensor>,
+    pub embed: Vec<Tensor>,
+}
+
+/// Full nanochat training model.
+pub struct NanochatTrainModel {
+    pub config: TrainConfig,
+    pub tok_embed: candle_nn::Embedding,
+    pub blocks: Vec<TransformerBlockTrain>,
+    pub norm_final: RMSNormTrain,
+    pub lm_head_weight: Option<Tensor>, // None if weight-tied
+    freqs_cos: Tensor,
+    freqs_sin: Tensor,
+}
+
+impl NanochatTrainModel {
+    pub fn new(config: &TrainConfig, vb: VarBuilder) -> Result<Self> {
+        let tok_embed = candle_nn::embedding(config.vocab_size, config.dim, vb.pp("tok_embed"))?;
+        let blocks = (0..config.n_layers)
+            .map(|i| TransformerBlockTrain::new(config, vb.pp(format!("blocks.{i}"))))
+            .collect::<Result<Vec<_>>>()?;
+        let norm_final = RMSNormTrain::new(config.dim, vb.pp("norm_final"))?;
+
+        let lm_head_weight = if !config.weight_tied {
+            let w = vb.get_with_hints(
+                (config.vocab_size, config.dim),
+                "lm_head.weight",
+                candle_nn::Init::Randn { mean: 0.0, stdev: 0.02 },
+            )?;
+            Some(w)
+        } else {
+            None
+        };
+
+        let head_dim = config.dim / config.n_heads;
+        let (freqs_cos, freqs_sin) = precompute_rope_freqs(
+            head_dim, config.max_seq_len, config.rope_theta, vb.device(),
+        )?;
+
+        Ok(Self {
+            config: config.clone(),
+            tok_embed,
+            blocks,
+            norm_final,
+            lm_head_weight,
+            freqs_cos,
+            freqs_sin,
+        })
+    }
+
+    /// Forward: token_ids [batch, seq_len] -> logits [batch, seq_len, vocab_size]
+    pub fn forward(&self, token_ids: &Tensor) -> Result<Tensor> {
+        let (_batch, seq_len) = token_ids.dims2()?;
+
+        // 1. Embed
+        let x = self.tok_embed.forward(token_ids)?; // [batch, seq, dim]
+
+        // 2. Expand to 2 streams
+        let mut x_exp = MhcLiteN2Train::expand_input(&x, self.config.dim)?;
+
+        // 3. Slice RoPE freqs for this sequence length
+        let cos = self.freqs_cos.narrow(0, 0, seq_len)?;
+        let sin = self.freqs_sin.narrow(0, 0, seq_len)?;
+
+        // 4. Transformer blocks
+        for block in &self.blocks {
+            x_exp = block.forward(&x_exp, &cos, &sin)?;
+        }
+
+        // 5. Collapse to single stream
+        let x = MhcLiteN2Train::collapse_output(&x_exp, self.config.dim)?;
+
+        // 6. Final norm
+        let x = self.norm_final.forward(&x)?;
+
+        // 7. LM head (handles 3D [batch, seq, dim] @ 2D [dim, vocab])
+        let lm_w = if self.config.weight_tied {
+            self.tok_embed.embeddings().t()?
+        } else {
+            self.lm_head_weight.as_ref().unwrap().t()?
+        };
+        let x_dims = x.dims().to_vec();
+        if x_dims.len() == 3 {
+            let (b, m, k) = (x_dims[0], x_dims[1], x_dims[2]);
+            x.reshape((b * m, k))?.matmul(&lm_w)?.reshape((b, m, ()))
+        } else {
+            x.matmul(&lm_w)
+        }
+    }
+
+    /// Collect all parameters grouped by optimizer assignment.
+    pub fn param_groups(&self) -> ParamGroups {
+        let mut linear = Vec::new();
+        let mut mhc = Vec::new();
+        let mut norm = Vec::new();
+        let embed = vec![self.tok_embed.embeddings().clone()];
+
+        for block in &self.blocks {
+            linear.extend(block.linear_params().into_iter().cloned());
+            mhc.extend(block.mhc_params().into_iter().cloned());
+            norm.extend(block.norm_params().into_iter().cloned());
+        }
+
+        norm.push(self.norm_final.weight().clone());
+
+        if let Some(ref w) = self.lm_head_weight {
+            linear.push(w.clone());
+        }
+
+        ParamGroups { linear, mhc, norm, embed }
+    }
+
+    /// Count total parameters.
+    pub fn param_count(&self) -> usize {
+        let groups = self.param_groups();
+        let count = |tensors: &[Tensor]| -> usize {
+            tensors.iter().map(|t| t.elem_count()).sum()
+        };
+        count(&groups.linear) + count(&groups.mhc) + count(&groups.norm) + count(&groups.embed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{Device, D};
+    use candle_nn::VarMap;
+    use crate::config::TrainConfig;
+
+    fn tiny_config() -> TrainConfig {
+        TrainConfig {
+            dim: 64,
+            n_layers: 2,
+            n_heads: 4,
+            n_kv_heads: 4,
+            ffn_mult: 2.0,
+            vocab_size: 256,
+            max_seq_len: 32,
+            group_size: 64,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            lr: 0.02,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 1,
+            warmup_steps: 10,
+            total_steps: 100,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+        }
+    }
+
+    #[test]
+    fn test_model_forward_shape() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let cfg = tiny_config();
+        let model = NanochatTrainModel::new(&cfg, vb)?;
+
+        let ids = Tensor::zeros((2, 8), DType::U32, &device)?;
+        let logits = model.forward(&ids)?;
+        assert_eq!(logits.dims(), &[2, 8, 256]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_model_loss_backward() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let cfg = tiny_config();
+        let model = NanochatTrainModel::new(&cfg, vb)?;
+
+        let ids = Tensor::zeros((1, 4), DType::U32, &device)?;
+        let targets = Tensor::zeros((1, 4), DType::U32, &device)?;
+        let logits = model.forward(&ids)?;
+
+        let (batch, seq, vocab) = logits.dims3()?;
+        let logits_flat = logits.reshape((batch * seq, vocab))?;
+        let targets_flat = targets.reshape(batch * seq)?;
+        let loss = candle_nn::loss::cross_entropy(&logits_flat, &targets_flat)?;
+        let _grads = loss.backward()?;
+
+        let loss_val = loss.to_scalar::<f32>()?;
+        assert!(loss_val.is_finite(), "Loss should be finite: {}", loss_val);
+        Ok(())
+    }
+
+    #[test]
+    fn test_model_weight_tied() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let mut cfg = tiny_config();
+        cfg.weight_tied = true;
+        let model = NanochatTrainModel::new(&cfg, vb)?;
+        assert!(model.lm_head_weight.is_none());
+
+        // Should still produce valid logits
+        let ids = Tensor::zeros((1, 4), DType::U32, &device)?;
+        let logits = model.forward(&ids)?;
+        assert_eq!(logits.dim(D::Minus1)?, cfg.vocab_size);
+        Ok(())
+    }
+
+    #[test]
+    fn test_model_param_groups_complete() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let cfg = tiny_config();
+        let model = NanochatTrainModel::new(&cfg, vb)?;
+        let groups = model.param_groups();
+
+        // 2 layers * 7 linear = 14 linear params (weight-tied, no lm_head)
+        assert_eq!(groups.linear.len(), 14);
+        // 2 layers * 10 mhc = 20
+        assert_eq!(groups.mhc.len(), 20);
+        // 2 layers * 2 norms + 1 final norm = 5
+        assert_eq!(groups.norm.len(), 5);
+        // 1 embedding
+        assert_eq!(groups.embed.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_model_param_count() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let cfg = tiny_config();
+        let model = NanochatTrainModel::new(&cfg, vb)?;
+        let count = model.param_count();
+        // Should be > 0 and reasonable for tiny config
+        assert!(count > 10_000, "Too few params: {}", count);
+        assert!(count < 1_000_000, "Too many params for tiny config: {}", count);
+        Ok(())
+    }
+}

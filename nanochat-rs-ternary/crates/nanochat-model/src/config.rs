@@ -67,6 +67,17 @@ impl ModelConfig {
         }
     }
 
+    /// ~1.1B param GPT-2-scale config (weight-tied)
+    pub fn nano_1b() -> Self {
+        Self {
+            dim: 2048, n_layers: 20, n_heads: 16, n_kv_heads: 16,
+            ffn_mult: 2.667, vocab_size: 50257, max_seq_len: 1024,
+            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0,
+            n_experts: None, n_active_experts: None, deltanet_ratio: None,
+            weight_tied: true,
+        }
+    }
+
     /// ~7B param config
     pub fn nano_7b() -> Self {
         Self {

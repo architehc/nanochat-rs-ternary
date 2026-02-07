@@ -1,0 +1,276 @@
+//! Training loop: Trainer struct with Muon + Lion optimizer split.
+
+use candle_core::{DType, Device, Result, Tensor, Var};
+use candle_nn::VarMap;
+
+use crate::config::TrainConfig;
+use crate::data::{Dataset, DataLoader};
+use crate::model::NanochatTrainModel;
+use crate::optim::{Muon, Lion, wsd_schedule};
+
+/// Training statistics for one step or epoch.
+#[derive(Debug, Clone)]
+pub struct StepStats {
+    pub loss: f64,
+    pub grad_norm: f64,
+    pub lr: f64,
+}
+
+/// Main trainer holding model + optimizers.
+pub struct Trainer {
+    pub model: NanochatTrainModel,
+    pub varmap: VarMap,
+    muon: Muon,
+    lion: Lion,
+    pub config: TrainConfig,
+    pub device: Device,
+    pub global_step: usize,
+    base_lr_muon: f64,
+    base_lr_lion: f64,
+}
+
+impl Trainer {
+    pub fn new(config: TrainConfig, device: Device) -> Result<Self> {
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let model = NanochatTrainModel::new(&config, vb)?;
+
+        // Classify vars by dimension: 2D+ go to Muon, 1D go to Lion
+        // Exception: embedding (vocab_size x dim) goes to Lion
+        let all_vars = varmap.all_vars();
+        let mut muon_vars: Vec<Var> = Vec::new();
+        let mut lion_vars: Vec<Var> = Vec::new();
+
+        for var in all_vars {
+            let dims = var.as_tensor().dims();
+            if dims.len() <= 1 {
+                // 1D: norms, mHC params -> Lion
+                lion_vars.push(var);
+            } else if dims.len() == 2 && dims[0] == config.vocab_size {
+                // Embedding -> Lion
+                lion_vars.push(var);
+            } else {
+                // 2D+ linear weights -> Muon
+                muon_vars.push(var);
+            }
+        }
+
+        let muon = Muon::new(
+            muon_vars,
+            config.lr,
+            config.muon_momentum,
+            config.ns_steps,
+            config.weight_decay,
+        )?;
+
+        let lion = Lion::new(
+            lion_vars,
+            config.mhc_lr,
+            config.lion_betas.0,
+            config.lion_betas.1,
+            0.0, // no weight decay for Lion group
+        )?;
+
+        let base_lr_muon = config.lr;
+        let base_lr_lion = config.mhc_lr;
+
+        Ok(Self {
+            model,
+            varmap,
+            muon,
+            lion,
+            config,
+            device,
+            global_step: 0,
+            base_lr_muon,
+            base_lr_lion,
+        })
+    }
+
+    /// Execute a single training step.
+    pub fn train_step(&mut self, input_ids: &Tensor, target_ids: &Tensor) -> Result<StepStats> {
+        // Forward
+        let logits = self.model.forward(input_ids)?;
+
+        // Cross-entropy loss
+        let (batch, seq_len, vocab) = logits.dims3()?;
+        let logits_flat = logits.reshape((batch * seq_len, vocab))?;
+        let targets_flat = target_ids.reshape(batch * seq_len)?;
+        let loss = candle_nn::loss::cross_entropy(&logits_flat, &targets_flat)?;
+
+        // Backward
+        let grads = loss.backward()?;
+
+        // Compute gradient norm for clipping
+        let grad_norm = compute_grad_norm(&grads, &self.varmap)?;
+        let clip_scale = if grad_norm > self.config.grad_clip {
+            self.config.grad_clip / grad_norm
+        } else {
+            1.0
+        };
+
+        // Optimizer steps
+        self.muon.step(&grads, clip_scale)?;
+        self.lion.step(&grads, clip_scale)?;
+
+        // LR schedule
+        self.global_step += 1;
+        let mult = wsd_schedule(
+            self.global_step,
+            self.config.warmup_steps,
+            self.config.total_steps,
+            self.config.decay_start_frac,
+            0.1,
+        );
+        self.muon.set_lr(self.base_lr_muon * mult);
+        self.lion.set_lr(self.base_lr_lion * mult);
+
+        let loss_val = loss.to_scalar::<f32>()? as f64;
+        Ok(StepStats {
+            loss: loss_val,
+            grad_norm,
+            lr: self.base_lr_muon * mult,
+        })
+    }
+
+    /// Train for one epoch over a dataset.
+    pub fn train_epoch(&mut self, dataset: &dyn Dataset, epoch: usize) -> Result<f64> {
+        let loader = DataLoader::new(
+            dataset,
+            self.config.batch_size,
+            true,
+            (epoch as u64) * 1000,
+            &self.device,
+        );
+
+        let mut total_loss = 0.0;
+        let mut n_steps = 0;
+
+        for batch in loader {
+            let (input_ids, target_ids) = batch?;
+            let stats = self.train_step(&input_ids, &target_ids)?;
+            total_loss += stats.loss;
+            n_steps += 1;
+        }
+
+        Ok(if n_steps > 0 { total_loss / n_steps as f64 } else { 0.0 })
+    }
+}
+
+/// Compute total gradient norm across all variables.
+fn compute_grad_norm(grads: &candle_core::backprop::GradStore, varmap: &VarMap) -> Result<f64> {
+    let mut total = 0.0f64;
+    for var in varmap.all_vars() {
+        if let Some(g) = grads.get(var.as_tensor()) {
+            total += g.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
+        }
+    }
+    Ok(total.sqrt())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::SyntheticDataset;
+
+    fn tiny_config() -> TrainConfig {
+        TrainConfig {
+            dim: 64,
+            n_layers: 2,
+            n_heads: 4,
+            n_kv_heads: 4,
+            ffn_mult: 2.0,
+            vocab_size: 256,
+            max_seq_len: 32,
+            group_size: 64,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            lr: 0.02,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 4,
+            grad_accum_steps: 1,
+            warmup_steps: 10,
+            total_steps: 100,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 3,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+        }
+    }
+
+    #[test]
+    fn test_train_step_loss_finite() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let mut trainer = Trainer::new(cfg, device)?;
+
+        let input_ids = Tensor::zeros((2, 8), DType::U32, &trainer.device)?;
+        let target_ids = Tensor::zeros((2, 8), DType::U32, &trainer.device)?;
+
+        let stats = trainer.train_step(&input_ids, &target_ids)?;
+        assert!(stats.loss.is_finite(), "Loss should be finite: {}", stats.loss);
+        assert!(stats.grad_norm.is_finite(), "Grad norm should be finite");
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_loss_decreases() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = tiny_config();
+        cfg.lr = 0.001; // Use smaller LR for stability
+        cfg.ns_steps = 2;
+        let mut trainer = Trainer::new(cfg, device)?;
+
+        let ds = SyntheticDataset::new(256, 8, 16, 42);
+        let mut losses = Vec::new();
+
+        // Run 5 epochs
+        for epoch in 0..5 {
+            let avg_loss = trainer.train_epoch(&ds, epoch)?;
+            losses.push(avg_loss);
+        }
+
+        // Loss should decrease overall
+        let first = losses[0];
+        let last = *losses.last().unwrap();
+        assert!(last < first, "Loss should decrease: first={:.4} last={:.4}", first, last);
+        Ok(())
+    }
+
+    #[test]
+    fn test_wsd_lr_applied() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = tiny_config();
+        cfg.warmup_steps = 5;
+        cfg.total_steps = 20;
+        let mut trainer = Trainer::new(cfg, device)?;
+
+        let input_ids = Tensor::zeros((1, 4), DType::U32, &trainer.device)?;
+        let target_ids = Tensor::zeros((1, 4), DType::U32, &trainer.device)?;
+
+        // During warmup, LR should be less than base
+        let stats = trainer.train_step(&input_ids, &target_ids)?;
+        assert!(stats.lr < 0.02, "LR should be ramping during warmup: {}", stats.lr);
+        assert!(stats.lr > 0.0, "LR should be positive: {}", stats.lr);
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_step_grad_clipping() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = tiny_config();
+        cfg.grad_clip = 0.001; // Very aggressive clipping
+        let mut trainer = Trainer::new(cfg, device)?;
+
+        let input_ids = Tensor::zeros((2, 8), DType::U32, &trainer.device)?;
+        let target_ids = Tensor::zeros((2, 8), DType::U32, &trainer.device)?;
+
+        // Should not crash with aggressive clipping
+        let stats = trainer.train_step(&input_ids, &target_ids)?;
+        assert!(stats.loss.is_finite());
+        Ok(())
+    }
+}
