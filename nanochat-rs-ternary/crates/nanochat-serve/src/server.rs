@@ -19,7 +19,7 @@ use crate::engine::InferenceEngine;
 /// Shared application state.
 pub struct AppState {
     pub engine: std::sync::Mutex<InferenceEngine>,
-    pub tokenizer: tiktoken_rs::CoreBPE,
+    pub tokenizer: tokenizers::Tokenizer,
     pub model_name: String,
     pub vocab_size: u32,
 }
@@ -77,7 +77,9 @@ async fn non_stream_completion(
 
     let (generated_text, prompt_tokens, completion_tokens) =
         tokio::task::spawn_blocking(move || {
-            let prompt_ids = state.tokenizer.encode_ordinary(&prompt);
+            let prompt_ids = state.tokenizer.encode(prompt.as_str(), false)
+                .map(|e| e.get_ids().to_vec())
+                .unwrap_or_default();
             let prompt_len = prompt_ids.len();
             let vs = state.vocab_size;
             let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
@@ -86,7 +88,7 @@ async fn non_stream_completion(
             let output_ids = engine.generate(&token_ids, &params);
             let output_len = output_ids.len();
 
-            let text = state.tokenizer.decode(output_ids).unwrap_or_default();
+            let text = state.tokenizer.decode(&output_ids, true).unwrap_or_default();
 
             (text, prompt_len, output_len)
         })
@@ -129,7 +131,9 @@ async fn stream_completion(
     let req_id = request_id.clone();
     let model = model_name.clone();
     tokio::task::spawn_blocking(move || {
-        let prompt_ids = state.tokenizer.encode_ordinary(&prompt);
+        let prompt_ids = state.tokenizer.encode(prompt.as_str(), false)
+            .map(|e| e.get_ids().to_vec())
+            .unwrap_or_default();
         let vs = state.vocab_size;
         let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
 
@@ -159,7 +163,7 @@ async fn stream_completion(
         let mut engine = state.engine.lock().unwrap();
 
         engine.generate_streaming(&token_ids, &params, |tok| {
-            let text = state.tokenizer.decode(vec![tok.token_id]).unwrap_or_default();
+            let text = state.tokenizer.decode(&[tok.token_id], true).unwrap_or_default();
 
             let chunk = ChatCompletionChunk {
                 id: req_id.clone(),
@@ -347,6 +351,47 @@ mod tests {
     use nanochat_model::config::ModelConfig;
     use tower::ServiceExt;
 
+    /// Build a byte-level BPE tokenizer with 256 single-byte tokens (no merges).
+    /// Uses GPT-2's byte_to_unicode mapping for ByteLevel pre/post-processing.
+    fn make_test_tokenizer() -> tokenizers::Tokenizer {
+        let mut vocab = serde_json::Map::new();
+        let mut n = 256u32;
+        for b in 0u32..256 {
+            let is_direct = (33..=126).contains(&b)
+                || (161..=172).contains(&b)
+                || (174..=255).contains(&b);
+            let ch = if is_direct {
+                char::from_u32(b).unwrap()
+            } else {
+                let c = char::from_u32(n).unwrap();
+                n += 1;
+                c
+            };
+            vocab.insert(ch.to_string(), serde_json::json!(b));
+        }
+        let json = serde_json::json!({
+            "version": "1.0",
+            "model": {
+                "type": "BPE",
+                "vocab": vocab,
+                "merges": []
+            },
+            "pre_tokenizer": {
+                "type": "ByteLevel",
+                "add_prefix_space": false,
+                "trim_offsets": true
+            },
+            "decoder": {
+                "type": "ByteLevel",
+                "add_prefix_space": true,
+                "trim_offsets": true,
+                "use_regex": true
+            }
+        });
+        let bytes = serde_json::to_vec(&json).unwrap();
+        tokenizers::Tokenizer::from_bytes(&bytes).unwrap()
+    }
+
     fn make_test_state() -> Arc<AppState> {
         let config = ModelConfig {
             dim: 128,
@@ -354,7 +399,7 @@ mod tests {
             n_heads: 4,
             n_kv_heads: 4,
             ffn_mult: 2.667,
-            vocab_size: 50257, // Must match tiktoken GPT-2 vocab
+            vocab_size: 256,
             max_seq_len: 64,
             group_size: 128,
             mhc_n_streams: 2,
@@ -365,14 +410,13 @@ mod tests {
             weight_tied: false,
         };
         let engine = InferenceEngine::new_random(config);
-
-        let tokenizer = tiktoken_rs::r50k_base().unwrap();
+        let tokenizer = make_test_tokenizer();
 
         Arc::new(AppState {
             engine: std::sync::Mutex::new(engine),
             tokenizer,
             model_name: "nanochat-test".to_string(),
-            vocab_size: 50257,
+            vocab_size: 256,
         })
     }
 

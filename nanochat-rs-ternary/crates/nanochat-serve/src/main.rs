@@ -10,6 +10,7 @@ use nanochat_serve::server::{AppState, build_router};
 struct Args {
     model: String,
     mhc: String,
+    tokenizer: String,
     host: String,
     port: u16,
 }
@@ -18,6 +19,7 @@ fn parse_args() -> Args {
     let args: Vec<String> = std::env::args().collect();
     let mut model = String::new();
     let mut mhc = String::new();
+    let mut tokenizer_path = String::new();
     let mut host = "0.0.0.0".to_string();
     let mut port = 8080u16;
 
@@ -32,6 +34,10 @@ fn parse_args() -> Args {
                 i += 1;
                 mhc = args.get(i).cloned().unwrap_or_default();
             }
+            "--tokenizer" => {
+                i += 1;
+                tokenizer_path = args.get(i).cloned().unwrap_or_default();
+            }
             "--host" => {
                 i += 1;
                 host = args.get(i).cloned().unwrap_or_default();
@@ -41,25 +47,25 @@ fn parse_args() -> Args {
                 port = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(8080);
             }
             "--help" | "-h" => {
-                eprintln!("Usage: nanochat-serve --model <path.gguf> --mhc <path.mhc> [--port 8080] [--host 0.0.0.0]");
+                eprintln!("Usage: nanochat-serve --model <path.gguf> --mhc <path.mhc> --tokenizer <path.json> [--port 8080] [--host 0.0.0.0]");
                 std::process::exit(0);
             }
             other => {
                 eprintln!("Unknown argument: {other}");
-                eprintln!("Usage: nanochat-serve --model <path.gguf> --mhc <path.mhc> [--port 8080] [--host 0.0.0.0]");
+                eprintln!("Usage: nanochat-serve --model <path.gguf> --mhc <path.mhc> --tokenizer <path.json> [--port 8080] [--host 0.0.0.0]");
                 std::process::exit(1);
             }
         }
         i += 1;
     }
 
-    if model.is_empty() || mhc.is_empty() {
-        eprintln!("Error: --model and --mhc are required");
-        eprintln!("Usage: nanochat-serve --model <path.gguf> --mhc <path.mhc> [--port 8080] [--host 0.0.0.0]");
+    if model.is_empty() || mhc.is_empty() || tokenizer_path.is_empty() {
+        eprintln!("Error: --model, --mhc, and --tokenizer are required");
+        eprintln!("Usage: nanochat-serve --model <path.gguf> --mhc <path.mhc> --tokenizer <path.json> [--port 8080] [--host 0.0.0.0]");
         std::process::exit(1);
     }
 
-    Args { model, mhc, host, port }
+    Args { model, mhc, tokenizer: tokenizer_path, host, port }
 }
 
 #[tokio::main]
@@ -95,9 +101,13 @@ async fn main() {
     });
     tracing::info!("mHC doubly-stochastic verification passed");
 
-    // Initialize tokenizer
-    let tokenizer = tiktoken_rs::r50k_base().expect("Failed to load GPT-2 tokenizer");
-    tracing::info!("Tokenizer loaded (GPT-2 r50k_base, 50257 tokens)");
+    // Load tokenizer
+    let tokenizer = tokenizers::Tokenizer::from_file(&args.tokenizer).unwrap_or_else(|e| {
+        eprintln!("Failed to load tokenizer from {}: {e}", args.tokenizer);
+        std::process::exit(1);
+    });
+    let tok_vocab = tokenizer.get_vocab_size(true);
+    tracing::info!("Tokenizer loaded from {} ({} tokens)", args.tokenizer, tok_vocab);
 
     let model_name = format!("nanochat-{}m", model.param_count().total / 1_000_000);
     let vocab_size = model.config.vocab_size as u32;

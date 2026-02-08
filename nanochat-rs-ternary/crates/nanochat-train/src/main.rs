@@ -57,6 +57,21 @@ enum Commands {
         device: String,
     },
 
+    /// Train a BPE tokenizer on a text file and produce tokenizer.json + tokens.bin
+    PrepareData {
+        /// Path to input text file
+        #[arg(long)]
+        text: String,
+
+        /// Target vocabulary size
+        #[arg(long, default_value = "4096")]
+        vocab_size: usize,
+
+        /// Output directory for tokenizer.json and tokens.bin
+        #[arg(long)]
+        output: String,
+    },
+
     /// Export trained model to GGUF + mHC
     Export {
         #[arg(long)]
@@ -209,6 +224,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 checkpoint_dir.as_deref(),
                 checkpoint_interval,
             )?;
+        }
+
+        Commands::PrepareData {
+            text,
+            vocab_size,
+            output,
+        } => {
+            nanochat_train::data::prepare_data(
+                std::path::Path::new(&text),
+                vocab_size,
+                std::path::Path::new(&output),
+            )
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
         }
 
         Commands::Export {

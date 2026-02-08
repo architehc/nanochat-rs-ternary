@@ -126,7 +126,9 @@ impl GgufFile {
                 // For a 2D [rows, cols] tensor with group_size from metadata:
                 let rows = tensor.dims.first().copied().unwrap_or(0) as usize;
                 let cols = tensor.dims.get(1).copied().unwrap_or(0) as usize;
-                let gs = match self.metadata.get("model.group_size") {
+                let gs = match self.metadata.get("nanochat.group_size")
+                    .or_else(|| self.metadata.get("model.group_size"))
+                {
                     Some(GgufValue::U32(v)) => *v as usize,
                     _ => 128,
                 };

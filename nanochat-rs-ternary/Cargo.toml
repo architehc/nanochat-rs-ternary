@@ -24,6 +24,10 @@ nanochat-serve = { path = "crates/nanochat-serve" }
 
 [dev-dependencies]
 criterion = { workspace = true }
+nanochat-train = { path = "crates/nanochat-train" }
+tempfile = "3"
+candle-core = "0.9"
+candle-nn = "0.9"
 
 [[bench]]
 name = "gemv_bench"
