@@ -8,3 +8,4 @@ target/
 *.log
 checkpoints/
 models/
+server.log
