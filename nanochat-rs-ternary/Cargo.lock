@@ -1600,6 +1600,8 @@ dependencies = [
  "bytemuck",
  "half",
  "mhc-lite",
+ "num_cpus",
+ "serde_json",
  "ternary-core",
  "ternary-kernels",
 ]

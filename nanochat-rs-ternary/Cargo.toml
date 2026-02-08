@@ -8,6 +8,8 @@ memmap2 = "0.9"
 rayon = "1.8"
 half = "2.3"
 criterion = { version = "0.5", features = ["html_reports"] }
+num_cpus = "1.16"
+serde_json = "1.0"
 
 # Root package for integration tests and benchmarks
 [package]

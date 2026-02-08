@@ -314,6 +314,49 @@ impl ModelConfig {
             }
         }
     }
+
+    /// Estimate total parameter count.
+    /// Rough approximation for memory estimation and reporting.
+    pub fn param_count_estimate(&self) -> usize {
+        let mut params = 0;
+
+        // Embeddings
+        params += self.vocab_size * self.dim;
+
+        // Per-layer parameters
+        for _ in 0..self.n_layers {
+            // Attention: Q, K, V, O projections
+            params += self.dim * self.dim * 4; // Roughly 4 * dim^2
+
+            // FFN (dense or MoE)
+            if let Some(n_experts) = self.n_experts {
+                // MoE: n_experts × (gate + up + down)
+                let expert_ffn_dim = self.expert_dim.unwrap_or(self.ffn_dim());
+                params += n_experts * expert_ffn_dim * self.dim * 3;
+                // Router
+                params += self.dim * n_experts;
+                // Shared expert (if enabled)
+                if self.use_shared_expert {
+                    params += expert_ffn_dim * self.dim * 3;
+                }
+            } else {
+                // Dense SwiGLU: gate + up + down
+                let ffn_dim = self.ffn_dim();
+                params += ffn_dim * self.dim * 3;
+            }
+
+            // Norms (RMSNorm: 1 param per dim)
+            params += self.dim * 2; // Attn norm + FFN norm
+        }
+
+        // Final norm + LM head (if not weight-tied)
+        params += self.dim; // Final norm
+        if !self.weight_tied {
+            params += self.vocab_size * self.dim; // LM head
+        }
+
+        params
+    }
 }
 
 #[cfg(test)]
