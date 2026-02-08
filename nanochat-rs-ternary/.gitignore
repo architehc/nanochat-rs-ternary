@@ -5,3 +5,5 @@ checkpoints/
 # Rust build artifacts
 target/
 *.log
+*.log
+checkpoints/
