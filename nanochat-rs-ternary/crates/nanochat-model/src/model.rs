@@ -254,17 +254,34 @@ impl NanochatModel {
             _ => None,
         };
 
+        let ffn_mult = match gguf.metadata.get("nanochat.ffn_mult") {
+            Some(GgufValue::F32(v)) => *v,
+            _ => 2.667,
+        };
+        let rope_theta = match gguf.metadata.get("nanochat.rope_theta") {
+            Some(GgufValue::F32(v)) => *v,
+            _ => 10000.0,
+        };
+        let max_seq_len = match gguf.metadata.get("nanochat.max_seq_len") {
+            Some(GgufValue::U32(v)) => *v as usize,
+            _ => 2048,
+        };
+        let n_kv_heads = match gguf.metadata.get("nanochat.n_kv_heads") {
+            Some(GgufValue::U32(v)) => *v as usize,
+            _ => get_u32("nanochat.n_heads")?,
+        };
+
         Ok(ModelConfig {
             dim: get_u32("nanochat.dim")?,
             n_layers: get_u32("nanochat.n_layers")?,
             n_heads: get_u32("nanochat.n_heads")?,
-            n_kv_heads: get_u32("nanochat.n_heads")?, // MHA: same as n_heads
-            ffn_mult: 2.667,
+            n_kv_heads,
+            ffn_mult,
             vocab_size: get_u32("nanochat.vocab_size")?,
-            max_seq_len: 2048,
+            max_seq_len,
             group_size: get_u32("nanochat.group_size")?,
             mhc_n_streams: get_u32("nanochat.mhc_n_streams")?,
-            rope_theta: 10000.0,
+            rope_theta,
             n_experts,
             n_active_experts,
             deltanet_ratio,
@@ -281,10 +298,24 @@ impl NanochatModel {
         let dim = tensor.dims[1] as usize;
         let data = gguf.tensor_data(tensor);
 
-        // FP16 -> F32 conversion
-        let weight: Vec<f32> = data.chunks_exact(2)
-            .map(|c| half::f16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32())
-            .collect();
+        let weight: Vec<f32> = match tensor.dtype {
+            0 => {
+                // F32: 4 bytes per element
+                data.chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect()
+            }
+            1 => {
+                // FP16: 2 bytes per element
+                data.chunks_exact(2)
+                    .map(|c| half::f16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32())
+                    .collect()
+            }
+            dt => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData,
+                    format!("unsupported embedding dtype: {dt} (expected F32=0 or F16=1)")));
+            }
+        };
 
         if weight.len() != vocab_size * dim {
             return Err(io::Error::new(io::ErrorKind::InvalidData,

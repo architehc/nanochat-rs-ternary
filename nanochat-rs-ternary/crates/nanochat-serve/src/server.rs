@@ -21,6 +21,7 @@ pub struct AppState {
     pub engine: std::sync::Mutex<InferenceEngine>,
     pub tokenizer: tiktoken_rs::CoreBPE,
     pub model_name: String,
+    pub vocab_size: u32,
 }
 
 /// Build the Axum router.
@@ -78,7 +79,8 @@ async fn non_stream_completion(
         tokio::task::spawn_blocking(move || {
             let prompt_ids = state.tokenizer.encode_ordinary(&prompt);
             let prompt_len = prompt_ids.len();
-            let token_ids: Vec<u32> = prompt_ids.into_iter().collect();
+            let vs = state.vocab_size;
+            let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
 
             let mut engine = state.engine.lock().unwrap();
             let output_ids = engine.generate(&token_ids, &params);
@@ -128,7 +130,8 @@ async fn stream_completion(
     let model = model_name.clone();
     tokio::task::spawn_blocking(move || {
         let prompt_ids = state.tokenizer.encode_ordinary(&prompt);
-        let token_ids: Vec<u32> = prompt_ids.into_iter().collect();
+        let vs = state.vocab_size;
+        let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -369,6 +372,7 @@ mod tests {
             engine: std::sync::Mutex::new(engine),
             tokenizer,
             model_name: "nanochat-test".to_string(),
+            vocab_size: 50257,
         })
     }
 

@@ -48,10 +48,10 @@ pub fn export_gguf(
 
         // Attention ternary weights
         for (name, layer) in [
-            ("attn.wq", &block.attention.wq),
-            ("attn.wk", &block.attention.wk),
-            ("attn.wv", &block.attention.wv),
-            ("attn.wo", &block.attention.wo),
+            ("attention.wq", &block.attention.wq),
+            ("attention.wk", &block.attention.wk),
+            ("attention.wv", &block.attention.wv),
+            ("attention.wo", &block.attention.wo),
         ] {
             let (w_ternary, _scales) = layer.get_ternary_weights()?;
             let w_flat = w_ternary.flatten_all()?.to_vec1::<f32>()?;

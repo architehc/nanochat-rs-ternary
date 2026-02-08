@@ -46,14 +46,19 @@ pub struct InferenceEngine {
 
 impl InferenceEngine {
     pub fn new(model: NanochatModel) -> Self {
-        Self { model, eot_token: 50256 } // GPT-2 <|endoftext|>
+        let vocab = model.config.vocab_size;
+        // Use vocab-1 as EOT for small vocabs, GPT-2 standard for full vocab
+        let eot = if vocab <= 50256 { (vocab - 1) as u32 } else { 50256 };
+        Self { model, eot_token: eot }
     }
 
     /// Create engine with random weights for testing.
     pub fn new_random(config: ModelConfig) -> Self {
+        let vocab = config.vocab_size;
+        let eot = if vocab <= 50256 { (vocab - 1) as u32 } else { 50256 };
         Self {
             model: NanochatModel::new_random(config),
-            eot_token: 50256,
+            eot_token: eot,
         }
     }
 

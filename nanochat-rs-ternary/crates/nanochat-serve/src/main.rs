@@ -100,12 +100,14 @@ async fn main() {
     tracing::info!("Tokenizer loaded (GPT-2 r50k_base, 50257 tokens)");
 
     let model_name = format!("nanochat-{}m", model.param_count().total / 1_000_000);
+    let vocab_size = model.config.vocab_size as u32;
     let engine = InferenceEngine::new(model);
 
     let state = Arc::new(AppState {
         engine: std::sync::Mutex::new(engine),
         tokenizer,
         model_name,
+        vocab_size,
     });
 
     let app = build_router(state);
