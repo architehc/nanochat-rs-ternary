@@ -214,6 +214,72 @@ pub fn unpack_matrix(pm: &PackedMatrix) -> Vec<f32> {
     result
 }
 
+/// Quantize a row-major f32 weight matrix to Q1_58 format (ternary + scales).
+///
+/// Q1_58 format: interleaved packed bytes and scales per row.
+/// Row format: [packed_bytes (cols/4)] [scales_f32 (cols/group_size)]
+///
+/// This is the GGUF-compatible format for ternary tensors.
+///
+/// # Arguments
+/// * `weights` - Row-major f32 weights [rows * cols]
+/// * `rows` - Number of output rows
+/// * `cols` - Number of input columns (must be divisible by group_size and 4)
+/// * `group_size` - Quantization group size (typically 128)
+///
+/// # Returns
+/// Packed bytes: rows * (cols/4 + cols/group_size * 4) bytes
+pub fn quantize_row_q1_58(
+    weights: &[f32],
+    rows: usize,
+    cols: usize,
+    group_size: usize,
+) -> Result<Vec<u8>, String> {
+    if cols % group_size != 0 {
+        return Err(format!("cols {} must be divisible by group_size {}", cols, group_size));
+    }
+    if cols % 4 != 0 {
+        return Err(format!("cols {} must be divisible by 4", cols));
+    }
+    if weights.len() != rows * cols {
+        return Err(format!("weights.len() {} != rows {} * cols {}", weights.len(), rows, cols));
+    }
+
+    let bytes_per_row = cols / 4;
+    let groups_per_row = cols / group_size;
+    let scales_bytes_per_row = groups_per_row * 4; // f32 = 4 bytes
+    let total_bytes_per_row = bytes_per_row + scales_bytes_per_row;
+
+    let mut result = Vec::with_capacity(rows * total_bytes_per_row);
+
+    for r in 0..rows {
+        let row_start = r * cols;
+        let row_weights = &weights[row_start..row_start + cols];
+
+        // Pack this row
+        let mut row_packed = Vec::with_capacity(bytes_per_row);
+        let mut row_scales = Vec::with_capacity(groups_per_row);
+
+        for g in 0..groups_per_row {
+            let group_start = g * group_size;
+            let group_end = group_start + group_size;
+            let group_weights = &row_weights[group_start..group_end];
+
+            let (packed, scale) = pack_group(group_weights);
+            row_packed.extend_from_slice(&packed);
+            row_scales.push(scale);
+        }
+
+        // Write row: packed bytes followed by scales
+        result.extend_from_slice(&row_packed);
+        for scale in row_scales {
+            result.extend_from_slice(&scale.to_le_bytes());
+        }
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

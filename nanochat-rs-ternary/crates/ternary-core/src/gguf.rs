@@ -20,6 +20,33 @@ const GGUF_MAGIC: u32 = 0x46475547; // "GGUF"
 /// GGUF file version we support.
 const GGUF_VERSION: u32 = 3;
 
+/// GGUF data types (standard + custom).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GgufType {
+    F32 = 0,
+    F16 = 1,
+    Q4_0 = 2,
+    Q4_1 = 3,
+    Q5_0 = 6,
+    Q5_1 = 7,
+    Q8_0 = 8,
+    Q8_1 = 9,
+    Q2_K = 10,
+    Q3_K = 11,
+    Q4_K = 12,
+    Q5_K = 13,
+    Q6_K = 14,
+    Q8_K = 15,
+    BF16 = 30,
+    Q1_58 = 100, // Custom ternary type
+}
+
+impl GgufType {
+    pub fn to_u32(self) -> u32 {
+        self as u32
+    }
+}
+
 /// GGUF metadata value types.
 #[derive(Debug, Clone)]
 pub enum GgufValue {
@@ -306,6 +333,98 @@ impl GgufWriter {
 impl Default for GgufWriter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Simplified GGUF tensor info for writing.
+#[derive(Debug, Clone)]
+pub struct GgufTensorInfo {
+    pub name: String,
+    pub dims: Vec<u64>,
+    pub dtype: GgufType,
+    pub offset: u64, // Will be computed by writer
+}
+
+/// Simplified GGUF metadata container.
+#[derive(Debug, Clone)]
+pub struct GgufMetadata {
+    pub metadata: HashMap<String, GgufValue>,
+    pub tensors: Vec<GgufTensorInfo>,
+}
+
+/// Simplified GGUF file writer (one-shot API).
+pub struct GgufFileWriter;
+
+impl GgufFileWriter {
+    /// Write a complete GGUF file with metadata and tensors.
+    ///
+    /// # Arguments
+    /// * `path` - Output file path
+    /// * `meta` - Metadata and tensor descriptors
+    /// * `tensor_data` - Tensor data arrays (in same order as meta.tensors)
+    pub fn write<P: AsRef<Path>>(
+        path: P,
+        meta: &GgufMetadata,
+        tensor_data: &[&[u8]],
+    ) -> io::Result<()> {
+        if meta.tensors.len() != tensor_data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Tensor count mismatch: {} descriptors vs {} data arrays",
+                    meta.tensors.len(),
+                    tensor_data.len()
+                ),
+            ));
+        }
+
+        let mut file = File::create(path)?;
+
+        // Header
+        file.write_all(&GGUF_MAGIC.to_le_bytes())?;
+        file.write_all(&GGUF_VERSION.to_le_bytes())?;
+        file.write_all(&(meta.tensors.len() as u64).to_le_bytes())?;
+        file.write_all(&(meta.metadata.len() as u64).to_le_bytes())?;
+
+        // Metadata
+        for (key, value) in &meta.metadata {
+            write_gguf_string(&mut file, key)?;
+            write_gguf_value(&mut file, value)?;
+        }
+
+        // Tensor descriptors (compute offsets)
+        let mut offset: u64 = 0;
+        for (tensor_info, data) in meta.tensors.iter().zip(tensor_data.iter()) {
+            write_gguf_string(&mut file, &tensor_info.name)?;
+            file.write_all(&(tensor_info.dims.len() as u32).to_le_bytes())?;
+            for &dim in &tensor_info.dims {
+                file.write_all(&dim.to_le_bytes())?;
+            }
+            file.write_all(&tensor_info.dtype.to_u32().to_le_bytes())?;
+            file.write_all(&offset.to_le_bytes())?;
+
+            // Update offset for next tensor (with 32-byte alignment)
+            offset += data.len() as u64;
+            offset = (offset + 31) & !31;
+        }
+
+        // Pad to 32-byte alignment for data section
+        let pos = file.stream_position()? as usize;
+        let aligned = (pos + 31) & !31;
+        let padding = aligned - pos;
+        file.write_all(&vec![0u8; padding])?;
+
+        // Tensor data
+        for data in tensor_data {
+            file.write_all(data)?;
+            // Pad to 32-byte alignment
+            let pad = ((data.len() + 31) & !31) - data.len();
+            if pad > 0 {
+                file.write_all(&vec![0u8; pad])?;
+            }
+        }
+
+        Ok(())
     }
 }
 
