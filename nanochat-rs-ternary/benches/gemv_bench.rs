@@ -148,5 +148,86 @@ fn bench_gemv_comparison(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_gemv_scalar, bench_gemv_ffi, bench_gemv_comparison);
+fn bench_gemv_parallel(c: &mut Criterion) {
+    let mut group = c.benchmark_group("gemv_parallel");
+
+    // Production-critical shapes where parallel matters (large M)
+    let shapes: &[(usize, usize)] = &[
+        (2048, 2048),
+        (4096, 4096),
+        (4096, 11008),
+        (11008, 4096),
+    ];
+
+    for &(m, k) in shapes {
+        let w = gen_weights(m, k);
+        let pw = PlanarWeights::from_row_major(&w, m, k, 128);
+        let x = gen_activations(k);
+        let mut y = vec![0.0f32; m];
+        let act_scale = 1.0 / 127.0;
+
+        let ops = 2 * m * k;
+        group.throughput(Throughput::Elements(ops as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new("parallel", format!("{}x{}", m, k)),
+            &(),
+            |b, _| {
+                b.iter(|| {
+                    cpu::gemv_parallel(&pw, &x, act_scale, &mut y);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_gemv_single_vs_parallel(c: &mut Criterion) {
+    let mut group = c.benchmark_group("gemv_single_vs_parallel");
+
+    let shapes: &[(usize, usize)] = &[
+        (2048, 2048),
+        (4096, 4096),
+        (4096, 11008),
+        (11008, 4096),
+    ];
+
+    for &(m, k) in shapes {
+        let w = gen_weights(m, k);
+        let pw = PlanarWeights::from_row_major(&w, m, k, 128);
+        let x = gen_activations(k);
+        let mut y = vec![0.0f32; m];
+        let act_scale = 1.0 / 127.0;
+
+        let label = format!("{}x{}", m, k);
+
+        group.bench_with_input(
+            BenchmarkId::new("single_ffi", &label),
+            &(),
+            |b, _| {
+                b.iter(|| cpu::gemv(&pw, &x, act_scale, &mut y));
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("parallel_ffi", &label),
+            &(),
+            |b, _| {
+                b.iter(|| cpu::gemv_parallel(&pw, &x, act_scale, &mut y));
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_gemv_scalar,
+    bench_gemv_ffi,
+    bench_gemv_comparison,
+    bench_gemv_parallel,
+    bench_gemv_single_vs_parallel
+);
 criterion_main!(benches);

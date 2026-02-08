@@ -88,8 +88,14 @@ pub fn gemv_scalar_ref(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f3
 
 /// Parallel GEMV: split M (rows) dimension across threads using rayon.
 ///
-/// Each chunk calls `gemv_dp4a_ref` (scalar, row-major) on its row slice.
-/// Falls back to single-threaded `gemv()` for small M.
+/// Each chunk dispatches the best available SIMD kernel (AVX2/AVX-512)
+/// via `ternary_gemv()` on its row slice. Falls back to single-threaded
+/// `gemv()` for small M.
+///
+/// Row-slicing is safe for all SIMD kernels because they access column-major
+/// data as `data_colmaj[cg * rows_padded + row_offset]`, where `rows_padded`
+/// is the stride. Sub-structs point into the parent's data at the row offset
+/// while keeping the original `rows_padded` as stride.
 ///
 /// # Arguments
 /// * `pw` - Planar ternary weights
@@ -100,31 +106,37 @@ pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]
     assert_eq!(x.len(), pw.cols, "x.len() != cols");
     assert_eq!(y.len(), pw.rows, "y.len() != rows");
 
-    const PARALLEL_THRESHOLD: usize = 256;
-    const ROWS_PER_CHUNK: usize = 64;
+    const PARALLEL_THRESHOLD: usize = 4096;
+    const ROWS_PER_CHUNK: usize = 256;
 
     if pw.rows < PARALLEL_THRESHOLD {
         return gemv(pw, x, act_scale, y);
     }
 
-    let kp = pw.cols / 4;
-    let gprow = pw.cols / pw.group_size;
+    let kp = pw.cols / 4; // packed bytes per row (row-major)
+    let gprow = pw.cols / pw.group_size; // scale groups per row (row-major)
 
     y.par_chunks_mut(ROWS_PER_CHUNK).enumerate().for_each(|(chunk_idx, y_chunk)| {
         let row_start = chunk_idx * ROWS_PER_CHUNK;
         let chunk_rows = y_chunk.len();
 
+        // Construct sub-PlanarWeightsC pointing into the parent's arrays.
+        // Column-major and group-major arrays use rows_padded as stride,
+        // so we offset by row_start within each column/group.
+        // Row-major arrays are contiguous per row, so we offset by row_start * items_per_row.
+        let sub_pw = PlanarWeightsC {
+            data: unsafe { pw.data.as_ptr().add(row_start * kp) },
+            data_colmaj: unsafe { pw.data_colmaj.as_ptr().add(row_start) },
+            scales_rm: unsafe { pw.scales_rm.as_ptr().add(row_start * gprow) },
+            scales_gm: unsafe { pw.scales_gm.as_ptr().add(row_start) },
+            rows: chunk_rows as i32,
+            cols: pw.cols as i32,
+            group_size: pw.group_size as i32,
+            rows_padded: pw.rows_padded as i32, // keep original — it's the column stride
+        };
+
         unsafe {
-            gemv_dp4a_ref(
-                pw.data.as_ptr().add(row_start * kp),
-                pw.scales_rm.as_ptr().add(row_start * gprow),
-                x.as_ptr(),
-                act_scale,
-                y_chunk.as_mut_ptr(),
-                chunk_rows as i32,
-                pw.cols as i32,
-                pw.group_size as i32,
-            );
+            ternary_gemv(&sub_pw, x.as_ptr(), act_scale, y_chunk.as_mut_ptr());
         }
     });
 }
@@ -193,14 +205,15 @@ mod tests {
 
     #[test]
     fn test_gemv_parallel_matches_single_thread() {
-        for &(m, k) in &[(512, 512), (1024, 256), (256, 128)] {
+        for &(m, k) in &[(4096, 512), (8192, 256), (4096, 128)] {
             let (pw, x) = make_test_weights(m, k);
             let act_scale = 1.0 / 127.0;
 
+            // Compare parallel (SIMD per chunk) against single-thread SIMD
             let mut y_single = vec![0.0f32; m];
             let mut y_parallel = vec![0.0f32; m];
 
-            gemv_scalar_ref(&pw, &x, act_scale, &mut y_single);
+            gemv(&pw, &x, act_scale, &mut y_single);
             gemv_parallel(&pw, &x, act_scale, &mut y_parallel);
 
             let max_diff: f32 = y_single
@@ -209,10 +222,27 @@ mod tests {
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0f32, f32::max);
 
+            // Both use the same SIMD kernel, so should be bit-identical
             assert!(
-                max_diff < 1e-5,
-                "[{}x{}] parallel vs scalar max diff: {}",
+                max_diff < 1e-6,
+                "[{}x{}] parallel vs single-thread SIMD max diff: {}",
                 m, k, max_diff
+            );
+
+            // Also verify both are close to scalar reference
+            let mut y_scalar = vec![0.0f32; m];
+            gemv_scalar_ref(&pw, &x, act_scale, &mut y_scalar);
+
+            let max_diff_vs_scalar: f32 = y_parallel
+                .iter()
+                .zip(y_scalar.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+
+            assert!(
+                max_diff_vs_scalar < 1e-4,
+                "[{}x{}] parallel SIMD vs scalar max diff: {}",
+                m, k, max_diff_vs_scalar
             );
         }
     }
