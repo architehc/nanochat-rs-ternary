@@ -279,7 +279,7 @@ impl Trainer {
 }
 
 /// Compute total gradient norm across all variables.
-fn compute_grad_norm(grads: &candle_core::backprop::GradStore, varmap: &VarMap) -> Result<f64> {
+pub fn compute_grad_norm(grads: &candle_core::backprop::GradStore, varmap: &VarMap) -> Result<f64> {
     let mut total = 0.0f64;
     for var in varmap.all_vars() {
         if let Some(g) = grads.get(var.as_tensor()) {

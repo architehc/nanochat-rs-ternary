@@ -9,5 +9,6 @@ pub mod model;
 pub mod optim;
 pub mod data;
 pub mod train;
+pub mod distill;
 pub mod export;
 pub mod checkpoint;
