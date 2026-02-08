@@ -393,22 +393,7 @@ mod tests {
     }
 
     fn make_test_state() -> Arc<AppState> {
-        let config = ModelConfig {
-            dim: 128,
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: None,
-            n_active_experts: None,
-            deltanet_ratio: None,
-            weight_tied: false,
-        };
+        let config = ModelConfig::test_config(128, 2, 4, 256);
         let engine = InferenceEngine::new_random(config);
         let tokenizer = make_test_tokenizer();
 

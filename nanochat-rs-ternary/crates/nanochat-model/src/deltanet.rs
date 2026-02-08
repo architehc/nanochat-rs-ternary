@@ -202,23 +202,8 @@ mod tests {
     use super::*;
     use crate::config::ModelConfig;
 
-    fn test_config() -> ModelConfig {
-        ModelConfig {
-            dim: 128,
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: None,
-            n_active_experts: None,
-            deltanet_ratio: None,
-            weight_tied: false,
-        }
+    fn deltanet_test_config() -> ModelConfig {
+        ModelConfig::test_config(128, 2, 4, 256)
     }
 
     #[test]
@@ -230,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_deltanet_single_token_forward() {
-        let config = test_config();
+        let config = deltanet_test_config();
         let attn = DeltaNetAttention::new_random(&config);
         let mut state = DeltaNetState::new(config.n_heads, config.head_dim());
 
@@ -249,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_deltanet_sequence_state_accumulation() {
-        let config = test_config();
+        let config = deltanet_test_config();
         let attn = DeltaNetAttention::new_random(&config);
         let mut state = DeltaNetState::new(config.n_heads, config.head_dim());
 
@@ -284,7 +269,7 @@ mod tests {
 
     #[test]
     fn test_deltanet_state_reset() {
-        let config = test_config();
+        let config = deltanet_test_config();
         let attn = DeltaNetAttention::new_random(&config);
         let mut state = DeltaNetState::new(config.n_heads, config.head_dim());
 

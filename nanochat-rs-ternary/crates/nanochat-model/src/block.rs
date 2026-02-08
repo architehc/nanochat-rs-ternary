@@ -344,22 +344,9 @@ mod tests {
 
     #[test]
     fn test_block_with_moe() {
-        let config = ModelConfig {
-            dim: 128,
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: Some(4),
-            n_active_experts: Some(2),
-            deltanet_ratio: None,
-            weight_tied: false,
-        };
+        let mut config = ModelConfig::test_config(128, 2, 4, 256);
+        config.n_experts = Some(4);
+        config.n_active_experts = Some(2);
         let block = TransformerBlock::new_random(&config);
         let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
         let mut state = block.create_attn_state(&config);

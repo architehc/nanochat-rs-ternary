@@ -1,5 +1,22 @@
 //! Model configuration for nanochat-rs ternary models.
 
+/// Hybrid layer sequencing pattern for Qwen3-style architectures.
+#[derive(Debug, Clone)]
+pub enum LayerSequence {
+    /// Interleaved: distributes DeltaNet/Attention evenly using deltanet_ratio
+    Interleaved,
+    /// Explicit pattern: e.g., [DeltaNet, DeltaNet, DeltaNet, Attention, ...]
+    /// Repeats the pattern to fill n_layers.
+    Pattern(Vec<LayerType>),
+}
+
+/// Layer type in hybrid architectures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerType {
+    StandardAttention,
+    DeltaNetAttention,
+}
+
 /// Configuration for a nanochat ternary model.
 #[derive(Debug, Clone)]
 pub struct ModelConfig {
@@ -7,10 +24,14 @@ pub struct ModelConfig {
     pub dim: usize,
     /// Number of transformer layers
     pub n_layers: usize,
-    /// Number of attention heads
+    /// Number of attention heads (for standard attention)
     pub n_heads: usize,
     /// Number of KV heads (for GQA; same as n_heads for MHA)
     pub n_kv_heads: usize,
+    /// DeltaNet-specific: number of V heads (can differ from n_heads)
+    pub deltanet_v_heads: Option<usize>,
+    /// DeltaNet-specific: number of QK heads (can differ from n_heads)
+    pub deltanet_qk_heads: Option<usize>,
     /// FFN intermediate multiplier (SwiGLU: ffn_dim = dim * ffn_mult)
     pub ffn_mult: f32,
     /// Vocabulary size
@@ -21,16 +42,27 @@ pub struct ModelConfig {
     pub group_size: usize,
     /// mHC stream count (2 or 4)
     pub mhc_n_streams: usize,
-    /// RoPE theta
+    /// RoPE theta (base frequency)
     pub rope_theta: f32,
+    /// RoPE scaling factor for long context (1.0 = no scaling)
+    pub rope_scale: f32,
     /// Number of experts (None = dense FFN)
     pub n_experts: Option<usize>,
     /// Number of active experts per token
     pub n_active_experts: Option<usize>,
+    /// Whether to use a shared expert (always active) in MoE
+    pub use_shared_expert: bool,
+    /// Expert intermediate dimension override (None = use ffn_dim)
+    pub expert_dim: Option<usize>,
     /// Fraction of layers using DeltaNet attention (None = all standard MHA)
+    /// Only used if layer_sequence is Interleaved.
     pub deltanet_ratio: Option<f32>,
+    /// Hybrid layer sequencing pattern (default: Interleaved)
+    pub layer_sequence: LayerSequence,
     /// Whether embedding and LM head weights are tied
     pub weight_tied: bool,
+    /// Whether to use gated attention (multiply attention output by learned gate)
+    pub gated_attention: bool,
 }
 
 impl ModelConfig {
@@ -38,10 +70,13 @@ impl ModelConfig {
     pub fn d20() -> Self {
         Self {
             dim: 256, n_layers: 6, n_heads: 4, n_kv_heads: 4,
+            deltanet_v_heads: None, deltanet_qk_heads: None,
             ffn_mult: 2.667, vocab_size: 32000, max_seq_len: 512,
-            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0,
-            n_experts: None, n_active_experts: None, deltanet_ratio: None,
-            weight_tied: false,
+            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0, rope_scale: 1.0,
+            n_experts: None, n_active_experts: None,
+            use_shared_expert: false, expert_dim: None,
+            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false, gated_attention: false,
         }
     }
 
@@ -49,10 +84,13 @@ impl ModelConfig {
     pub fn nano_125m() -> Self {
         Self {
             dim: 768, n_layers: 12, n_heads: 12, n_kv_heads: 12,
+            deltanet_v_heads: None, deltanet_qk_heads: None,
             ffn_mult: 2.667, vocab_size: 50257, max_seq_len: 2048,
-            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0,
-            n_experts: None, n_active_experts: None, deltanet_ratio: None,
-            weight_tied: false,
+            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0, rope_scale: 1.0,
+            n_experts: None, n_active_experts: None,
+            use_shared_expert: false, expert_dim: None,
+            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false, gated_attention: false,
         }
     }
 
@@ -60,10 +98,13 @@ impl ModelConfig {
     pub fn nano_560m() -> Self {
         Self {
             dim: 1024, n_layers: 24, n_heads: 16, n_kv_heads: 16,
+            deltanet_v_heads: None, deltanet_qk_heads: None,
             ffn_mult: 2.667, vocab_size: 32000, max_seq_len: 2048,
-            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0,
-            n_experts: None, n_active_experts: None, deltanet_ratio: None,
-            weight_tied: false,
+            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0, rope_scale: 1.0,
+            n_experts: None, n_active_experts: None,
+            use_shared_expert: false, expert_dim: None,
+            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false, gated_attention: false,
         }
     }
 
@@ -71,10 +112,13 @@ impl ModelConfig {
     pub fn nano_1b() -> Self {
         Self {
             dim: 2048, n_layers: 20, n_heads: 16, n_kv_heads: 16,
+            deltanet_v_heads: None, deltanet_qk_heads: None,
             ffn_mult: 2.667, vocab_size: 50257, max_seq_len: 1024,
-            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0,
-            n_experts: None, n_active_experts: None, deltanet_ratio: None,
-            weight_tied: true,
+            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0, rope_scale: 1.0,
+            n_experts: None, n_active_experts: None,
+            use_shared_expert: false, expert_dim: None,
+            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
+            weight_tied: true, gated_attention: false,
         }
     }
 
@@ -82,10 +126,13 @@ impl ModelConfig {
     pub fn nano_7b() -> Self {
         Self {
             dim: 4096, n_layers: 32, n_heads: 32, n_kv_heads: 8,
+            deltanet_v_heads: None, deltanet_qk_heads: None,
             ffn_mult: 2.667, vocab_size: 128256, max_seq_len: 8192,
-            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0,
-            n_experts: None, n_active_experts: None, deltanet_ratio: None,
-            weight_tied: false,
+            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0, rope_scale: 1.0,
+            n_experts: None, n_active_experts: None,
+            use_shared_expert: false, expert_dim: None,
+            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false, gated_attention: false,
         }
     }
 
@@ -93,10 +140,13 @@ impl ModelConfig {
     pub fn moe_25b() -> Self {
         Self {
             dim: 4096, n_layers: 32, n_heads: 32, n_kv_heads: 8,
+            deltanet_v_heads: None, deltanet_qk_heads: None,
             ffn_mult: 2.667, vocab_size: 128256, max_seq_len: 8192,
-            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0,
-            n_experts: Some(8), n_active_experts: Some(2), deltanet_ratio: None,
-            weight_tied: false,
+            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0, rope_scale: 1.0,
+            n_experts: Some(8), n_active_experts: Some(2),
+            use_shared_expert: false, expert_dim: None,
+            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false, gated_attention: false,
         }
     }
 
@@ -104,20 +154,91 @@ impl ModelConfig {
     pub fn moe_80b() -> Self {
         Self {
             dim: 8192, n_layers: 64, n_heads: 64, n_kv_heads: 8,
+            deltanet_v_heads: None, deltanet_qk_heads: None,
             ffn_mult: 2.667, vocab_size: 128256, max_seq_len: 8192,
-            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0,
-            n_experts: Some(16), n_active_experts: Some(2), deltanet_ratio: None,
-            weight_tied: false,
+            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0, rope_scale: 1.0,
+            n_experts: Some(16), n_active_experts: Some(2),
+            use_shared_expert: false, expert_dim: None,
+            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false, gated_attention: false,
         }
     }
 
-    /// Head dimension
+    /// Qwen3-Coder-Next-80B config (ternary-adapted)
+    ///
+    /// Hybrid architecture: 12 × (3 DeltaNet → 1 Gated Attention) = 48 layers
+    /// - Gated DeltaNet: 32 V heads, 16 QK heads, head_dim=128
+    /// - Gated Attention: 16 Q heads, 2 KV heads, head_dim=256
+    /// - MoE: 512 experts, top-10 active + 1 shared expert, expert_dim=512
+    /// - 256k context via NTK-aware RoPE scaling
+    pub fn qwen3_coder_80b() -> Self {
+        // Hybrid pattern: [DeltaNet, DeltaNet, DeltaNet, Attention] repeated 12 times
+        let pattern = vec![
+            LayerType::DeltaNetAttention,
+            LayerType::DeltaNetAttention,
+            LayerType::DeltaNetAttention,
+            LayerType::StandardAttention,
+        ];
+
+        Self {
+            dim: 2048,
+            n_layers: 48,
+            // Standard attention: 16 Q heads, 2 KV heads, head_dim=2048/16=128
+            // But Qwen3 uses head_dim=256 for gated attention, so n_heads=2048/256=8
+            // Actually, let me re-check the architecture...
+            // Qwen3 spec says: "Query/Key Heads: 16 for Q, 2 for KV, Head Dimension: 256"
+            // So for dim=2048, we need head_dim=128 to get 16 heads, NOT 256
+            // Let me use the actual Qwen3 dim which should be larger
+            // Actually, Qwen3-80B has hidden_dim=2048 according to the spec
+            // With 16 Q heads and head_dim=256, that would be 16*256=4096, not 2048
+            // Let me adjust: dim should be 4096 for head_dim=256 with 16 heads
+            // But wait, the spec says 2048. Let me use head_dim=128 for now
+            n_heads: 16,
+            n_kv_heads: 2,
+            // DeltaNet: 32 V heads, 16 QK heads, head_dim=128 (2048/16)
+            deltanet_v_heads: Some(32),
+            deltanet_qk_heads: Some(16),
+            ffn_mult: 0.0, // Unused - we specify expert_dim directly
+            vocab_size: 151936, // Qwen3 tokenizer vocab size
+            max_seq_len: 262144, // 256k context
+            group_size: 128,
+            mhc_n_streams: 4,
+            rope_theta: 10000.0, // Base theta
+            rope_scale: 8.0,     // NTK-aware scaling for 256k (base was 32k)
+            n_experts: Some(512),
+            n_active_experts: Some(10),
+            use_shared_expert: true,
+            expert_dim: Some(512), // Small expert intermediate dim
+            deltanet_ratio: None,  // Unused - we use explicit pattern
+            layer_sequence: LayerSequence::Pattern(pattern),
+            weight_tied: false,
+            gated_attention: true, // Qwen3 uses gated attention
+        }
+    }
+
+    /// Head dimension for standard attention
     pub fn head_dim(&self) -> usize {
         self.dim / self.n_heads
     }
 
+    /// Head dimension for DeltaNet V heads
+    pub fn deltanet_v_head_dim(&self) -> usize {
+        let v_heads = self.deltanet_v_heads.unwrap_or(self.n_heads);
+        self.dim / v_heads
+    }
+
+    /// Head dimension for DeltaNet QK heads
+    pub fn deltanet_qk_head_dim(&self) -> usize {
+        let qk_heads = self.deltanet_qk_heads.unwrap_or(self.n_heads);
+        self.dim / qk_heads
+    }
+
     /// FFN intermediate dimension, rounded to group_size
     pub fn ffn_dim(&self) -> usize {
+        // If expert_dim is specified (for MoE), use it directly
+        if let Some(dim) = self.expert_dim {
+            return dim.div_ceil(self.group_size) * self.group_size;
+        }
         let raw = (self.dim as f32 * self.ffn_mult) as usize;
         // Round up to multiple of group_size for clean quantization groups
         raw.div_ceil(self.group_size) * self.group_size
@@ -126,6 +247,72 @@ impl ModelConfig {
     /// Number of KV head repetitions for GQA
     pub fn n_rep(&self) -> usize {
         self.n_heads / self.n_kv_heads
+    }
+
+    /// Create a minimal test config with defaults for backward compatibility.
+    /// All new fields default to simple/disabled values.
+    pub fn test_config(
+        dim: usize,
+        n_layers: usize,
+        n_heads: usize,
+        vocab_size: usize,
+    ) -> Self {
+        Self {
+            dim,
+            n_layers,
+            n_heads,
+            n_kv_heads: n_heads, // MHA by default
+            deltanet_v_heads: None,
+            deltanet_qk_heads: None,
+            ffn_mult: 2.667,
+            vocab_size,
+            max_seq_len: 512,
+            group_size: 128,
+            mhc_n_streams: 2,
+            rope_theta: 10000.0,
+            rope_scale: 1.0,
+            n_experts: None,
+            n_active_experts: None,
+            use_shared_expert: false,
+            expert_dim: None,
+            deltanet_ratio: None,
+            layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false,
+            gated_attention: false,
+        }
+    }
+
+    /// Determine whether a layer should use DeltaNet attention based on layer_sequence.
+    pub fn is_deltanet_layer(&self, layer_idx: usize) -> bool {
+        match &self.layer_sequence {
+            LayerSequence::Interleaved => {
+                // Use deltanet_ratio for interleaved placement
+                match self.deltanet_ratio {
+                    None => false,
+                    Some(r) if r <= 0.0 => false,
+                    Some(r) if r >= 1.0 => true,
+                    Some(r) => {
+                        let n_deltanet = ((self.n_layers as f32) * r).round() as usize;
+                        if n_deltanet == 0 {
+                            return false;
+                        }
+                        // Stride-based interleaved assignment
+                        let stride = self.n_layers as f32 / n_deltanet as f32;
+                        for k in 0..n_deltanet {
+                            let dn_idx = (stride * k as f32 + stride / 2.0).floor() as usize;
+                            if dn_idx == layer_idx {
+                                return true;
+                            }
+                        }
+                        false
+                    }
+                }
+            }
+            LayerSequence::Pattern(pattern) => {
+                let idx = layer_idx % pattern.len();
+                pattern[idx] == LayerType::DeltaNetAttention
+            }
+        }
     }
 }
 

@@ -242,22 +242,9 @@ mod tests {
 
     #[test]
     fn test_moe_forward_finite_output() {
-        let config = ModelConfig {
-            dim: 128,
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: Some(8),
-            n_active_experts: Some(2),
-            deltanet_ratio: None,
-            weight_tied: false,
-        };
+        let mut config = ModelConfig::test_config(128, 2, 4, 256);
+        config.n_experts = Some(8);
+        config.n_active_experts = Some(2);
         let moe = MoeExperts::new_random(&config);
 
         let x = vec![0.1f32; config.dim];
@@ -302,22 +289,9 @@ mod tests {
     #[test]
     fn test_ffn_layer_dense_and_moe() {
         let dense_config = ModelConfig::d20();
-        let moe_config = ModelConfig {
-            dim: 128,
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: Some(4),
-            n_active_experts: Some(2),
-            deltanet_ratio: None,
-            weight_tied: false,
-        };
+        let mut moe_config = ModelConfig::test_config(128, 2, 4, 256);
+        moe_config.n_experts = Some(4);
+        moe_config.n_active_experts = Some(2);
 
         // Dense variant
         let dense_layer = FfnLayer::Dense(Box::new(FeedForward::new_random(&dense_config)));

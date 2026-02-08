@@ -501,22 +501,7 @@ mod tests {
 
     #[test]
     fn test_engine_generate() {
-        let config = ModelConfig {
-            dim: 128,
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: None,
-            n_active_experts: None,
-            deltanet_ratio: None,
-            weight_tied: false,
-        };
+        let config = ModelConfig::test_config(128, 2, 4, 256);
         let mut engine = InferenceEngine::new_random(config);
         engine.eot_token = 0; // Use 0 as EOT for small vocab
 
@@ -583,22 +568,7 @@ mod tests {
 
     #[test]
     fn test_engine_new() {
-        let config = ModelConfig {
-            dim: 128,
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: None,
-            n_active_experts: None,
-            deltanet_ratio: None,
-            weight_tied: false,
-        };
+        let config = ModelConfig::test_config(128, 2, 4, 256);
         let model = NanochatModel::new_random(config);
         let engine = InferenceEngine::new(model);
         assert_eq!(engine.model.config.dim, 128);
@@ -606,22 +576,7 @@ mod tests {
 
     #[test]
     fn test_engine_empty_prompt() {
-        let config = ModelConfig {
-            dim: 128,
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: None,
-            n_active_experts: None,
-            deltanet_ratio: None,
-            weight_tied: false,
-        };
+        let config = ModelConfig::test_config(128, 2, 4, 256);
         let mut engine = InferenceEngine::new_random(config);
 
         let params = SamplingParams::default();
@@ -646,22 +601,8 @@ mod tests {
 
     #[test]
     fn test_numa_engine_forward() {
-        let config = ModelConfig {
-            dim: 128,
-            n_layers: 4, // Use 4 layers to test split at 2
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: None,
-            n_active_experts: None,
-            deltanet_ratio: None,
-            weight_tied: false,
-        };
+        let config = nanochat_model::config::ModelConfig::test_config(128, 2, 4, 256);
+        let mut config = ModelConfig::test_config(128, 4, 4, 256); // Use 4 layers to test split at 2
         let mut engine = NumaInferenceEngine::new_random(config);
         engine.eot_token = 0; // Use 0 as EOT for small vocab
 
@@ -695,22 +636,7 @@ mod tests {
 
     #[test]
     fn test_numa_engine_thread_pools() {
-        let config = ModelConfig {
-            dim: 128,
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: None,
-            n_active_experts: None,
-            deltanet_ratio: None,
-            weight_tied: false,
-        };
+        let config = ModelConfig::test_config(128, 2, 4, 256);
         let engine = NumaInferenceEngine::new_random(config);
 
         // Should have at least 1 thread pool
@@ -728,22 +654,7 @@ mod tests {
 
     #[test]
     fn test_generate_streaming() {
-        let config = ModelConfig {
-            dim: 128,
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 4,
-            ffn_mult: 2.667,
-            vocab_size: 256,
-            max_seq_len: 64,
-            group_size: 128,
-            mhc_n_streams: 2,
-            rope_theta: 10000.0,
-            n_experts: None,
-            n_active_experts: None,
-            deltanet_ratio: None,
-            weight_tied: false,
-        };
+        let config = ModelConfig::test_config(128, 2, 4, 256);
         let mut engine = InferenceEngine::new_random(config);
         engine.eot_token = 0;
 
