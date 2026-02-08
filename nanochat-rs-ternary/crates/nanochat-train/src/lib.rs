@@ -10,5 +10,6 @@ pub mod optim;
 pub mod data;
 pub mod train;
 pub mod distill;
+pub mod sensitivity;
 pub mod export;
 pub mod checkpoint;
