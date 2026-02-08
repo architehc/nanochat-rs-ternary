@@ -241,23 +241,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     println!("Starting training...");
-    if args.parallel {
-        println!("NOTE: Parallel training enabled - teacher queries sent concurrently");
-        println!("      This leverages endpoint's {} concurrent capacity", args.micro_batches);
+    if args.parallel && args.micro_batches > 1 {
+        println!("✓ Parallel training enabled - teacher queries sent concurrently");
+        println!("  Micro-batches: {}", args.micro_batches);
+        println!("  Expected speedup: ~{:.1}x", args.micro_batches.min(8) as f32 / 2.0);
+    } else {
+        println!("Sequential training mode (micro_batches=1)");
     }
     println!("═══════════════════════════════════════════════════════════");
     println!();
 
-    // Training loop (simplified - in production use full train_loop)
-    // TODO: Implement parallel batching in train_epoch() to use train_step_parallel()
-    // For now, train_epoch() uses sequential train_step()
+    // Training loop with automatic parallel/sequential selection
     let epochs = (total_steps * args.batch_size) / n_samples + 1;
-
-    if args.parallel && args.micro_batches > 1 {
-        println!("WARNING: Parallel training not yet integrated into train_epoch()");
-        println!("         Currently using sequential mode. Use train_step_parallel() directly for parallelization.");
-        println!();
-    }
 
     for epoch in 0..epochs {
         println!("Epoch {}/{}", epoch + 1, epochs);

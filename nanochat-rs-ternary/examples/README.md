@@ -29,7 +29,12 @@ This directory contains examples for training hybrid ternary models using knowle
 # Set teacher endpoint (default: https://crazyshit.ngrok.io)
 export TEACHER_ENDPOINT="https://crazyshit.ngrok.io"
 
-# Run training with default settings
+# Run training with default settings (parallel mode enabled)
+./examples/train_qwen3_distill.sh
+
+# Or customize parallel settings
+export MICRO_BATCHES=8
+export PARALLEL=true
 ./examples/train_qwen3_distill.sh
 ```
 
@@ -61,6 +66,8 @@ cargo run --release --example distill_qwen3 -- \
 | `--kl-weight` | `0.5` | KL divergence weight (0.5 = 50% KL, 50% CE) |
 | `--temperature` | `2.0` | Distillation temperature |
 | `--keep-last-checkpoints` | `3` | Keep only last N checkpoints |
+| `--parallel` | `true` | Enable parallel teacher queries |
+| `--micro-batches` | `8` | Number of micro-batches for parallel training |
 
 ### Loss Function
 

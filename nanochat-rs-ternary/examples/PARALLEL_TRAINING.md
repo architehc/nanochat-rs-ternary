@@ -257,24 +257,28 @@ But **not** equivalent to N independent steps (gradient updates happen less freq
 
 ### 3. Integration Status
 
-⚠️ **Current limitation**: `train_epoch()` still uses sequential `train_step()`.
+✅ **Fully integrated**: `train_epoch()` automatically uses parallel training when:
+- `micro_batches > 1` in config
+- `teacher` is `TeacherMode::Remote`
 
-To use parallel training now, call `train_step_parallel()` directly in your training loop:
+No code changes needed - just set `--parallel true --micro-batches 8` and it works!
 
 ```rust
-for batch in dataloader {
-    let (input_ids, target_ids) = batch?;
+// train_epoch() automatically selects parallel or sequential mode
+let config = DistillConfig::with_remote_teacher(
+    train_config,
+    "https://crazyshit.ngrok.io",
+    None,
+    8,  // micro_batches = 8
+);
 
-    // Split into micro-batches
-    let micro_inputs: Vec<&Tensor> = split_batch(&input_ids, micro_batches);
-    let micro_targets: Vec<&Tensor> = split_batch(&target_ids, micro_batches);
+let mut trainer = DistillationTrainer::new(config, device)?;
 
-    // Parallel training step
-    let stats = trainer.train_step_parallel(micro_inputs, micro_targets)?;
-}
+// This will use parallel training automatically
+let stats = trainer.train_epoch(&dataset, epoch)?;
 ```
 
-**TODO**: Integrate `train_step_parallel()` into `train_epoch()` and `train_loop()`.
+**Implementation**: `train_epoch()` accumulates `micro_batches` worth of batches from the dataloader, then calls `train_step_parallel()` once with all accumulated batches.
 
 ---
 

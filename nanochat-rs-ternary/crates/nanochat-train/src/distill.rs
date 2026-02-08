@@ -650,6 +650,8 @@ impl DistillationTrainer {
     }
 
     /// Train for one epoch with distillation.
+    ///
+    /// Automatically uses parallel training if micro_batches > 1 and teacher is remote.
     pub fn train_epoch(&mut self, dataset: &dyn Dataset, epoch: usize) -> Result<DistillEpochStats> {
         let loader = DataLoader::new(
             dataset,
@@ -664,14 +666,62 @@ impl DistillationTrainer {
         let mut total_kl = 0.0;
         let mut n_steps = 0;
 
-        for batch in loader {
-            let (input_ids, target_ids) = batch?;
-            let stats = self.train_step(&input_ids, &target_ids)?;
+        let use_parallel = self.config.micro_batches > 1 && matches!(self.teacher, TeacherBackend::Remote(_));
 
-            total_loss += stats.total_loss;
-            total_ce += stats.ce_loss;
-            total_kl += stats.kl_loss;
-            n_steps += 1;
+        if use_parallel {
+            // Parallel mode: accumulate micro_batches, then train_step_parallel
+            let mut accumulated_inputs = Vec::new();
+            let mut accumulated_targets = Vec::new();
+
+            for batch in loader {
+                let (input_ids, target_ids) = batch?;
+
+                // Store batches (we need to keep them in memory temporarily)
+                accumulated_inputs.push(input_ids);
+                accumulated_targets.push(target_ids);
+
+                // Once we have enough micro-batches, do parallel training step
+                if accumulated_inputs.len() >= self.config.micro_batches {
+                    // Create references for parallel call
+                    let input_refs: Vec<&Tensor> = accumulated_inputs.iter().collect();
+                    let target_refs: Vec<&Tensor> = accumulated_targets.iter().collect();
+
+                    let stats = self.train_step_parallel(input_refs, target_refs)?;
+
+                    total_loss += stats.total_loss;
+                    total_ce += stats.ce_loss;
+                    total_kl += stats.kl_loss;
+                    n_steps += 1;
+
+                    // Clear accumulated batches
+                    accumulated_inputs.clear();
+                    accumulated_targets.clear();
+                }
+            }
+
+            // Handle remaining batches (if dataset size not divisible by micro_batches)
+            if !accumulated_inputs.is_empty() {
+                let input_refs: Vec<&Tensor> = accumulated_inputs.iter().collect();
+                let target_refs: Vec<&Tensor> = accumulated_targets.iter().collect();
+
+                let stats = self.train_step_parallel(input_refs, target_refs)?;
+
+                total_loss += stats.total_loss;
+                total_ce += stats.ce_loss;
+                total_kl += stats.kl_loss;
+                n_steps += 1;
+            }
+        } else {
+            // Sequential mode: use regular train_step
+            for batch in loader {
+                let (input_ids, target_ids) = batch?;
+                let stats = self.train_step(&input_ids, &target_ids)?;
+
+                total_loss += stats.total_loss;
+                total_ce += stats.ce_loss;
+                total_kl += stats.kl_loss;
+                n_steps += 1;
+            }
         }
 
         let n = n_steps as f64;

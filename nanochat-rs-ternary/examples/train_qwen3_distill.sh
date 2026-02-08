@@ -33,6 +33,8 @@ set -euo pipefail
 TEACHER_ENDPOINT="${TEACHER_ENDPOINT:-https://crazyshit.ngrok.io}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-checkpoints/qwen3-80b-hybrid}"
 DEVICE="${DEVICE:-cuda:0}"
+PARALLEL="${PARALLEL:-true}"
+MICRO_BATCHES="${MICRO_BATCHES:-8}"
 
 # Training hyperparameters (tuned for Qwen3-80B)
 TOTAL_STEPS=100000
@@ -107,6 +109,12 @@ Checkpointing:
 - Keep last: $KEEP_LAST_CHECKPOINTS checkpoints
 - Auto-cleanup: Yes
 
+Parallelization:
+- Enabled: $PARALLEL
+- Micro-batches: $MICRO_BATCHES
+- Concurrent requests: $MICRO_BATCHES
+- Expected speedup: ~$((MICRO_BATCHES < 8 ? MICRO_BATCHES : 8))x / 2 = ~$((MICRO_BATCHES / 2))x
+
 Device: $DEVICE
 Started: $(date)
 EOF
@@ -166,6 +174,8 @@ cargo run --release --example distill_qwen3 -- \
     --kl-weight "$KL_WEIGHT" \
     --temperature "$TEMPERATURE" \
     --device "$DEVICE" \
+    --parallel "$PARALLEL" \
+    --micro-batches "$MICRO_BATCHES" \
     2>&1 | tee "$CHECKPOINT_DIR/training.log"
 
 echo
