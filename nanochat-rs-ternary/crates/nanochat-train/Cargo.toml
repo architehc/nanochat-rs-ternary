@@ -21,6 +21,8 @@ rayon = { workspace = true }
 bytemuck = { workspace = true }
 half = { workspace = true }
 tokenizers = "0.20"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"

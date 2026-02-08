@@ -4,10 +4,13 @@
 //! using a frozen FP8 teacher model for knowledge distillation.
 //!
 //! Loss: CE + KL(teacher || student) + load_balance + auxiliary
+//!
+//! Supports both local teacher (in-process) and remote teacher (HTTP endpoint).
 
 use candle_core::{DType, Device, Result, Tensor, Var};
 use candle_nn::VarMap;
 use std::time::Instant;
+use std::path::PathBuf;
 
 use crate::config::TrainConfig;
 use crate::data::{Dataset, DataLoader};
@@ -15,11 +18,123 @@ use crate::model::NanochatTrainModel;
 use crate::optim::{Muon, Lion, wsd_schedule};
 use crate::train::compute_grad_norm;
 
+/// Teacher model mode for distillation.
+#[derive(Debug, Clone)]
+pub enum TeacherMode {
+    /// Local teacher: load checkpoint in-process (uses more memory)
+    Local { checkpoint: PathBuf },
+
+    /// Remote teacher: query FP8 endpoint via HTTP (recommended for large models)
+    Remote {
+        endpoint: String,
+        api_key: Option<String>,
+        timeout_secs: u64,
+    },
+}
+
+/// Remote teacher client for querying FP8 inference endpoint.
+pub struct RemoteTeacherClient {
+    endpoint: String,
+    api_key: Option<String>,
+    client: reqwest::blocking::Client,
+}
+
+impl RemoteTeacherClient {
+    /// Create a new remote teacher client.
+    pub fn new(endpoint: String, api_key: Option<String>, timeout_secs: u64) -> Result<Self> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .build()
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to create HTTP client: {}", e)))?;
+
+        Ok(Self {
+            endpoint,
+            api_key,
+            client,
+        })
+    }
+
+    /// Query teacher logits for input tokens.
+    ///
+    /// # Arguments
+    /// * `input_ids` - Token IDs [batch, seq_len]
+    ///
+    /// # Returns
+    /// Teacher logits [batch, seq_len, vocab_size]
+    pub fn query_logits(&self, input_ids: &Tensor) -> Result<Tensor> {
+        // Extract token IDs from tensor
+        let input_data = input_ids.to_vec2::<u32>()
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to extract input_ids: {}", e)))?;
+
+        // Build request payload
+        let payload = serde_json::json!({
+            "input_ids": input_data,
+            "return_logits": true,
+        });
+
+        // Send HTTP request
+        let mut req = self.client.post(&self.endpoint).json(&payload);
+        if let Some(key) = &self.api_key {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
+
+        let response = req.send()
+            .map_err(|e| candle_core::Error::Msg(format!("HTTP request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(candle_core::Error::Msg(format!(
+                "Teacher endpoint returned error: {}",
+                response.status()
+            )));
+        }
+
+        // Parse response
+        let json: serde_json::Value = response.json()
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to parse response: {}", e)))?;
+
+        // Extract logits array
+        let logits_array = json.get("logits")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| candle_core::Error::Msg("Missing 'logits' in response".to_string()))?;
+
+        // Parse nested array: [batch, seq_len, vocab]
+        let batch_size = logits_array.len();
+        if batch_size == 0 {
+            return Err(candle_core::Error::Msg("Empty logits response".to_string()));
+        }
+
+        let seq_len = logits_array[0].as_array()
+            .ok_or_else(|| candle_core::Error::Msg("Invalid logits shape".to_string()))?
+            .len();
+
+        let vocab_size = logits_array[0][0].as_array()
+            .ok_or_else(|| candle_core::Error::Msg("Invalid logits shape".to_string()))?
+            .len();
+
+        // Flatten to 1D vec
+        let mut logits_flat = Vec::with_capacity(batch_size * seq_len * vocab_size);
+        for batch_item in logits_array {
+            for seq_item in batch_item.as_array().unwrap() {
+                for val in seq_item.as_array().unwrap() {
+                    logits_flat.push(val.as_f64().unwrap() as f32);
+                }
+            }
+        }
+
+        // Convert to tensor
+        let device = input_ids.device();
+        Tensor::from_vec(logits_flat, (batch_size, seq_len, vocab_size), device)
+    }
+}
+
 /// Configuration for distillation training.
 #[derive(Debug, Clone)]
 pub struct DistillConfig {
     /// Base training config
     pub train_config: TrainConfig,
+
+    /// Teacher mode: local checkpoint or remote endpoint
+    pub teacher_mode: TeacherMode,
 
     /// Temperature for distillation (typically 2.0-4.0)
     pub temperature: f64,
@@ -33,9 +148,6 @@ pub struct DistillConfig {
     /// Weight for router auxiliary loss (improve routing decisions)
     pub router_aux_weight: f64,
 
-    /// Whether to freeze teacher model (should be true)
-    pub freeze_teacher: bool,
-
     /// Whether to freeze student FP8 components (router, norms, etc.)
     pub freeze_student_fp8: bool,
 }
@@ -44,20 +156,80 @@ impl Default for DistillConfig {
     fn default() -> Self {
         Self {
             train_config: TrainConfig::d20(),
+            teacher_mode: TeacherMode::Remote {
+                endpoint: "http://localhost:8000/v1/completions".to_string(),
+                api_key: None,
+                timeout_secs: 30,
+            },
             temperature: 2.0,
             kl_weight: 0.5,
             load_balance_weight: 0.01,
             router_aux_weight: 0.001,
-            freeze_teacher: true,
             freeze_student_fp8: true,
         }
     }
 }
 
+impl DistillConfig {
+    /// Create config for remote FP8 teacher at given endpoint.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let config = DistillConfig::with_remote_teacher(
+    ///     TrainConfig::qwen3_coder_80b(),
+    ///     "https://crazyshit.ngrok.io",
+    ///     None,
+    /// );
+    /// ```
+    pub fn with_remote_teacher(
+        train_config: TrainConfig,
+        endpoint: impl Into<String>,
+        api_key: Option<String>,
+    ) -> Self {
+        Self {
+            train_config,
+            teacher_mode: TeacherMode::Remote {
+                endpoint: endpoint.into(),
+                api_key,
+                timeout_secs: 60, // Generous timeout for large models
+            },
+            temperature: 2.0,
+            kl_weight: 0.5,
+            load_balance_weight: 0.01,
+            router_aux_weight: 0.001,
+            freeze_student_fp8: true,
+        }
+    }
+
+    /// Create config for local teacher checkpoint.
+    pub fn with_local_teacher(
+        train_config: TrainConfig,
+        checkpoint: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            train_config,
+            teacher_mode: TeacherMode::Local {
+                checkpoint: checkpoint.into(),
+            },
+            temperature: 2.0,
+            kl_weight: 0.5,
+            load_balance_weight: 0.01,
+            router_aux_weight: 0.001,
+            freeze_student_fp8: true,
+        }
+    }
+}
+
+/// Teacher inference backend.
+enum TeacherBackend {
+    Local(NanochatTrainModel),
+    Remote(RemoteTeacherClient),
+}
+
 /// Distillation trainer with teacher and student models.
 pub struct DistillationTrainer {
-    /// Teacher model (frozen FP8)
-    pub teacher: NanochatTrainModel,
+    /// Teacher backend (local or remote)
+    teacher: TeacherBackend,
 
     /// Student model (hybrid ternary)
     pub student: NanochatTrainModel,
@@ -79,29 +251,29 @@ impl DistillationTrainer {
     ///
     /// # Arguments
     /// * `config` - Distillation configuration
-    /// * `teacher_checkpoint` - Path to teacher model checkpoint (FP8)
     /// * `device` - Device to train on
-    pub fn new(
-        config: DistillConfig,
-        teacher_checkpoint: Option<&str>,
-        device: Device,
-    ) -> Result<Self> {
-        // Initialize teacher model
-        let teacher_varmap = VarMap::new();
-        let teacher_vb = candle_nn::VarBuilder::from_varmap(&teacher_varmap, DType::F32, &device);
-        let teacher = NanochatTrainModel::new(&config.train_config, teacher_vb)?;
+    pub fn new(config: DistillConfig, device: Device) -> Result<Self> {
+        // Initialize teacher backend based on mode
+        let teacher = match &config.teacher_mode {
+            TeacherMode::Local { checkpoint } => {
+                let teacher_varmap = VarMap::new();
+                let teacher_vb = candle_nn::VarBuilder::from_varmap(&teacher_varmap, DType::F32, &device);
+                let teacher_model = NanochatTrainModel::new(&config.train_config, teacher_vb)?;
 
-        // Load teacher weights if provided
-        if let Some(ckpt_path) = teacher_checkpoint {
-            // TODO: Load teacher checkpoint
-            eprintln!("Warning: Teacher checkpoint loading not yet implemented: {}", ckpt_path);
-        }
+                // TODO: Load teacher checkpoint
+                eprintln!("Warning: Teacher checkpoint loading not yet implemented: {}", checkpoint.display());
 
-        // Freeze teacher if configured
-        if config.freeze_teacher {
-            // Set requires_grad=false for all teacher params
-            // (In Candle, we just don't compute gradients for teacher)
-        }
+                TeacherBackend::Local(teacher_model)
+            }
+            TeacherMode::Remote { endpoint, api_key, timeout_secs } => {
+                let client = RemoteTeacherClient::new(
+                    endpoint.clone(),
+                    api_key.clone(),
+                    *timeout_secs,
+                )?;
+                TeacherBackend::Remote(client)
+            }
+        };
 
         // Initialize student model
         let student_varmap = VarMap::new();
@@ -170,10 +342,15 @@ impl DistillationTrainer {
         let step_start = Instant::now();
 
         // === Teacher forward (no grad) ===
-        let teacher_logits = {
-            // In Candle, we need to ensure teacher doesn't track gradients
-            // For now, just forward - we won't backward through teacher
-            self.teacher.forward(input_ids)?
+        let teacher_logits = match &mut self.teacher {
+            TeacherBackend::Local(model) => {
+                // Local teacher: forward pass (no gradient tracking)
+                model.forward(input_ids)?
+            }
+            TeacherBackend::Remote(client) => {
+                // Remote teacher: HTTP query
+                client.query_logits(input_ids)?
+            }
         };
 
         // === Student forward (with grad) ===
