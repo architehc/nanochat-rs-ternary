@@ -9,6 +9,113 @@ use crate::data::{Dataset, DataLoader};
 use crate::model::NanochatTrainModel;
 use crate::optim::{Muon, Lion, wsd_schedule};
 
+/// Checkpoint management utilities
+mod checkpoint_manager {
+    use std::path::{Path, PathBuf};
+    use std::fs;
+
+    /// Get disk space info for path
+    pub fn get_disk_space(path: &Path) -> Result<(u64, u64), String> {
+        // Use statfs to get filesystem stats
+        #[cfg(unix)]
+        {
+            // Get filesystem stats
+            let stats = nix::sys::statfs::statfs(path)
+                .map_err(|e| format!("Failed to get fs stats: {}", e))?;
+
+            let total = stats.blocks() * stats.block_size() as u64;
+            let available = stats.blocks_available() * stats.block_size() as u64;
+            Ok((total, available))
+        }
+        #[cfg(not(unix))]
+        {
+            // Fallback for non-Unix: return large values
+            Ok((1_000_000_000_000u64, 500_000_000_000u64))
+        }
+    }
+
+    /// Get size of directory recursively
+    pub fn dir_size(path: &Path) -> Result<u64, String> {
+        let mut total = 0u64;
+        if path.is_dir() {
+            for entry in fs::read_dir(path).map_err(|e| format!("Failed to read dir: {}", e))? {
+                let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+                let path = entry.path();
+                if path.is_file() {
+                    total += entry.metadata()
+                        .map_err(|e| format!("Failed to read metadata: {}", e))?
+                        .len();
+                } else if path.is_dir() {
+                    total += dir_size(&path)?;
+                }
+            }
+        }
+        Ok(total)
+    }
+
+    /// Clean old checkpoints, keeping only the last N
+    pub fn cleanup_old_checkpoints(checkpoint_dir: &Path, keep_last: usize) -> Result<usize, String> {
+        if !checkpoint_dir.exists() {
+            return Ok(0);
+        }
+
+        // List all checkpoint directories (step_NNNNN)
+        let mut checkpoints: Vec<(PathBuf, u32)> = Vec::new();
+        for entry in fs::read_dir(checkpoint_dir).map_err(|e| format!("Failed to read dir: {}", e))? {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with("step_") {
+                        if let Ok(step) = name.strip_prefix("step_").unwrap().parse::<u32>() {
+                            checkpoints.push((path, step));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by step number (oldest first)
+        checkpoints.sort_by_key(|(_, step)| *step);
+
+        // Remove old checkpoints
+        let to_remove = if checkpoints.len() > keep_last {
+            checkpoints.len() - keep_last
+        } else {
+            0
+        };
+
+        let mut removed = 0;
+        for (path, step) in checkpoints.iter().take(to_remove) {
+            println!("  Removing old checkpoint: step_{}", step);
+            fs::remove_dir_all(path).map_err(|e| format!("Failed to remove checkpoint: {}", e))?;
+            removed += 1;
+        }
+
+        Ok(removed)
+    }
+
+    /// Format bytes as human-readable
+    pub fn format_bytes(bytes: u64) -> String {
+        const KB: u64 = 1024;
+        const MB: u64 = KB * 1024;
+        const GB: u64 = MB * 1024;
+        const TB: u64 = GB * 1024;
+
+        if bytes >= TB {
+            format!("{:.2}TB", bytes as f64 / TB as f64)
+        } else if bytes >= GB {
+            format!("{:.2}GB", bytes as f64 / GB as f64)
+        } else if bytes >= MB {
+            format!("{:.2}MB", bytes as f64 / MB as f64)
+        } else if bytes >= KB {
+            format!("{:.2}KB", bytes as f64 / KB as f64)
+        } else {
+            format!("{}B", bytes)
+        }
+    }
+}
+
 /// Training statistics for one step or epoch.
 #[derive(Debug, Clone)]
 pub struct StepStats {
@@ -166,6 +273,9 @@ impl Trainer {
     }
 
     /// Production training loop with per-step logging and checkpointing.
+    ///
+    /// # Arguments
+    /// * `keep_last_checkpoints` - Number of checkpoints to keep (0 = keep all)
     pub fn train_loop(
         &mut self,
         dataset: &dyn Dataset,
@@ -173,6 +283,7 @@ impl Trainer {
         log_interval: usize,
         checkpoint_dir: Option<&str>,
         checkpoint_interval: usize,
+        keep_last_checkpoints: usize,
     ) -> Result<()> {
         let train_start = Instant::now();
         let mut running_loss = 0.0;
@@ -222,11 +333,33 @@ impl Trainer {
                     interval_steps = 0;
                 }
 
-                // Checkpoint
+                // Checkpoint with disk monitoring and cleanup
                 if checkpoint_interval > 0
                     && self.global_step.is_multiple_of(checkpoint_interval)
                 {
                     if let Some(dir) = checkpoint_dir {
+                        // Check disk space before saving
+                        if let Ok((total, avail)) = checkpoint_manager::get_disk_space(std::path::Path::new(dir)) {
+                            let usage_pct = ((total - avail) as f64 / total as f64) * 100.0;
+                            if usage_pct > 90.0 {
+                                println!("  WARNING: Disk {}% full ({} / {} available)",
+                                    usage_pct as u32,
+                                    checkpoint_manager::format_bytes(avail),
+                                    checkpoint_manager::format_bytes(total)
+                                );
+                            }
+                        }
+
+                        // Clean old checkpoints if requested
+                        if keep_last_checkpoints > 0 {
+                            let dir_path = std::path::Path::new(dir);
+                            if let Ok(removed) = checkpoint_manager::cleanup_old_checkpoints(dir_path, keep_last_checkpoints) {
+                                if removed > 0 {
+                                    println!("  Cleaned {} old checkpoint(s), keeping last {}", removed, keep_last_checkpoints);
+                                }
+                            }
+                        }
+
                         let path = format!("{}/step_{}", dir, self.global_step);
                         crate::checkpoint::save_checkpoint(
                             &self.varmap,
@@ -236,7 +369,13 @@ impl Trainer {
                             &path,
                         )
                         .map_err(|e| candle_core::Error::Msg(format!("checkpoint save: {}", e)))?;
-                        println!("  -> checkpoint saved to {}", path);
+
+                        // Report checkpoint size
+                        if let Ok(size) = checkpoint_manager::dir_size(std::path::Path::new(&path)) {
+                            println!("  -> checkpoint saved to {} ({})", path, checkpoint_manager::format_bytes(size));
+                        } else {
+                            println!("  -> checkpoint saved to {}", path);
+                        }
                     }
                 }
             }

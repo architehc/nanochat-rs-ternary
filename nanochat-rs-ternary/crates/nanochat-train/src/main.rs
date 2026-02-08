@@ -45,6 +45,10 @@ enum Commands {
         #[arg(long, default_value = "1000")]
         checkpoint_interval: usize,
 
+        /// Keep only last N checkpoints (0 = keep all)
+        #[arg(long, default_value = "3")]
+        keep_last_checkpoints: usize,
+
         /// Number of CPU threads (default: all available)
         #[arg(long)]
         threads: Option<usize>,
@@ -100,6 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             resume,
             log_interval,
             checkpoint_interval,
+            keep_last_checkpoints,
             threads,
             n_samples,
             device,
@@ -216,13 +221,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!();
 
-            // Run training loop with per-step logging
+            // Run training loop with per-step logging and checkpoint management
             trainer.train_loop(
                 ds.as_ref(),
                 epochs,
                 log_interval,
                 checkpoint_dir.as_deref(),
                 checkpoint_interval,
+                keep_last_checkpoints,
             )?;
         }
 
