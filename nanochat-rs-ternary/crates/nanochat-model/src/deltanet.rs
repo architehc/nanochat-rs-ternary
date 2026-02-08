@@ -130,19 +130,18 @@ impl DeltaNetAttention {
         // Per-head recurrent update + output computation
         let mut attn_out = vec![0.0f32; dim];
 
-        for h in 0..n_heads {
-            let beta = beta_raw[h];
+        for (h, &beta) in beta_raw.iter().enumerate().take(n_heads) {
             let h_offset = h * hd;
             let s_offset = h * hd * hd;
 
             // Compute S @ k_norm for this head -> sk: [head_dim]
             let mut sk = vec![0.0f32; hd];
-            for i in 0..hd {
+            for (i, sk_val) in sk.iter_mut().enumerate() {
                 let mut sum = 0.0f32;
                 for j in 0..hd {
                     sum += state.s[s_offset + i * hd + j] * k_norm[h_offset + j];
                 }
-                sk[i] = sum;
+                *sk_val = sum;
             }
 
             // Update S:
@@ -191,9 +190,9 @@ fn l2_normalize(v: &mut [f32]) {
 /// Generate deterministic pseudo-random weights for testing.
 fn random_weights(rows: usize, cols: usize, seed: u32) -> Vec<f32> {
     let mut w = vec![0.0f32; rows * cols];
-    for i in 0..w.len() {
+    for (i, val) in w.iter_mut().enumerate() {
         let v = ((i as u32).wrapping_add(seed * 7919)).wrapping_mul(2654435761) >> 16;
-        w[i] = (v % 200) as f32 / 100.0 - 1.0;
+        *val = (v % 200) as f32 / 100.0 - 1.0;
     }
     w
 }

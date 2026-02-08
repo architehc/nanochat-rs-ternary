@@ -172,7 +172,7 @@ impl NanochatModel {
                     });
                 }
 
-                FfnLayer::Moe(MoeExperts { router, experts, n_active })
+                FfnLayer::Moe(Box::new(MoeExperts { router, experts, n_active }))
             } else {
                 let w_gate = BitLinear::new(gguf.load_planar_weights(
                     &format!("{prefix}.ffn.w_gate.weight"), group_size)?);
@@ -181,10 +181,10 @@ impl NanochatModel {
                 let w_down = BitLinear::new(gguf.load_planar_weights(
                     &format!("{prefix}.ffn.w_down.weight"), group_size)?);
 
-                FfnLayer::Dense(FeedForward {
+                FfnLayer::Dense(Box::new(FeedForward {
                     w_gate, w_up, w_down,
                     ffn_dim: config.ffn_dim(),
-                })
+                }))
             };
 
             // Norms

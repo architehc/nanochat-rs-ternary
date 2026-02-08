@@ -16,7 +16,7 @@ pub fn gemv_scalar_ref(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f3
     let gprow = k / gs;
     let gpp = gs / 4;
 
-    for r in 0..m {
+    for (r, y_val) in y.iter_mut().enumerate().take(m) {
         let mut racc = 0.0f32;
         for g in 0..gprow {
             let mut gacc = 0i32;
@@ -31,7 +31,7 @@ pub fn gemv_scalar_ref(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f3
             }
             racc += gacc as f32 * pw.scales_rm[r * gprow + g] * act_scale;
         }
-        y[r] = racc;
+        *y_val = racc;
     }
 }
 

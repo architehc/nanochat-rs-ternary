@@ -78,7 +78,7 @@ async fn non_stream_completion(
         tokio::task::spawn_blocking(move || {
             let prompt_ids = state.tokenizer.encode_ordinary(&prompt);
             let prompt_len = prompt_ids.len();
-            let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t as u32).collect();
+            let token_ids: Vec<u32> = prompt_ids.into_iter().collect();
 
             let mut engine = state.engine.lock().unwrap();
             let output_ids = engine.generate(&token_ids, &params);
@@ -128,7 +128,7 @@ async fn stream_completion(
     let model = model_name.clone();
     tokio::task::spawn_blocking(move || {
         let prompt_ids = state.tokenizer.encode_ordinary(&prompt);
-        let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t as u32).collect();
+        let token_ids: Vec<u32> = prompt_ids.into_iter().collect();
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -451,5 +451,172 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json["choices"][0]["message"]["content"].is_string());
         assert!(json["usage"]["total_tokens"].is_number());
+    }
+
+    #[tokio::test]
+    async fn test_chat_completions_streaming() {
+        let state = make_test_state();
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 3,
+            "temperature": 0.0,
+            "stream": true
+        });
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            content_type.contains("text/event-stream"),
+            "Expected text/event-stream, got: {content_type}"
+        );
+
+        let body = axum::body::to_bytes(resp.into_body(), 100000)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+
+        // SSE format: lines starting with "data: "
+        let data_lines: Vec<&str> = text
+            .lines()
+            .filter(|l| l.starts_with("data: "))
+            .collect();
+        assert!(
+            !data_lines.is_empty(),
+            "Expected SSE data lines, got none. Full body:\n{text}"
+        );
+
+        // First data chunk should have role
+        let first: serde_json::Value =
+            serde_json::from_str(data_lines[0].strip_prefix("data: ").unwrap()).unwrap();
+        assert_eq!(first["choices"][0]["delta"]["role"], "assistant");
+
+        // Last data line should be [DONE]
+        let last_data = data_lines.last().unwrap();
+        assert_eq!(
+            last_data.strip_prefix("data: ").unwrap().trim(),
+            "[DONE]",
+            "Expected [DONE] terminator"
+        );
+
+        // Intermediate chunks should be valid JSON with content deltas
+        let mut got_content = false;
+        for line in &data_lines[1..data_lines.len() - 1] {
+            let json_str = line.strip_prefix("data: ").unwrap();
+            let chunk: serde_json::Value = serde_json::from_str(json_str).unwrap();
+            assert_eq!(chunk["object"], "chat.completion.chunk");
+            if chunk["choices"][0]["delta"]["content"].is_string() {
+                got_content = true;
+            }
+        }
+        assert!(got_content, "Expected at least one content delta chunk");
+    }
+
+    #[tokio::test]
+    async fn test_malformed_json_body() {
+        let state = make_test_state();
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("not valid json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Axum returns 422 for deserialization failures
+        assert!(
+            resp.status().is_client_error(),
+            "Expected 4xx for malformed JSON, got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_missing_messages_field() {
+        let state = make_test_state();
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "temperature": 0.5
+        });
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            resp.status().is_client_error(),
+            "Expected 4xx for missing messages, got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_empty_body() {
+        let state = make_test_state();
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            resp.status().is_client_error(),
+            "Expected 4xx for empty body, got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wrong_content_type() {
+        let state = make_test_state();
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "text/plain")
+                    .body(Body::from("{\"messages\": [{\"role\": \"user\", \"content\": \"Hi\"}]}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            resp.status().is_client_error(),
+            "Expected 4xx for wrong content-type, got {}",
+            resp.status()
+        );
     }
 }

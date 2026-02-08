@@ -38,7 +38,7 @@ impl TrainConfig {
     pub fn ffn_dim(&self) -> usize {
         let raw = (self.dim as f32 * self.ffn_mult) as usize;
         // Round up to multiple of group_size
-        (raw + self.group_size - 1) / self.group_size * self.group_size
+        raw.div_ceil(self.group_size) * self.group_size
     }
 
     /// Estimate total parameter count.

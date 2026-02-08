@@ -201,7 +201,7 @@ impl Trainer {
                 interval_steps += 1;
                 batch_idx += 1;
 
-                if self.global_step % log_interval == 0 && interval_steps > 0 {
+                if self.global_step.is_multiple_of(log_interval) && interval_steps > 0 {
                     let avg_loss = running_loss / interval_steps as f64;
                     let avg_gnorm = running_gnorm / interval_steps as f64;
                     let avg_toks = running_toks / interval_steps as f64;
@@ -224,7 +224,7 @@ impl Trainer {
 
                 // Checkpoint
                 if checkpoint_interval > 0
-                    && self.global_step % checkpoint_interval == 0
+                    && self.global_step.is_multiple_of(checkpoint_interval)
                 {
                     if let Some(dir) = checkpoint_dir {
                         let path = format!("{}/step_{}", dir, self.global_step);

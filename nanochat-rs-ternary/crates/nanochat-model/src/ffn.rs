@@ -128,8 +128,8 @@ impl MoeExperts {
 /// Unified FFN layer: either dense or MoE.
 #[derive(Debug)]
 pub enum FfnLayer {
-    Dense(FeedForward),
-    Moe(MoeExperts),
+    Dense(Box<FeedForward>),
+    Moe(Box<MoeExperts>),
 }
 
 impl FfnLayer {
@@ -196,9 +196,9 @@ fn silu(x: f32) -> f32 {
 /// Deterministic pseudo-random weights for testing.
 fn random_weights(rows: usize, cols: usize, seed: u32) -> Vec<f32> {
     let mut w = vec![0.0f32; rows * cols];
-    for i in 0..w.len() {
+    for (i, val) in w.iter_mut().enumerate() {
         let v = ((i as u32).wrapping_add(seed * 7919)).wrapping_mul(2654435761) >> 16;
-        w[i] = (v % 200) as f32 / 100.0 - 1.0;
+        *val = (v % 200) as f32 / 100.0 - 1.0;
     }
     w
 }
@@ -320,14 +320,14 @@ mod tests {
         };
 
         // Dense variant
-        let dense_layer = FfnLayer::Dense(FeedForward::new_random(&dense_config));
+        let dense_layer = FfnLayer::Dense(Box::new(FeedForward::new_random(&dense_config)));
         let x_dense = vec![0.1f32; dense_config.dim];
         let mut out_dense = vec![0.0f32; dense_config.dim];
         dense_layer.forward(&x_dense, &mut out_dense);
         assert!(out_dense.iter().all(|v| v.is_finite()), "non-finite dense output");
 
         // MoE variant
-        let moe_layer = FfnLayer::Moe(MoeExperts::new_random(&moe_config));
+        let moe_layer = FfnLayer::Moe(Box::new(MoeExperts::new_random(&moe_config)));
         let x_moe = vec![0.1f32; moe_config.dim];
         let mut out_moe = vec![0.0f32; moe_config.dim];
         moe_layer.forward(&x_moe, &mut out_moe);

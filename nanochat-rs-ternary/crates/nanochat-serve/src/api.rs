@@ -21,7 +21,7 @@ impl Role {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "system" => Some(Role::System),
             "user" => Some(Role::User),
@@ -160,14 +160,14 @@ mod tests {
     fn test_role_roundtrip() {
         for role in [Role::System, Role::User, Role::Assistant] {
             let s = role.as_str();
-            let parsed = Role::from_str(s).unwrap();
+            let parsed = Role::parse(s).unwrap();
             assert_eq!(parsed, role);
         }
     }
 
     #[test]
     fn test_role_from_str_invalid() {
-        assert!(Role::from_str("unknown").is_none());
+        assert!(Role::parse("unknown").is_none());
     }
 
     #[test]

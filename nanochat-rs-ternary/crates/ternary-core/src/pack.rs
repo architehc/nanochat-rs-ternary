@@ -90,7 +90,7 @@ pub fn unpack_4(byte: u8) -> (i8, i8, i8, i8) {
 /// `weights.len()` must be a multiple of 4 (and typically == `group_size`).
 pub fn pack_group(weights: &[f32]) -> (Vec<u8>, f32) {
     assert!(
-        weights.len() % 4 == 0,
+        weights.len().is_multiple_of(4),
         "pack_group: weights.len()={} must be multiple of 4",
         weights.len()
     );
@@ -147,13 +147,13 @@ pub fn pack_matrix(weights: &[f32], rows: usize, cols: usize, group_size: usize)
         rows * cols
     );
     assert!(
-        cols % group_size == 0,
+        cols.is_multiple_of(group_size),
         "pack_matrix: cols={} not divisible by group_size={}",
         cols,
         group_size
     );
     assert!(
-        group_size % 4 == 0,
+        group_size.is_multiple_of(4),
         "pack_matrix: group_size={} not divisible by 4",
         group_size
     );

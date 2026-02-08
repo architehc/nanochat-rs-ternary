@@ -60,13 +60,13 @@ impl Embedding {
     pub fn forward_as_lm_head(&self, x: &[f32], logits: &mut [f32]) {
         assert_eq!(x.len(), self.dim);
         assert_eq!(logits.len(), self.vocab_size);
-        for v in 0..self.vocab_size {
+        for (v, logit) in logits.iter_mut().enumerate().take(self.vocab_size) {
             let row = &self.weight[v * self.dim..(v + 1) * self.dim];
             let mut sum = 0.0f32;
             for d in 0..self.dim {
                 sum += x[d] * row[d];
             }
-            logits[v] = sum;
+            *logit = sum;
         }
     }
 }

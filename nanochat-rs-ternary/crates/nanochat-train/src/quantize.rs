@@ -18,7 +18,7 @@ pub fn absmean_quantize(w: &Tensor, group_size: usize) -> Result<(Tensor, Tensor
     let numel = w.elem_count();
 
     // Flatten and pad if needed
-    let (w_flat, pad_len) = if numel % group_size != 0 {
+    let (w_flat, pad_len) = if !numel.is_multiple_of(group_size) {
         let pad_len = group_size - (numel % group_size);
         let w_flat = w.reshape((numel,))?;
         let zeros = Tensor::zeros((pad_len,), w.dtype(), w.device())?;
@@ -62,7 +62,7 @@ pub fn dequantize_ternary(
     let orig_shape = w_ternary.dims().to_vec();
     let numel = w_ternary.elem_count();
 
-    let (w_flat, pad_len) = if numel % group_size != 0 {
+    let (w_flat, pad_len) = if !numel.is_multiple_of(group_size) {
         let pad_len = group_size - (numel % group_size);
         let w_flat = w_ternary.reshape((numel,))?;
         let zeros = Tensor::zeros((pad_len,), w_ternary.dtype(), w_ternary.device())?;

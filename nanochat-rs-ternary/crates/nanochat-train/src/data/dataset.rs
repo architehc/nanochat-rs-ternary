@@ -125,7 +125,7 @@ impl<'a> DataLoader<'a> {
     }
 
     pub fn n_batches(&self) -> usize {
-        (self.dataset.len() + self.batch_size - 1) / self.batch_size
+        self.dataset.len().div_ceil(self.batch_size)
     }
 }
 

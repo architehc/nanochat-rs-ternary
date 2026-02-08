@@ -69,7 +69,7 @@ impl GgufFile {
         }
 
         let version = read_u32(&mut file)?;
-        if version < 2 || version > 3 {
+        if !(2..=3).contains(&version) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported GGUF version: {}", version)));
         }
 
@@ -124,7 +124,7 @@ impl GgufFile {
             GGUF_TYPE_Q1_58 => {
                 // packed bytes (2 bits per element) + f32 scales
                 // For a 2D [rows, cols] tensor with group_size from metadata:
-                let rows = tensor.dims.get(0).copied().unwrap_or(0) as usize;
+                let rows = tensor.dims.first().copied().unwrap_or(0) as usize;
                 let cols = tensor.dims.get(1).copied().unwrap_or(0) as usize;
                 let gs = match self.metadata.get("model.group_size") {
                     Some(GgufValue::U32(v)) => *v as usize,

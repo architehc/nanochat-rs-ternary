@@ -69,9 +69,9 @@ impl TransformerBlock {
     /// Create a block with standard attention and random weights (for testing).
     pub fn new_random(config: &ModelConfig) -> Self {
         let ffn = if config.n_experts.is_some() {
-            FfnLayer::Moe(MoeExperts::new_random(config))
+            FfnLayer::Moe(Box::new(MoeExperts::new_random(config)))
         } else {
-            FfnLayer::Dense(FeedForward::new_random(config))
+            FfnLayer::Dense(Box::new(FeedForward::new_random(config)))
         };
 
         Self {
@@ -88,9 +88,9 @@ impl TransformerBlock {
     /// Create a block with DeltaNet attention and random weights (for testing).
     pub fn new_random_deltanet(config: &ModelConfig) -> Self {
         let ffn = if config.n_experts.is_some() {
-            FfnLayer::Moe(MoeExperts::new_random(config))
+            FfnLayer::Moe(Box::new(MoeExperts::new_random(config)))
         } else {
-            FfnLayer::Dense(FeedForward::new_random(config))
+            FfnLayer::Dense(Box::new(FeedForward::new_random(config)))
         };
 
         Self {

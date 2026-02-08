@@ -58,8 +58,8 @@ fn to_c_struct(pw: &PlanarWeights) -> PlanarWeightsC {
 pub fn gemv(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
     assert_eq!(x.len(), pw.cols, "x.len() != cols");
     assert_eq!(y.len(), pw.rows, "y.len() != rows");
-    assert!(pw.data.as_ptr() as usize % 128 == 0, "data not 128B aligned");
-    assert!(pw.scales_rm.as_ptr() as usize % 128 == 0, "scales not 128B aligned");
+    assert!((pw.data.as_ptr() as usize).is_multiple_of(128), "data not 128B aligned");
+    assert!((pw.scales_rm.as_ptr() as usize).is_multiple_of(128), "scales not 128B aligned");
 
     let c_pw = to_c_struct(pw);
     unsafe {

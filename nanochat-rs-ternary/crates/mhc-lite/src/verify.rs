@@ -16,20 +16,20 @@
 /// 3. Column sums equal to 1.0
 pub fn verify_doubly_stochastic(mat: &[[f32; 4]; 4], tol: f32) -> Result<(), String> {
     // Check non-negativity
-    for i in 0..4 {
-        for j in 0..4 {
-            if mat[i][j] < -tol {
+    for (i, row) in mat.iter().enumerate() {
+        for (j, &val) in row.iter().enumerate() {
+            if val < -tol {
                 return Err(format!(
                     "Negative entry: mat[{}][{}] = {}",
-                    i, j, mat[i][j]
+                    i, j, val
                 ));
             }
         }
     }
 
     // Check row sums = 1
-    for i in 0..4 {
-        let row_sum: f32 = mat[i].iter().sum();
+    for (i, row) in mat.iter().enumerate() {
+        let row_sum: f32 = row.iter().sum();
         if (row_sum - 1.0).abs() > tol {
             return Err(format!("Row {} sum = {} (expected 1.0)", i, row_sum));
         }
@@ -48,12 +48,12 @@ pub fn verify_doubly_stochastic(mat: &[[f32; 4]; 4], tol: f32) -> Result<(), Str
 
 /// Verify that a 2x2 matrix is doubly stochastic within tolerance.
 pub fn verify_doubly_stochastic_2x2(mat: &[[f32; 2]; 2], tol: f32) -> Result<(), String> {
-    for i in 0..2 {
-        for j in 0..2 {
-            if mat[i][j] < -tol {
+    for (i, row) in mat.iter().enumerate() {
+        for (j, &val) in row.iter().enumerate() {
+            if val < -tol {
                 return Err(format!(
                     "Negative entry: mat[{}][{}] = {}",
-                    i, j, mat[i][j]
+                    i, j, val
                 ));
             }
         }
@@ -84,8 +84,8 @@ pub fn verify_doubly_stochastic_2x2(mat: &[[f32; 2]; 2], tol: f32) -> Result<(),
 pub fn composite_amax_gain(matrices: &[[[f32; 4]; 4]]) -> f32 {
     let mut composite = [[0.0f32; 4]; 4];
     // Start with identity
-    for i in 0..4 {
-        composite[i][i] = 1.0;
+    for (i, row) in composite.iter_mut().enumerate() {
+        row[i] = 1.0;
     }
 
     for mat in matrices {
@@ -93,8 +93,8 @@ pub fn composite_amax_gain(matrices: &[[[f32; 4]; 4]]) -> f32 {
         composite = [[0.0f32; 4]; 4];
         for i in 0..4 {
             for j in 0..4 {
-                for k in 0..4 {
-                    composite[i][j] += prev[i][k] * mat[k][j];
+                for (k, mat_row) in mat.iter().enumerate() {
+                    composite[i][j] += prev[i][k] * mat_row[j];
                 }
             }
         }

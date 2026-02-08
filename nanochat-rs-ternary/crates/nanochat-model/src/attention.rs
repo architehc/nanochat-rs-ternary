@@ -171,13 +171,13 @@ impl Attention {
 
             // Compute attention scores
             let mut scores = vec![0.0f32; seq_len];
-            for t in 0..seq_len {
+            for (t, score) in scores.iter_mut().enumerate() {
                 let k_base = t * kv_dim + kv_offset;
                 let mut dot = 0.0f32;
                 for d in 0..self.head_dim {
                     dot += q[q_offset + d] * cache.k[k_base + d];
                 }
-                scores[t] = dot * scale;
+                *score = dot * scale;
             }
 
             // Softmax
@@ -185,9 +185,8 @@ impl Attention {
 
             // Weighted sum of values
             let out_offset = h * self.head_dim;
-            for t in 0..seq_len {
+            for (t, &w) in scores.iter().enumerate() {
                 let v_base = t * kv_dim + kv_offset;
-                let w = scores[t];
                 for d in 0..self.head_dim {
                     attn_out[out_offset + d] += w * cache.v[v_base + d];
                 }
@@ -257,13 +256,13 @@ impl Attention {
 
                 // Compute attention scores
                 let mut scores = vec![0.0f32; causal_len];
-                for s in 0..causal_len {
+                for (s, score) in scores.iter_mut().enumerate() {
                     let k_base = s * kv_dim + kv_offset;
                     let mut dot = 0.0f32;
                     for d in 0..self.head_dim {
                         dot += all_q[q_offset + d] * cache.k[k_base + d];
                     }
-                    scores[s] = dot * scale;
+                    *score = dot * scale;
                 }
 
                 // Softmax
@@ -271,9 +270,8 @@ impl Attention {
 
                 // Weighted sum of values
                 let h_out_offset = h * self.head_dim;
-                for s in 0..causal_len {
+                for (s, &w) in scores.iter().enumerate() {
                     let v_base = s * kv_dim + kv_offset;
-                    let w = scores[s];
                     for d in 0..self.head_dim {
                         attn_out[h_out_offset + d] += w * cache.v[v_base + d];
                     }
@@ -306,9 +304,9 @@ fn softmax_inplace(x: &mut [f32]) {
 /// Generate deterministic pseudo-random weights for testing.
 fn random_weights(rows: usize, cols: usize, seed: u32) -> Vec<f32> {
     let mut w = vec![0.0f32; rows * cols];
-    for i in 0..w.len() {
+    for (i, val) in w.iter_mut().enumerate() {
         let v = ((i as u32).wrapping_add(seed * 7919)).wrapping_mul(2654435761) >> 16;
-        w[i] = (v % 200) as f32 / 100.0 - 1.0;
+        *val = (v % 200) as f32 / 100.0 - 1.0;
     }
     w
 }

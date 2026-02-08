@@ -29,8 +29,8 @@ impl RMSNorm {
         let rms_inv = 1.0 / (ss / dim as f32 + self.eps).sqrt();
 
         // Normalize and scale
-        for i in 0..dim {
-            x[i] = x[i] * rms_inv * self.weight[i];
+        for (x_val, &w) in x.iter_mut().zip(self.weight.iter()).take(dim) {
+            *x_val = *x_val * rms_inv * w;
         }
     }
 

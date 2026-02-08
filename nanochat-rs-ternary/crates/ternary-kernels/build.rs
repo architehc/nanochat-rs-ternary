@@ -48,7 +48,7 @@ fn main() {
 
     // Compile CUDA kernel to object file
     let status = Command::new(&nvcc)
-        .args(&[
+        .args([
             "-c", "csrc/ternary_dp4a.cu",
             "-o", &obj_path,
             "-O3",
@@ -65,7 +65,7 @@ fn main() {
 
     // Archive into static library
     let status = Command::new("ar")
-        .args(&["rcs", &lib_path, &obj_path])
+        .args(["rcs", &lib_path, &obj_path])
         .status()
         .expect("Failed to run ar");
 

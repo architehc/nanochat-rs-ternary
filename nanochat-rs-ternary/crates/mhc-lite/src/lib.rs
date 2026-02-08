@@ -40,14 +40,14 @@ pub(crate) fn softmax_24(logits: &[f32; 24]) -> [f32; 24] {
     let mut out = [0.0f32; 24];
     let mut sum = 0.0f32;
 
-    for i in 0..24 {
-        out[i] = (logits[i] - max_val).exp();
-        sum += out[i];
+    for (o, &l) in out.iter_mut().zip(logits.iter()) {
+        *o = (l - max_val).exp();
+        sum += *o;
     }
 
     let inv_sum = 1.0 / sum;
-    for i in 0..24 {
-        out[i] *= inv_sum;
+    for o in out.iter_mut() {
+        *o *= inv_sum;
     }
     out
 }

@@ -133,7 +133,7 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
     init();
 
     let x_bytes = x.len();
-    let y_bytes = y.len() * std::mem::size_of::<f32>();
+    let y_bytes = std::mem::size_of_val(y);
 
     // Allocate device buffers for x and y
     let d_x = unsafe { cuda_alloc(x_bytes) };

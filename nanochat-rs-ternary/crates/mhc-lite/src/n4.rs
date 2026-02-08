@@ -108,8 +108,8 @@ impl MhcLiteN4 {
     /// Compute H_pre: 4-element non-negative vector
     pub fn h_pre(&self) -> [f32; 4] {
         let mut out = [0.0f32; 4];
-        for i in 0..4 {
-            out[i] = sigmoid(self.pre_logits[i] + self.pre_bias[i]);
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = sigmoid(self.pre_logits[i] + self.pre_bias[i]);
         }
         out
     }
@@ -117,8 +117,8 @@ impl MhcLiteN4 {
     /// Compute H_post: 4-element non-negative vector, 2x scaled
     pub fn h_post(&self) -> [f32; 4] {
         let mut out = [0.0f32; 4];
-        for i in 0..4 {
-            out[i] = 2.0 * sigmoid(self.post_logits[i] + self.post_bias[i]);
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = 2.0 * sigmoid(self.post_logits[i] + self.post_bias[i]);
         }
         out
     }
@@ -223,8 +223,8 @@ impl MhcLiteN4 {
         };
 
         let mut res_logits = [0.0f32; 24];
-        for i in 0..24 {
-            res_logits[i] = f(i * 4);
+        for (i, rl) in res_logits.iter_mut().enumerate() {
+            *rl = f(i * 4);
         }
 
         let mut pre_logits = [0.0f32; 4];

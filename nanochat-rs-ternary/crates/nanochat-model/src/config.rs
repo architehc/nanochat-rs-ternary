@@ -120,7 +120,7 @@ impl ModelConfig {
     pub fn ffn_dim(&self) -> usize {
         let raw = (self.dim as f32 * self.ffn_mult) as usize;
         // Round up to multiple of group_size for clean quantization groups
-        (raw + self.group_size - 1) / self.group_size * self.group_size
+        raw.div_ceil(self.group_size) * self.group_size
     }
 
     /// Number of KV head repetitions for GQA

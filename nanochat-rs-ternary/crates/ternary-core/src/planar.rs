@@ -177,7 +177,7 @@ impl<T: Copy + Default> AlignedVec<T> {
 
             // Verify page alignment satisfies our 128-byte requirement
             debug_assert!(
-                raw as usize % 128 == 0,
+                (raw as usize).is_multiple_of(128),
                 "numa_alloc_onnode returned non-128-byte-aligned pointer: {:#x}",
                 raw as usize
             );
@@ -302,7 +302,7 @@ impl<T: Copy + Default> Clone for AlignedVec<T> {
 }
 
 fn round_up(x: usize, align: usize) -> usize {
-    (x + align - 1) / align * align
+    x.div_ceil(align) * align
 }
 
 // ============================================================
@@ -341,9 +341,9 @@ impl PlanarWeights {
     /// layouts with proper alignment.
     pub fn from_row_major(weights: &[f32], rows: usize, cols: usize, group_size: usize) -> Self {
         assert_eq!(weights.len(), rows * cols);
-        assert!(cols % 4 == 0, "cols must be divisible by 4");
-        assert!(cols % group_size == 0, "cols must be divisible by group_size");
-        assert!(group_size % 4 == 0, "group_size must be divisible by 4");
+        assert!(cols.is_multiple_of(4), "cols must be divisible by 4");
+        assert!(cols.is_multiple_of(group_size), "cols must be divisible by group_size");
+        assert!(group_size.is_multiple_of(4), "group_size must be divisible by 4");
 
         let pm = pack_matrix(weights, rows, cols, group_size);
         Self::from_packed_matrix(&pm)
