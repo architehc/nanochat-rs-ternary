@@ -29,6 +29,7 @@ pub enum TeacherMode {
         endpoint: String,
         api_key: Option<String>,
         timeout_secs: u64,
+        max_concurrent: usize,
     },
 }
 
@@ -37,11 +38,19 @@ pub struct RemoteTeacherClient {
     endpoint: String,
     api_key: Option<String>,
     client: reqwest::blocking::Client,
+    /// Number of concurrent requests supported by endpoint
+    max_concurrent: usize,
 }
 
 impl RemoteTeacherClient {
     /// Create a new remote teacher client.
-    pub fn new(endpoint: String, api_key: Option<String>, timeout_secs: u64) -> Result<Self> {
+    ///
+    /// # Arguments
+    /// * `endpoint` - Teacher inference endpoint URL
+    /// * `api_key` - Optional API key for authentication
+    /// * `timeout_secs` - Request timeout in seconds
+    /// * `max_concurrent` - Maximum concurrent requests (e.g., 8 for parallel batching)
+    pub fn new(endpoint: String, api_key: Option<String>, timeout_secs: u64, max_concurrent: usize) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(timeout_secs))
             .build()
@@ -51,6 +60,7 @@ impl RemoteTeacherClient {
             endpoint,
             api_key,
             client,
+            max_concurrent,
         })
     }
 
@@ -125,6 +135,43 @@ impl RemoteTeacherClient {
         let device = input_ids.device();
         Tensor::from_vec(logits_flat, (batch_size, seq_len, vocab_size), device)
     }
+
+    /// Query teacher logits for multiple batches in parallel.
+    ///
+    /// This leverages the endpoint's concurrent request capacity to speed up training.
+    ///
+    /// # Arguments
+    /// * `input_ids_batches` - Vec of input tensors, each [batch, seq_len]
+    ///
+    /// # Returns
+    /// Vec of teacher logits, each [batch, seq_len, vocab_size]
+    pub fn query_logits_parallel(&self, input_ids_batches: Vec<&Tensor>) -> Result<Vec<Tensor>> {
+        use rayon::prelude::*;
+
+        // Process batches in parallel using rayon thread pool
+        let results: std::result::Result<Vec<Tensor>, candle_core::Error> = input_ids_batches
+            .par_iter()
+            .map(|input_ids| self.query_logits(input_ids))
+            .collect();
+
+        results
+    }
+}
+
+/// Helper: Convert rayon ParallelIterator results to Vec<Result<T>>
+trait CollectResults<T, E> {
+    fn collect_results(self) -> std::result::Result<Vec<T>, E>;
+}
+
+impl<I, T, E> CollectResults<T, E> for I
+where
+    I: rayon::iter::ParallelIterator<Item = std::result::Result<T, E>>,
+    T: Send,
+    E: Send,
+{
+    fn collect_results(self) -> std::result::Result<Vec<T>, E> {
+        self.collect()
+    }
 }
 
 /// Configuration for distillation training.
@@ -150,6 +197,10 @@ pub struct DistillConfig {
 
     /// Whether to freeze student FP8 components (router, norms, etc.)
     pub freeze_student_fp8: bool,
+
+    /// Number of micro-batches to accumulate for parallel teacher queries
+    /// Set to endpoint's max_concurrent (e.g., 8) for optimal throughput
+    pub micro_batches: usize,
 }
 
 impl Default for DistillConfig {
@@ -160,12 +211,14 @@ impl Default for DistillConfig {
                 endpoint: "http://localhost:8000/v1/completions".to_string(),
                 api_key: None,
                 timeout_secs: 30,
+                max_concurrent: 8,
             },
             temperature: 2.0,
             kl_weight: 0.5,
             load_balance_weight: 0.01,
             router_aux_weight: 0.001,
             freeze_student_fp8: true,
+            micro_batches: 8, // Match max_concurrent for optimal throughput
         }
     }
 }
@@ -173,18 +226,26 @@ impl Default for DistillConfig {
 impl DistillConfig {
     /// Create config for remote FP8 teacher at given endpoint.
     ///
+    /// # Arguments
+    /// * `train_config` - Base training configuration
+    /// * `endpoint` - Teacher inference endpoint URL
+    /// * `api_key` - Optional API key
+    /// * `max_concurrent` - Max concurrent requests (e.g., 8)
+    ///
     /// # Example
     /// ```ignore
     /// let config = DistillConfig::with_remote_teacher(
     ///     TrainConfig::qwen3_coder_80b(),
     ///     "https://crazyshit.ngrok.io",
     ///     None,
+    ///     8, // 8 concurrent requests
     /// );
     /// ```
     pub fn with_remote_teacher(
         train_config: TrainConfig,
         endpoint: impl Into<String>,
         api_key: Option<String>,
+        max_concurrent: usize,
     ) -> Self {
         Self {
             train_config,
@@ -192,12 +253,14 @@ impl DistillConfig {
                 endpoint: endpoint.into(),
                 api_key,
                 timeout_secs: 60, // Generous timeout for large models
+                max_concurrent,
             },
             temperature: 2.0,
             kl_weight: 0.5,
             load_balance_weight: 0.01,
             router_aux_weight: 0.001,
             freeze_student_fp8: true,
+            micro_batches: max_concurrent, // Match for optimal throughput
         }
     }
 
@@ -216,6 +279,7 @@ impl DistillConfig {
             load_balance_weight: 0.01,
             router_aux_weight: 0.001,
             freeze_student_fp8: true,
+            micro_batches: 1, // No parallelization for local teacher
         }
     }
 }
@@ -265,11 +329,12 @@ impl DistillationTrainer {
 
                 TeacherBackend::Local(teacher_model)
             }
-            TeacherMode::Remote { endpoint, api_key, timeout_secs } => {
+            TeacherMode::Remote { endpoint, api_key, timeout_secs, max_concurrent } => {
                 let client = RemoteTeacherClient::new(
                     endpoint.clone(),
                     api_key.clone(),
                     *timeout_secs,
+                    *max_concurrent,
                 )?;
                 TeacherBackend::Remote(client)
             }
@@ -423,6 +488,159 @@ impl DistillationTrainer {
             total_loss: loss_val,
             ce_loss: ce_val,
             kl_loss: kl_val,
+            load_balance_loss: 0.0,
+            router_aux_loss: 0.0,
+            grad_norm,
+            lr: self.base_lr_muon * mult,
+            tokens_per_sec,
+        })
+    }
+
+    /// Execute training step with parallel teacher queries (gradient accumulation).
+    ///
+    /// This method processes multiple micro-batches in parallel by:
+    /// 1. Querying teacher for all micro-batches concurrently
+    /// 2. Accumulating gradients across micro-batches
+    /// 3. Single optimizer step with accumulated gradients
+    ///
+    /// This leverages the endpoint's max_concurrent capacity for speedup.
+    ///
+    /// # Arguments
+    /// * `input_ids_batches` - Vec of input tensors (micro-batches)
+    /// * `target_ids_batches` - Vec of target tensors (micro-batches)
+    ///
+    /// # Returns
+    /// Aggregated training statistics across all micro-batches
+    pub fn train_step_parallel(
+        &mut self,
+        input_ids_batches: Vec<&Tensor>,
+        target_ids_batches: Vec<&Tensor>,
+    ) -> Result<DistillStepStats> {
+        let step_start = Instant::now();
+        let n_micro = input_ids_batches.len();
+
+        // === Parallel teacher forward (no grad) ===
+        let teacher_logits_vec = match &mut self.teacher {
+            TeacherBackend::Local(_model) => {
+                // Local teacher: sequential (no parallelization benefit)
+                return Err(candle_core::Error::Msg(
+                    "Parallel training only supported with remote teacher".to_string()
+                ));
+            }
+            TeacherBackend::Remote(client) => {
+                // Remote teacher: parallel HTTP queries (8 concurrent)
+                client.query_logits_parallel(input_ids_batches.clone())?
+            }
+        };
+
+        // === Student forward + backward for each micro-batch (accumulate gradients) ===
+        let mut accumulated_loss = 0.0f64;
+        let mut accumulated_ce = 0.0f64;
+        let mut accumulated_kl = 0.0f64;
+        let mut total_tokens = 0usize;
+
+        // First micro-batch: compute gradients
+        let first_input = input_ids_batches[0];
+        let first_target = target_ids_batches[0];
+        let first_teacher_logits = &teacher_logits_vec[0];
+
+        let student_logits = self.student.forward(first_input)?;
+        let (batch, seq_len, vocab) = student_logits.dims3()?;
+
+        // Compute losses for first micro-batch
+        let student_logits_flat = student_logits.reshape((batch * seq_len, vocab))?;
+        let targets_flat = first_target.reshape(batch * seq_len)?;
+        let ce_loss = candle_nn::loss::cross_entropy(&student_logits_flat, &targets_flat)?;
+        let kl_loss = kl_divergence_loss(first_teacher_logits, &student_logits, self.config.temperature)?;
+
+        let load_balance_loss = Tensor::new(&[0.0f32], &self.device)?;
+        let router_aux_loss = Tensor::new(&[0.0f32], &self.device)?;
+
+        let ce_weight = 1.0 - self.config.kl_weight;
+        let loss = (ce_loss.clone() * ce_weight)?
+            .add(&(kl_loss.clone() * self.config.kl_weight)?)?
+            .add(&(load_balance_loss * self.config.load_balance_weight)?)?
+            .add(&(router_aux_loss * self.config.router_aux_weight)?)?;
+
+        // Scale loss by number of micro-batches for gradient accumulation
+        let scaled_loss = (&loss * (1.0 / n_micro as f64))?;
+        let mut grads = scaled_loss.backward()?;
+
+        accumulated_loss += loss.to_scalar::<f32>()? as f64 / n_micro as f64;
+        accumulated_ce += ce_loss.to_scalar::<f32>()? as f64 / n_micro as f64;
+        accumulated_kl += kl_loss.to_scalar::<f32>()? as f64 / n_micro as f64;
+        total_tokens += batch * seq_len;
+
+        // Remaining micro-batches: accumulate gradients
+        for i in 1..n_micro {
+            let input_ids = input_ids_batches[i];
+            let target_ids = target_ids_batches[i];
+            let teacher_logits = &teacher_logits_vec[i];
+
+            let student_logits = self.student.forward(input_ids)?;
+            let (batch, seq_len, vocab) = student_logits.dims3()?;
+
+            let student_logits_flat = student_logits.reshape((batch * seq_len, vocab))?;
+            let targets_flat = target_ids.reshape(batch * seq_len)?;
+            let ce_loss = candle_nn::loss::cross_entropy(&student_logits_flat, &targets_flat)?;
+            let kl_loss = kl_divergence_loss(teacher_logits, &student_logits, self.config.temperature)?;
+
+            let load_balance_loss = Tensor::new(&[0.0f32], &self.device)?;
+            let router_aux_loss = Tensor::new(&[0.0f32], &self.device)?;
+
+            let loss = (ce_loss.clone() * ce_weight)?
+                .add(&(kl_loss.clone() * self.config.kl_weight)?)?
+                .add(&(load_balance_loss * self.config.load_balance_weight)?)?
+                .add(&(router_aux_loss * self.config.router_aux_weight)?)?;
+
+            let scaled_loss = (&loss * (1.0 / n_micro as f64))?;
+
+            // Accumulate gradients (add to existing grads)
+            let micro_grads = scaled_loss.backward()?;
+            for var in self.student_varmap.all_vars() {
+                if let (Some(g1), Some(g2)) = (grads.get(var.as_tensor()), micro_grads.get(var.as_tensor())) {
+                    let sum = (g1 + g2)?;
+                    grads.insert(var.as_tensor(), sum);
+                }
+            }
+
+            accumulated_loss += loss.to_scalar::<f32>()? as f64 / n_micro as f64;
+            accumulated_ce += ce_loss.to_scalar::<f32>()? as f64 / n_micro as f64;
+            accumulated_kl += kl_loss.to_scalar::<f32>()? as f64 / n_micro as f64;
+            total_tokens += batch * seq_len;
+        }
+
+        // === Compute gradient norm and clip ===
+        let grad_norm = compute_grad_norm(&grads, &self.student_varmap)?;
+        let clip_scale = if grad_norm > self.config.train_config.grad_clip {
+            self.config.train_config.grad_clip / grad_norm
+        } else {
+            1.0
+        };
+
+        // === Single optimizer step with accumulated gradients ===
+        self.muon.step(&grads, clip_scale)?;
+        self.lion.step(&grads, clip_scale)?;
+
+        // === LR schedule ===
+        self.global_step += 1;
+        let mult = wsd_schedule(
+            self.global_step,
+            self.config.train_config.warmup_steps,
+            self.config.train_config.total_steps,
+            self.config.train_config.decay_start_frac,
+            0.1,
+        );
+        self.muon.set_lr(self.base_lr_muon * mult);
+        self.lion.set_lr(self.base_lr_lion * mult);
+
+        let elapsed = step_start.elapsed().as_secs_f64();
+        let tokens_per_sec = if elapsed > 0.0 { total_tokens as f64 / elapsed } else { 0.0 };
+
+        Ok(DistillStepStats {
+            total_loss: accumulated_loss,
+            ce_loss: accumulated_ce,
+            kl_loss: accumulated_kl,
             load_balance_loss: 0.0,
             router_aux_loss: 0.0,
             grad_norm,
