@@ -14,7 +14,7 @@ fn sigmoid(t: &Tensor) -> Result<Tensor> {
             return crate::cuda_ops::cuda_sigmoid(t);
         }
     }
-    sigmoid(t)
+    candle_nn::ops::sigmoid(t)
 }
 
 /// Differentiable mHC-lite N=2 for training.
