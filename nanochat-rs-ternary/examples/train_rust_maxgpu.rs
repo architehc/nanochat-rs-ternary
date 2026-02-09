@@ -16,6 +16,7 @@ use nanochat_train::{
 };
 use candle_core::Device;
 use clap::Parser;
+use std::path::Path;
 
 #[derive(Parser, Debug)]
 #[command(name = "train_rust_maxgpu")]
@@ -64,6 +65,45 @@ struct Args {
     /// Learning rate (Muon)
     #[arg(long, default_value = "0.02")]
     lr: f32,
+
+    /// Resume from latest checkpoint if available
+    #[arg(long, default_value = "true")]
+    resume: bool,
+}
+
+/// Find the latest checkpoint in a directory
+fn find_latest_checkpoint(checkpoint_dir: &str) -> Option<(String, usize)> {
+    let dir_path = Path::new(checkpoint_dir);
+    if !dir_path.exists() {
+        return None;
+    }
+
+    let mut checkpoints: Vec<(String, usize)> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(dir_path) {
+        for entry in entries.flatten() {
+            if let Ok(file_name) = entry.file_name().into_string() {
+                if file_name.starts_with("step_") {
+                    if let Ok(step) = file_name.strip_prefix("step_").unwrap().parse::<usize>() {
+                        let checkpoint_path = entry.path();
+                        // Verify checkpoint has required files
+                        if checkpoint_path.join("model.safetensors").exists()
+                            && checkpoint_path.join("meta.json").exists() {
+                            checkpoints.push((checkpoint_path.to_string_lossy().to_string(), step));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if checkpoints.is_empty() {
+        return None;
+    }
+
+    // Return the checkpoint with the highest step number
+    checkpoints.sort_by_key(|(_, step)| *step);
+    checkpoints.last().cloned()
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -134,9 +174,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting training...");
     println!("═══════════════════════════════════════════════════════════\n");
 
+    // Check for existing checkpoint to resume from
+    let resume_from_step = if args.resume {
+        if let Some((checkpoint_path, step)) = find_latest_checkpoint(&args.checkpoint_dir) {
+            println!("✓ Found checkpoint: {} (step {})", checkpoint_path, step);
+            println!("  Resuming training from step {}\n", step);
+            Some((checkpoint_path, step))
+        } else {
+            println!("No existing checkpoint found, starting from scratch\n");
+            None
+        }
+    } else {
+        println!("Resume disabled, starting from scratch\n");
+        None
+    };
+
     println!("Initializing trainer...");
-    let mut trainer = Trainer::new(config, device)?;
-    println!("✓ Trainer initialized\n");
+    let (mut trainer, resumed) = if let Some((checkpoint_path, resume_step)) = resume_from_step {
+        // Load from checkpoint
+        let mut t = Trainer::from_checkpoint(&checkpoint_path, device)?;
+        t.global_step = resume_step;
+        println!("✓ Trainer loaded from checkpoint (step {})\n", resume_step);
+        (t, true)
+    } else {
+        (Trainer::new(config, device)?, false)
+    };
+
+    if !resumed {
+        println!("✓ Trainer initialized\n");
+    }
 
     // Calculate epochs
     let steps_per_epoch = (dataset.len() + args.batch_size - 1) / args.batch_size;

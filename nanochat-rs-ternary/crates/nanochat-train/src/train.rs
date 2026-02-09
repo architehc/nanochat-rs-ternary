@@ -139,6 +139,68 @@ pub struct Trainer {
 }
 
 impl Trainer {
+    /// Create a new trainer from a saved checkpoint
+    pub fn from_checkpoint(checkpoint_dir: &str, device: Device) -> Result<Self> {
+        // Load checkpoint
+        let (varmap, config, step, _loss) = crate::checkpoint::load_checkpoint(checkpoint_dir, &device)
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to load checkpoint: {}", e)))?;
+
+        // Create model from loaded varmap
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let model = NanochatTrainModel::new(&config, vb)?;
+
+        // Classify vars by dimension for optimizers
+        let all_vars = varmap.all_vars();
+        let mut muon_vars: Vec<Var> = Vec::new();
+        let mut lion_vars: Vec<Var> = Vec::new();
+
+        for var in all_vars {
+            let dims = var.as_tensor().dims();
+            if dims.len() <= 1 {
+                // 1D: norms, mHC params -> Lion
+                lion_vars.push(var);
+            } else if dims.len() == 2 && dims[0] == config.vocab_size {
+                // Embedding -> Lion
+                lion_vars.push(var);
+            } else {
+                // 2D+ linear weights -> Muon
+                muon_vars.push(var);
+            }
+        }
+
+        // Create optimizers
+        let base_lr_muon = config.lr;
+        let base_lr_lion = config.mhc_lr;
+
+        let muon = Muon::new(
+            muon_vars,
+            base_lr_muon,
+            config.muon_momentum,
+            config.ns_steps,
+            config.weight_decay,
+        )?;
+
+        let lion = Lion::new(
+            lion_vars,
+            base_lr_lion,
+            config.lion_betas.0,
+            config.lion_betas.1,
+            config.weight_decay,
+        )?;
+
+        Ok(Self {
+            model,
+            varmap,
+            muon,
+            lion,
+            config,
+            device,
+            global_step: step, // Resume from saved step
+            base_lr_muon,
+            base_lr_lion,
+        })
+    }
+
     pub fn new(config: TrainConfig, device: Device) -> Result<Self> {
         let varmap = VarMap::new();
         let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
