@@ -241,6 +241,13 @@ impl Trainer {
         let n_tokens = (batch * seq_len) as f64;
         let tokens_per_sec = if elapsed > 0.0 { n_tokens / elapsed } else { 0.0 };
 
+        // Explicitly drop intermediate tensors to free GPU memory
+        drop(loss);
+        drop(logits);
+        drop(logits_flat);
+        drop(targets_flat);
+        drop(grads);
+
         Ok(StepStats {
             loss: loss_val,
             grad_norm,
