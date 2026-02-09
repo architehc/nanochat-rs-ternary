@@ -15,6 +15,7 @@ pub mod compiler;
 pub mod ast_analysis;
 pub mod reward;
 pub mod grpo;
+pub mod maxrl;
 pub mod qwen;
 pub mod trainer;
 
@@ -22,6 +23,7 @@ pub use compiler::{CompilerFeedback, CompileResult};
 pub use ast_analysis::{AstMetrics, analyze_ast};
 pub use reward::{RewardConfig, compute_reward};
 pub use grpo::{GrpoConfig, GrpoTrainer};
+pub use maxrl::{MaxRLConfig, MaxRLTrainer, MaxRLStats};
 pub use trainer::RLTrainer;
 
 /// Configuration for RL training
