@@ -105,6 +105,22 @@ impl NanochatTrainModel {
         }
     }
 
+    /// Forward with cross-entropy loss.
+    /// input_ids: [batch, seq_len]
+    /// target_ids: [batch, seq_len]
+    /// Returns: scalar loss tensor
+    pub fn forward_loss(&self, input_ids: &Tensor, target_ids: &Tensor) -> Result<Tensor> {
+        let logits = self.forward(input_ids)?; // [batch, seq, vocab]
+
+        // Reshape for cross-entropy: [batch*seq, vocab] and [batch*seq]
+        let (batch, seq_len, _vocab) = logits.dims3()?;
+        let logits_flat = logits.reshape((batch * seq_len, self.config.vocab_size))?;
+        let targets_flat = target_ids.flatten_all()?;
+
+        // Cross-entropy loss
+        candle_nn::loss::cross_entropy(&logits_flat, &targets_flat)
+    }
+
     /// Collect all parameters grouped by optimizer assignment.
     pub fn param_groups(&self) -> ParamGroups {
         let mut linear = Vec::new();

@@ -68,31 +68,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     println!("═══════════════════════════════════════════════════════════");
-    println!("  Training Tiny Model from Scratch (Fast CPU Demo)");
+    println!("  Training Nano-125M Model (GPU Accelerated)");
     println!("═══════════════════════════════════════════════════════════");
     println!();
 
     // Parse device
     let device = if args.device.starts_with("cuda") {
-        #[cfg(feature = "cuda")]
-        {
-            let gpu_id = args.device.strip_prefix("cuda:")
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(0);
-            Device::new_cuda(gpu_id)
-                .map_err(|e| format!("Failed to create CUDA device: {}", e))?
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            eprintln!("CUDA not available, using CPU");
-            Device::Cpu
+        let gpu_id = args.device.strip_prefix("cuda:")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
+        match Device::new_cuda(gpu_id) {
+            Ok(d) => {
+                println!("✓ CUDA device initialized: GPU {}", gpu_id);
+                d
+            }
+            Err(e) => {
+                eprintln!("CUDA not available ({}), falling back to CPU", e);
+                Device::Cpu
+            }
         }
     } else {
         Device::Cpu
     };
 
     println!("Configuration:");
-    println!("  Model: tiny-cpu (~2M params, optimized for CPU training)");
+    println!("  Model: nano-125M (127M params)");
     println!("  Device: {:?}", device);
     println!("  Total steps: {}", args.total_steps);
     println!("  Batch size: {}", args.batch_size);
@@ -101,8 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Checkpoint dir: {}", args.checkpoint_dir);
     println!();
 
-    // Create training config - use tiny_cpu for fast CPU training
-    let mut config = TrainConfig::tiny_cpu();
+    // Create training config - use nano_125m for GPU training
+    let mut config = TrainConfig::nano_125m();
     config.batch_size = args.batch_size;
     config.max_seq_len = args.seq_len;
     config.total_steps = args.total_steps;

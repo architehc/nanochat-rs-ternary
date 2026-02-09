@@ -1,0 +1,198 @@
+warning: variant `Q2_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:34:5
+   |
+34 |     Q2_K = 10,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q2K`
+   |
+   = note: `#[warn(non_camel_case_types)]` on by default
+
+warning: variant `Q3_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:35:5
+   |
+35 |     Q3_K = 11,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q3K`
+
+warning: variant `Q4_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:36:5
+   |
+36 |     Q4_K = 12,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q4K`
+
+warning: variant `Q5_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:37:5
+   |
+37 |     Q5_K = 13,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q5K`
+
+warning: variant `Q6_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:38:5
+   |
+38 |     Q6_K = 14,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q6K`
+
+warning: variant `Q8_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:39:5
+   |
+39 |     Q8_K = 15,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q8K`
+
+warning: `ternary-core` (lib) generated 6 warnings
+warning: unused import: `ExecutionResult`
+ --> crates/nanochat-eval/src/eval.rs:4:37
+  |
+4 | use crate::executor::{CodeExecutor, ExecutionResult};
+  |                                     ^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: variable does not need to be mutable
+   --> crates/nanochat-eval/src/executor.rs:114:13
+    |
+114 |         let mut child = Command::new(&self.python_cmd)
+    |             ----^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: constant `HUMANEVAL_URL` is never used
+  --> crates/nanochat-eval/src/datasets.rs:72:15
+   |
+72 |         const HUMANEVAL_URL: &str =
+   |               ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: field `max_concurrent` is never read
+  --> crates/nanochat-train/src/distill.rs:42:5
+   |
+37 | pub struct RemoteTeacherClient {
+   |            ------------------- field in this struct
+...
+42 |     max_concurrent: usize,
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: trait `CollectResults` is never used
+   --> crates/nanochat-train/src/distill.rs:162:7
+    |
+162 | trait CollectResults<T, E> {
+    |       ^^^^^^^^^^^^^^
+
+warning: `nanochat-eval` (lib) generated 3 warnings (run `cargo fix --lib -p nanochat-eval` to apply 2 suggestions)
+warning: `nanochat-train` (lib) generated 2 warnings
+warning: unexpected `cfg` condition value: `cuda`
+  --> examples/train_nano_simple.rs:77:15
+   |
+77 |         #[cfg(feature = "cuda")]
+   |               ^^^^^^^^^^^^^^^^ help: remove the condition
+   |
+   = note: no expected values for `feature`
+   = help: consider adding `cuda` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `cuda`
+  --> examples/train_nano_simple.rs:85:19
+   |
+85 |         #[cfg(not(feature = "cuda"))]
+   |                   ^^^^^^^^^^^^^^^^ help: remove the condition
+   |
+   = note: no expected values for `feature`
+   = help: consider adding `cuda` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: `nanochat-rs-ternary` (example "train_nano_simple") generated 2 warnings
+    Finished `release` profile [optimized] target(s) in 0.16s
+     Running `target/release/examples/train_nano_simple --total-steps 1000 --checkpoint-dir checkpoints/tiny-cpu-demo --device cpu --batch-size 8 --seq-len 256 --lr 0.02 --log-interval 50 --checkpoint-interval 500`
+═══════════════════════════════════════════════════════════
+  Training Tiny Model from Scratch (Fast CPU Demo)
+═══════════════════════════════════════════════════════════
+
+Configuration:
+  Model: tiny-cpu (~2M params, optimized for CPU training)
+  Device: Cpu
+  Total steps: 1000
+  Batch size: 8
+  Sequence length: 256
+  Learning rate: 0.02
+  Checkpoint dir: checkpoints/tiny-cpu-demo
+
+Model Architecture:
+  Dimension: 256
+  Layers: 4
+  Heads: 4
+  Estimated params: 3.7M
+
+Creating synthetic code dataset...
+✓ Dataset created: 16000 samples
+
+═══════════════════════════════════════════════════════════
+Starting training...
+═══════════════════════════════════════════════════════════
+
+Initializing trainer...
+✓ Trainer initialized
+
+Training for 1 epochs (2000 steps per epoch)
+
+[    50/1000  ] loss=173.1260 lr=0.002000 gnorm=10.89 tok/s=361 elapsed=287s
+[   100/1000  ] loss=168.5445 lr=0.004000 gnorm=10.62 tok/s=423 elapsed=530s
+[   150/1000  ] loss=173.3487 lr=0.006000 gnorm=11.21 tok/s=436 elapsed=765s
+[   200/1000  ] loss=139.2580 lr=0.008000 gnorm=24.14 tok/s=428 elapsed=1005s
+[   250/1000  ] loss=57.7891 lr=0.010000 gnorm=59.18 tok/s=433 elapsed=1242s
+[   300/1000  ] loss=31.6829 lr=0.012000 gnorm=65.05 tok/s=437 elapsed=1477s
+[   350/1000  ] loss=22.5359 lr=0.014000 gnorm=55.00 tok/s=438 elapsed=1711s
+[   400/1000  ] loss=17.7463 lr=0.016000 gnorm=55.32 tok/s=446 elapsed=1941s
+[   450/1000  ] loss=15.4084 lr=0.018000 gnorm=48.98 tok/s=443 elapsed=2173s
+[   500/1000  ] loss=14.0015 lr=0.020000 gnorm=45.87 tok/s=446 elapsed=2403s
+  -> checkpoint saved to checkpoints/tiny-cpu-demo/step_500 (14.02MB)
+[   550/1000  ] loss=13.0510 lr=0.020000 gnorm=38.07 tok/s=449 elapsed=2631s
+[   600/1000  ] loss=12.6189 lr=0.020000 gnorm=41.40 tok/s=444 elapsed=2862s
+[   650/1000  ] loss=10.5388 lr=0.020000 gnorm=34.51 tok/s=447 elapsed=3092s
+[   700/1000  ] loss=10.2248 lr=0.020000 gnorm=42.58 tok/s=454 elapsed=3318s
+[   750/1000  ] loss=9.0688 lr=0.020000 gnorm=29.31 tok/s=451 elapsed=3545s
+[   800/1000  ] loss=8.3037 lr=0.020000 gnorm=25.43 tok/s=449 elapsed=3773s
+[   850/1000  ] loss=8.7659 lr=0.017364 gnorm=29.75 tok/s=448 elapsed=4002s
+[   900/1000  ] loss=7.0575 lr=0.011000 gnorm=23.24 tok/s=449 elapsed=4231s
+[   950/1000  ] loss=6.9959 lr=0.004636 gnorm=22.60 tok/s=452 elapsed=4458s
+[  1000/1000  ] loss=5.9365 lr=0.002000 gnorm=15.16 tok/s=446 elapsed=4688s
+  -> checkpoint saved to checkpoints/tiny-cpu-demo/step_1000 (14.02MB)
+[  1050/1000  ] loss=5.9264 lr=0.004636 gnorm=16.70 tok/s=449 elapsed=4917s
+[  1100/1000  ] loss=5.5949 lr=0.011000 gnorm=15.01 tok/s=447 elapsed=5146s
+[  1150/1000  ] loss=5.5381 lr=0.017364 gnorm=15.96 tok/s=443 elapsed=5378s
+[  1200/1000  ] loss=5.5575 lr=0.020000 gnorm=16.20 tok/s=444 elapsed=5609s
+[  1250/1000  ] loss=6.0040 lr=0.017364 gnorm=19.28 tok/s=439 elapsed=5842s
+[  1300/1000  ] loss=5.3326 lr=0.011000 gnorm=17.56 tok/s=441 elapsed=6075s
+[  1350/1000  ] loss=4.9247 lr=0.004636 gnorm=17.25 tok/s=444 elapsed=6306s
+[  1400/1000  ] loss=4.7326 lr=0.002000 gnorm=13.02 tok/s=441 elapsed=6539s
+[  1450/1000  ] loss=4.5651 lr=0.004636 gnorm=11.47 tok/s=439 elapsed=6773s
+[  1500/1000  ] loss=4.3221 lr=0.011000 gnorm=9.59 tok/s=443 elapsed=7004s
+  -> checkpoint saved to checkpoints/tiny-cpu-demo/step_1500 (14.02MB)
+[  1550/1000  ] loss=3.8212 lr=0.017364 gnorm=12.21 tok/s=435 elapsed=7240s
+[  1600/1000  ] loss=4.9275 lr=0.020000 gnorm=19.14 tok/s=443 elapsed=7472s
+[  1650/1000  ] loss=4.8220 lr=0.017364 gnorm=20.63 tok/s=444 elapsed=7702s
+[  1700/1000  ] loss=4.6244 lr=0.011000 gnorm=13.65 tok/s=440 elapsed=7935s
+[  1750/1000  ] loss=4.2847 lr=0.004636 gnorm=13.35 tok/s=448 elapsed=8164s
+[  1800/1000  ] loss=4.4007 lr=0.002000 gnorm=10.48 tok/s=450 elapsed=8392s
+[  1850/1000  ] loss=3.8212 lr=0.004636 gnorm=8.36 tok/s=436 elapsed=8628s
+[  1900/1000  ] loss=4.1113 lr=0.011000 gnorm=7.39 tok/s=433 elapsed=8865s
+[  1950/1000  ] loss=4.0947 lr=0.017364 gnorm=9.82 tok/s=437 elapsed=9100s
+[  2000/1000  ] loss=3.7543 lr=0.020000 gnorm=11.69 tok/s=438 elapsed=9334s
+  -> checkpoint saved to checkpoints/tiny-cpu-demo/step_2000 (14.02MB)
+--- Epoch 1/1 done (2000 batches, 9333.6s) step=2000 ---
+Final checkpoint saved to checkpoints/tiny-cpu-demo/final
+
+Training complete! steps=2000 elapsed=9333.6s (155.6m)
+
+═══════════════════════════════════════════════════════════
+Training complete!
+═══════════════════════════════════════════════════════════
+
+Model saved to: checkpoints/tiny-cpu-demo
+
+Next steps:
+1. Export to GGUF for inference
+2. Start inference server
+3. Evaluate on HumanEval

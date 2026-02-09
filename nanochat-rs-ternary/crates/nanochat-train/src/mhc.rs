@@ -5,6 +5,18 @@ use candle_core::{Result, Tensor};
 use candle_core::DType;
 use candle_nn::VarBuilder;
 
+/// Sigmoid helper that uses custom CUDA kernel when available.
+#[inline]
+fn sigmoid(t: &Tensor) -> Result<Tensor> {
+    #[cfg(feature = "cuda")]
+    {
+        if t.device().is_cuda() {
+            return crate::cuda_ops::cuda_sigmoid(t);
+        }
+    }
+    sigmoid(t)
+}
+
 /// Differentiable mHC-lite N=2 for training.
 ///
 /// Mirrors `mhc_lite::MhcLiteN2` but uses Candle Vars for autograd.
@@ -30,7 +42,7 @@ impl MhcLiteN2Train {
     /// Compute 2x2 doubly stochastic residual matrix.
     pub fn h_res(&self) -> Result<(f32, f32)> {
         // alpha = sigmoid(alpha_logit)
-        let alpha = candle_nn::ops::sigmoid(&self.alpha_logit)?
+        let alpha = sigmoid(&self.alpha_logit)?
             .to_vec1::<f32>()?[0];
         Ok((alpha, 1.0 - alpha))
     }
@@ -38,13 +50,13 @@ impl MhcLiteN2Train {
     /// Compute pre-projection weights (non-negative via sigmoid).
     pub fn h_pre(&self) -> Result<Tensor> {
         let raw = (&self.pre_logits + &self.pre_bias)?;
-        candle_nn::ops::sigmoid(&raw)
+        sigmoid(&raw)
     }
 
     /// Compute post-projection weights (2x scaled sigmoid).
     pub fn h_post(&self) -> Result<Tensor> {
         let raw = (&self.post_logits + &self.post_bias)?;
-        let sig = candle_nn::ops::sigmoid(&raw)?;
+        let sig = sigmoid(&raw)?;
         &sig * 2.0
     }
 
@@ -81,7 +93,7 @@ impl MhcLiteN2Train {
         let s0 = x_exp.narrow(last, 0, dim)?;
         let s1 = x_exp.narrow(last, dim, dim)?;
 
-        let alpha_t = candle_nn::ops::sigmoid(&self.alpha_logit)?;
+        let alpha_t = sigmoid(&self.alpha_logit)?;
         let alpha = &alpha_t;
         let one_minus_alpha = (1.0 - &alpha_t)?;
 

@@ -1,0 +1,139 @@
+warning: variant `Q2_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:34:5
+   |
+34 |     Q2_K = 10,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q2K`
+   |
+   = note: `#[warn(non_camel_case_types)]` on by default
+
+warning: variant `Q3_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:35:5
+   |
+35 |     Q3_K = 11,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q3K`
+
+warning: variant `Q4_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:36:5
+   |
+36 |     Q4_K = 12,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q4K`
+
+warning: variant `Q5_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:37:5
+   |
+37 |     Q5_K = 13,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q5K`
+
+warning: variant `Q6_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:38:5
+   |
+38 |     Q6_K = 14,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q6K`
+
+warning: variant `Q8_K` should have an upper camel case name
+  --> crates/ternary-core/src/gguf.rs:39:5
+   |
+39 |     Q8_K = 15,
+   |     ^^^^ help: convert the identifier to upper camel case: `Q8K`
+
+warning: `ternary-core` (lib) generated 6 warnings
+warning: unused import: `ExecutionResult`
+ --> crates/nanochat-eval/src/eval.rs:4:37
+  |
+4 | use crate::executor::{CodeExecutor, ExecutionResult};
+  |                                     ^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: variable does not need to be mutable
+   --> crates/nanochat-eval/src/executor.rs:114:13
+    |
+114 |         let mut child = Command::new(&self.python_cmd)
+    |             ----^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: constant `HUMANEVAL_URL` is never used
+  --> crates/nanochat-eval/src/datasets.rs:72:15
+   |
+72 |         const HUMANEVAL_URL: &str =
+   |               ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: field `max_concurrent` is never read
+  --> crates/nanochat-train/src/distill.rs:42:5
+   |
+37 | pub struct RemoteTeacherClient {
+   |            ------------------- field in this struct
+...
+42 |     max_concurrent: usize,
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: trait `CollectResults` is never used
+   --> crates/nanochat-train/src/distill.rs:162:7
+    |
+162 | trait CollectResults<T, E> {
+    |       ^^^^^^^^^^^^^^
+
+warning: `nanochat-eval` (lib) generated 3 warnings (run `cargo fix --lib -p nanochat-eval` to apply 2 suggestions)
+warning: `nanochat-train` (lib) generated 2 warnings
+warning: unexpected `cfg` condition value: `cuda`
+  --> examples/train_nano_simple.rs:77:15
+   |
+77 |         #[cfg(feature = "cuda")]
+   |               ^^^^^^^^^^^^^^^^ help: remove the condition
+   |
+   = note: no expected values for `feature`
+   = help: consider adding `cuda` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `cuda`
+  --> examples/train_nano_simple.rs:85:19
+   |
+85 |         #[cfg(not(feature = "cuda"))]
+   |                   ^^^^^^^^^^^^^^^^ help: remove the condition
+   |
+   = note: no expected values for `feature`
+   = help: consider adding `cuda` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: `nanochat-rs-ternary` (example "train_nano_simple") generated 2 warnings
+    Finished `release` profile [optimized] target(s) in 0.16s
+     Running `target/release/examples/train_nano_simple --total-steps 5000 --checkpoint-dir checkpoints/nano-125m-simple --device cpu --batch-size 4 --seq-len 512 --lr 0.02`
+═══════════════════════════════════════════════════════════
+  Training Nano-125M from Scratch
+═══════════════════════════════════════════════════════════
+
+Configuration:
+  Model: nano-125M (125M params)
+  Device: Cpu
+  Total steps: 5000
+  Batch size: 4
+  Sequence length: 512
+  Learning rate: 0.02
+  Checkpoint dir: checkpoints/nano-125m-simple
+
+Model Architecture:
+  Dimension: 768
+  Layers: 12
+  Heads: 12
+  Estimated params: 127.1M
+
+Creating synthetic code dataset...
+✓ Dataset created: 40000 samples
+
+═══════════════════════════════════════════════════════════
+Starting training...
+═══════════════════════════════════════════════════════════
+
+Initializing trainer...
+✓ Trainer initialized
+
+Training for 1 epochs (10000 steps per epoch)
+
