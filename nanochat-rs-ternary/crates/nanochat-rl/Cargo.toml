@@ -1,0 +1,38 @@
+[package]
+name = "nanochat-rl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# AST parsing and analysis
+syn = { version = "2.0", features = ["full", "parsing", "visit"] }
+quote = "1.0"
+
+# Compiler integration
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP client for Qwen3 endpoint
+reqwest = { version = "0.11", features = ["json"] }
+tokio = { version = "1.35", features = ["full"] }
+
+# ML framework
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+
+# Internal dependencies
+nanochat-model = { path = "../nanochat-model" }
+nanochat-train = { path = "../nanochat-train" }
+
+# Utilities
+anyhow = "1.0"
+rand = "0.8"
+rayon = { workspace = true }
+clap = { version = "4.5", features = ["derive"] }
+tempfile = "3.8"
+
+[dev-dependencies]
+
+[[example]]
+name = "train_rl"
+path = "examples/train_rl.rs"
