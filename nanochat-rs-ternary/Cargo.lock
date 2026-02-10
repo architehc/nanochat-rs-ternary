@@ -1797,12 +1797,14 @@ dependencies = [
  "nanochat-model",
  "nanochat-serve",
  "nanochat-train",
+ "rand 0.8.5",
  "safetensors 0.4.5",
  "serde",
  "serde_json",
  "tempfile",
  "ternary-core",
  "ternary-kernels",
+ "tokenizers",
  "tokio",
 ]
 

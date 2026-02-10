@@ -66,6 +66,10 @@ struct Args {
     #[arg(long, default_value = "0.02")]
     lr: f32,
 
+    /// Gradient clipping threshold
+    #[arg(long, default_value = "1.0")]
+    grad_clip: f32,
+
     /// Resume from latest checkpoint if available
     #[arg(long, default_value = "true")]
     resume: bool,
@@ -148,6 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.total_steps = args.total_steps;
     config.warmup_steps = args.warmup_steps;
     config.lr = args.lr as f64;
+    config.grad_clip = args.grad_clip as f64;
 
     println!("Model Configuration:");
     println!("  Model: nano-125M (127M params)");
@@ -159,7 +164,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Sequence length: {}", args.seq_len);
     println!("  Effective batch: {} tokens/step", args.batch_size * args.seq_len);
     println!("  Total steps: {}", args.total_steps);
-    println!("  Learning rate: {}\n", args.lr);
+    println!("  Learning rate: {}", args.lr);
+    println!("  Gradient clip: {}\n", args.grad_clip);
 
     // Memory estimate
     let model_params_gb = 127.0 * 4.0 / 1024.0;
