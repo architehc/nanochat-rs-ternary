@@ -274,13 +274,15 @@ impl Trainer {
         let ce_loss = candle_nn::loss::cross_entropy(&logits_flat, &targets_flat)?;
 
         // Entropy regularization: penalize overconfident predictions
-        // entropy = -sum(p * log(p)) where p = softmax(logits)
+        // entropy = -sum_vocab(p * log(p)) for each token, then average over tokens
         // Higher entropy = more diverse predictions
         let entropy_weight = 0.01; // Tune this: 0.01-0.1
         let probs = candle_nn::ops::softmax(&logits_flat, 1)?;
         let log_probs = candle_nn::ops::log_softmax(&logits_flat, 1)?;
-        let entropy = (&probs * &log_probs)?.sum_all()?.neg()?; // -sum(p * log(p))
-        let entropy_per_token = (&entropy / (batch * seq_len) as f64)?;
+        // Compute entropy per token: sum over vocab dimension (dim=1)
+        let entropy_per_token_tensor = (&probs * &log_probs)?.sum(1)?.neg()?; // [batch*seq]
+        // Average entropy across all tokens
+        let entropy_per_token = entropy_per_token_tensor.mean_all()?;
 
         // Extract scalars before consuming tensors (for logging)
         let ce_loss_val = ce_loss.to_scalar::<f32>()? as f64;
