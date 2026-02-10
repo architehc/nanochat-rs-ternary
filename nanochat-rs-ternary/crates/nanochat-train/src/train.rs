@@ -120,8 +120,6 @@ mod checkpoint_manager {
 #[derive(Debug, Clone)]
 pub struct StepStats {
     pub loss: f64,
-    pub ce_loss: f64,       // Cross-entropy component
-    pub entropy: f64,       // Entropy (for monitoring)
     pub grad_norm: f64,
     pub lr: f64,
     pub tokens_per_sec: f64,
@@ -267,30 +265,20 @@ impl Trainer {
         // Forward
         let logits = self.model.forward(input_ids)?;
 
-        // Cross-entropy loss
+        // Cross-entropy loss with label smoothing (prevents overconfidence)
         let (batch, seq_len, vocab) = logits.dims3()?;
         let logits_flat = logits.reshape((batch * seq_len, vocab))?;
         let targets_flat = target_ids.reshape(batch * seq_len)?;
+
+        // Label smoothing: smooth_targets = (1-eps)*one_hot + eps/V
+        // Equivalent to: CE_loss * (1-eps) + eps * (-mean(log_softmax))
+        let label_smooth_eps = 0.1; // 10% smoothing
         let ce_loss = candle_nn::loss::cross_entropy(&logits_flat, &targets_flat)?;
-
-        // Entropy regularization: penalize overconfident predictions
-        // entropy = -sum_vocab(p * log(p)) for each token, then average over tokens
-        // Higher entropy = more diverse predictions
-        let entropy_weight = 0.01; // Tune this: 0.01-0.1
-        let probs = candle_nn::ops::softmax(&logits_flat, 1)?;
-        let log_probs = candle_nn::ops::log_softmax(&logits_flat, 1)?;
-        // Compute entropy per token: sum over vocab dimension (dim=1)
-        let entropy_per_token_tensor = (&probs * &log_probs)?.sum(1)?.neg()?; // [batch*seq]
-        // Average entropy across all tokens
-        let entropy_per_token = entropy_per_token_tensor.mean_all()?;
-
-        // Extract scalars before consuming tensors (for logging)
-        let ce_loss_val = ce_loss.to_scalar::<f32>()? as f64;
-        let entropy_val = entropy_per_token.to_scalar::<f32>()? as f64;
-
-        // Total loss: cross-entropy - entropy_weight * entropy
-        // (Subtract because we want to MAXIMIZE entropy, which minimizes -entropy)
-        let loss = (ce_loss - (&entropy_per_token * entropy_weight)?)?;
+        let log_probs_for_smoothing = candle_nn::ops::log_softmax(&logits_flat, 1)?;
+        let uniform_loss = log_probs_for_smoothing.mean_all()?.neg()?;
+        let ce_scaled = (ce_loss * (1.0 - label_smooth_eps))?;
+        let uniform_scaled = (uniform_loss * label_smooth_eps)?;
+        let loss = (ce_scaled + uniform_scaled)?;
 
         // Backward
         let grads = loss.backward()?;
@@ -333,8 +321,6 @@ impl Trainer {
 
         Ok(StepStats {
             loss: loss_val,
-            ce_loss: ce_loss_val,
-            entropy: entropy_val,
             grad_norm,
             lr: self.base_lr_muon * mult,
             tokens_per_sec,
@@ -379,8 +365,6 @@ impl Trainer {
     ) -> Result<()> {
         let train_start = Instant::now();
         let mut running_loss = 0.0;
-        let mut running_ce_loss = 0.0;
-        let mut running_entropy = 0.0;
         let mut running_gnorm = 0.0;
         let mut running_toks = 0.0;
         let mut interval_steps = 0usize;
@@ -401,8 +385,6 @@ impl Trainer {
                 let stats = self.train_step(&input_ids, &target_ids)?;
 
                 running_loss += stats.loss;
-                running_ce_loss += stats.ce_loss;
-                running_entropy += stats.entropy;
                 running_gnorm += stats.grad_norm;
                 running_toks += stats.tokens_per_sec;
                 interval_steps += 1;
@@ -410,26 +392,20 @@ impl Trainer {
 
                 if self.global_step.is_multiple_of(log_interval) && interval_steps > 0 {
                     let avg_loss = running_loss / interval_steps as f64;
-                    let avg_ce_loss = running_ce_loss / interval_steps as f64;
-                    let avg_entropy = running_entropy / interval_steps as f64;
                     let avg_gnorm = running_gnorm / interval_steps as f64;
                     let avg_toks = running_toks / interval_steps as f64;
                     let elapsed = train_start.elapsed().as_secs_f64();
                     println!(
-                        "[{:>6}/{:<6}] loss={:.4} ce={:.4} H={:.3} lr={:.6} gnorm={:.2} tok/s={:.0} elapsed={:.0}s",
+                        "[{:>6}/{:<6}] loss={:.4} lr={:.6} gnorm={:.2} tok/s={:.0} elapsed={:.0}s",
                         self.global_step,
                         self.config.total_steps,
                         avg_loss,
-                        avg_ce_loss,
-                        avg_entropy,
                         stats.lr,
                         avg_gnorm,
                         avg_toks,
                         elapsed,
                     );
                     running_loss = 0.0;
-                    running_ce_loss = 0.0;
-                    running_entropy = 0.0;
                     running_gnorm = 0.0;
                     running_toks = 0.0;
                     interval_steps = 0;
