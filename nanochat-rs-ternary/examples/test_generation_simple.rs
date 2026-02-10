@@ -21,8 +21,8 @@ fn main() -> Result<()> {
     println!("Device: {:?}\n", device);
 
     // Load checkpoint
-    println!("Loading checkpoint...");
-    let (varmap, config, step, _) = load_checkpoint("checkpoints/production-supervised/step_15500", &device)
+    println!("Loading checkpoint: checkpoints/stable-v2/final");
+    let (varmap, config, step, _) = load_checkpoint("checkpoints/stable-v2/final", &device)
         .map_err(|e| anyhow::anyhow!("Failed to load checkpoint: {}", e))?;
     println!("✓ Loaded (step {})\n", step);
 
