@@ -20,11 +20,12 @@ CHECKPOINT_DIR="checkpoints/stable-v2"
 DATA_PATH="data/rust_tokens.bin"
 DEVICE="cuda:0"
 BATCH_SIZE=1  # Reduced from 2 to avoid OOM
+SEQ_LEN=256  # Reduced from 512 to avoid memory accumulation
 TOTAL_STEPS=10000  # Accelerated: 30K → 10K steps
 WARMUP_STEPS=1000  # Accelerated: 5K → 1K warmup
 LR=0.002  # Slightly higher for faster convergence
 GRAD_CLIP=0.5
-CHECKPOINT_INTERVAL=1000
+CHECKPOINT_INTERVAL=500  # Save more frequently
 LOG_INTERVAL=100
 
 mkdir -p "$CHECKPOINT_DIR"
@@ -49,6 +50,7 @@ cargo run --release --example train_rust_maxgpu --features nanochat-train/cuda -
     --checkpoint-dir "$CHECKPOINT_DIR" \
     --device "$DEVICE" \
     --batch-size $BATCH_SIZE \
+    --seq-len $SEQ_LEN \
     --total-steps $TOTAL_STEPS \
     --warmup-steps $WARMUP_STEPS \
     --lr $LR \

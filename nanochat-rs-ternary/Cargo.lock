@@ -1734,17 +1734,24 @@ name = "nanochat-eval"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "candle-core",
+ "candle-nn",
  "chrono",
  "clap",
  "indicatif",
  "nanochat-model",
+ "nanochat-rl",
  "nanochat-serve",
+ "nanochat-train",
+ "rand 0.8.5",
  "rayon",
  "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "syn",
  "tempfile",
+ "tokenizers",
  "tokio",
 ]
 

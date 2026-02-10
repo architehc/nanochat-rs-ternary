@@ -1,0 +1,217 @@
+{
+  "checkpoint": "checkpoints/stable-v2/step_9000",
+  "timestamp": "2026-02-09T23:20:06.644193951-05:00",
+  "total_samples": 16,
+  "compile_success_rate": 0.0,
+  "compile_errors": [
+    "error: this file contains an unclosed delimiter",
+    "error: this file contains an unclosed delimiter",
+    "error: this file contains an unclosed delimiter",
+    "error: unexpected closing delimiter: `}`",
+    "error: unexpected closing delimiter: `}`",
+    "error: this file contains an unclosed delimiter",
+    "error: this file contains an unclosed delimiter",
+    "error: this file contains an unclosed delimiter",
+    "error: this file contains an unclosed delimiter",
+    "error: this file contains an unclosed delimiter"
+  ],
+  "avg_lines": 1.0,
+  "avg_functions": 0.0,
+  "avg_complexity": 1.0625,
+  "avg_generation_time_ms": 34621.8125,
+  "tokens_per_second": 2.88835253786901,
+  "samples_by_prompt": [
+    {
+      "prompt": "fn factorial(n: u64) -> u64 {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "fn factorial(n: u64) -> u64 { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { "
+      ]
+    },
+    {
+      "prompt": "fn is_palindrome(s: &str) -> bool {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "fn is_palindrome(s: &str) -> bool { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { "
+      ]
+    },
+    {
+      "prompt": "fn reverse_string(s: String) -> String {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "fn reverse_string(s: String) -> String { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { {"
+      ]
+    },
+    {
+      "prompt": "struct Point { x: f64, y: f64 }",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: unexpected closing delimiter: `}`"
+      ],
+      "sample_outputs": [
+        "struct Point { x: f64, y: f64 } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } "
+      ]
+    },
+    {
+      "prompt": "enum Color { Red, Green, Blue }",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: unexpected closing delimiter: `}`"
+      ],
+      "sample_outputs": [
+        "enum Color { Red, Green, Blue } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } "
+      ]
+    },
+    {
+      "prompt": "impl Point {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "impl Point { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { {"
+      ]
+    },
+    {
+      "prompt": "fn find_duplicates(arr: &[i32]) -> Vec<i32> {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "fn find_duplicates(arr: &[i32]) -> Vec<i32> { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { "
+      ]
+    },
+    {
+      "prompt": "fn merge_sorted(a: Vec<i32>, b: Vec<i32>) -> Vec<i32> {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "fn merge_sorted(a: Vec<i32>, b: Vec<i32>) -> Vec<i32> { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { "
+      ]
+    },
+    {
+      "prompt": "fn read_file(path: &str) -> Result<String, std::io::Error> {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "fn read_file(path: &str) -> Result<String, std::io::Error> { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { {"
+      ]
+    },
+    {
+      "prompt": "fn parse_int(s: &str) -> Option<i32> {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "fn parse_int(s: &str) -> Option<i32> { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { {"
+      ]
+    },
+    {
+      "prompt": "fn sum_squares(nums: &[i32]) -> i32 {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "fn sum_squares(nums: &[i32]) -> i32 { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { "
+      ]
+    },
+    {
+      "prompt": "fn filter_even(nums: Vec<i32>) -> Vec<i32> {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "fn filter_even(nums: Vec<i32>) -> Vec<i32> { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { {"
+      ]
+    },
+    {
+      "prompt": "async fn fetch_data(url: &str) -> Result<String, Box<dyn std::error::Error>> {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "async fn fetch_data(url: &str) -> Result<String, Box<dyn std::error::Error>> { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { {"
+      ]
+    },
+    {
+      "prompt": "trait Parser {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "trait Parser { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { {"
+      ]
+    },
+    {
+      "prompt": "impl ToString for Point {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "impl ToString for Point { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { "
+      ]
+    },
+    {
+      "prompt": "macro_rules! vec_of_strings {",
+      "n_samples": 1,
+      "compile_success": 0,
+      "avg_lines": 1.0,
+      "common_errors": [
+        "error: this file contains an unclosed delimiter"
+      ],
+      "sample_outputs": [
+        "macro_rules! vec_of_strings { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { { "
+      ]
+    }
+  ]
+}
