@@ -1,0 +1,8 @@
+# Large repository clones (multi-GB)
+rust-repos/
+
+# Large text corpus files
+rust_corpus*.txt
+
+# Large tokenized binary files (>100MB)
+rust_tokens_large.bin

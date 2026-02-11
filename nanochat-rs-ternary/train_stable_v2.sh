@@ -5,27 +5,32 @@
 set -e
 
 echo "═══════════════════════════════════════════════════════════"
-echo "  Stable Training v2 - Conservative Hyperparameters"
+echo "  Stable Training v3 - Large Dataset (68M tokens)"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
-echo "Key Changes from v1 (which collapsed):"
-echo "  • Learning rate: 0.02 → 0.001 (20x lower)"
-echo "  • Warmup: 2000 → 5000 steps (2.5x longer)"
-echo "  • Total steps: 15000 → 30000 (2x longer)"
-echo "  • Grad clip: 1.0 → 0.5 (2x stricter)"
-echo "  • Batch size: 2 (same, limited by GPU)"
+echo "Dataset Upgrade:"
+echo "  • Training data: 4.2M → 68M tokens (16.2x larger!)"
+echo "  • Repositories: 3 → 13 (rust-lang, servo, cargo, tikv, etc.)"
+echo "  • Total steps: 10K → 20K (2x longer for larger dataset)"
+echo "  • Label smoothing: eps=0.1 (prevents overconfidence)"
+echo ""
+echo "Why this matters:"
+echo "  Previous run (small dataset) showed severe overfitting:"
+echo "    - Loss: 3.0 (good on training)"
+echo "    - Generation: Repeats tokens (bad)"
+echo "  Larger dataset should provide better generalization"
 echo ""
 
 CHECKPOINT_DIR="checkpoints/stable-v2"
-DATA_PATH="data/rust_tokens.bin"
+DATA_PATH="data/rust_tokens.bin"  # Now points to large dataset (68M tokens)
 DEVICE="cuda:0"
-BATCH_SIZE=1  # Reduced from 2 to avoid OOM
-SEQ_LEN=256  # Reduced from 512 to avoid memory accumulation
-TOTAL_STEPS=10000  # Accelerated: 30K → 10K steps
-WARMUP_STEPS=1000  # Accelerated: 5K → 1K warmup
-LR=0.002  # Slightly higher for faster convergence
+BATCH_SIZE=1
+SEQ_LEN=256
+TOTAL_STEPS=20000  # 2x longer for 16x more data
+WARMUP_STEPS=2000  # Proportionally longer warmup
+LR=0.002
 GRAD_CLIP=0.5
-CHECKPOINT_INTERVAL=500  # Save more frequently
+CHECKPOINT_INTERVAL=500
 LOG_INTERVAL=100
 
 mkdir -p "$CHECKPOINT_DIR"
