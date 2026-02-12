@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     println!("Device: {:?}\n", device);
 
     // Load checkpoint
-    let checkpoint_path = "checkpoints/stable-v2/step_30000";
+    let checkpoint_path = "checkpoints/stable-v2/step_20000";
     println!("Loading checkpoint: {}", checkpoint_path);
     let (varmap, config, step, _) = load_checkpoint(checkpoint_path, &device)
         .map_err(|e| anyhow::anyhow!("Failed to load checkpoint: {}", e))?;

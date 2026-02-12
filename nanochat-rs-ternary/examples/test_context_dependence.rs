@@ -16,7 +16,7 @@ fn main() -> Result<()> {
 
     // Load model
     let device = Device::Cpu;
-    let checkpoint_path = "checkpoints/stable-v2/step_30000";
+    let checkpoint_path = "checkpoints/stable-v2/step_20000";
     let (varmap, config, step, _) = load_checkpoint(checkpoint_path, &device)
         .map_err(|e| anyhow::anyhow!("Load checkpoint error: {}", e))?;
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);

@@ -31,7 +31,10 @@ pub struct MhcLiteN2Train {
 impl MhcLiteN2Train {
     /// Identity-like initialization (alpha_logit=5.0 -> sigmoid~1.0).
     pub fn new(vb: VarBuilder) -> Result<Self> {
-        let alpha_logit = vb.get_with_hints(1, "alpha_logit", candle_nn::Init::Const(5.0))?;
+        // FIXED: alpha_logit = 0.0 (not 5.0) to prevent identity bypass.
+        // With alpha_logit=5.0, alpha=sigmoid(5.0)≈0.993, making H_res≈identity.
+        // With alpha_logit=0.0, alpha=sigmoid(0.0)=0.5, giving balanced mixing.
+        let alpha_logit = vb.get_with_hints(1, "alpha_logit", candle_nn::Init::Const(0.0))?;
         let pre_logits = vb.get_with_hints(2, "pre_logits", candle_nn::Init::Const(0.0))?;
         let pre_bias = vb.get_with_hints(2, "pre_bias", candle_nn::Init::Const(0.5))?;
         let post_logits = vb.get_with_hints(2, "post_logits", candle_nn::Init::Const(0.0))?;
@@ -158,8 +161,8 @@ mod tests {
         let mhc = MhcLiteN2Train::new(vb.pp("test"))?;
 
         let (alpha, one_m_alpha) = mhc.h_res()?;
-        // With alpha_logit=5.0, sigmoid(5.0)≈0.9933 -> nearly identity
-        assert!(alpha > 0.99, "Alpha should be ~1.0, got {}", alpha);
+        // FIXED: With alpha_logit=0.0, sigmoid(0.0)=0.5 -> balanced mixing
+        assert!((alpha - 0.5).abs() < 1e-5, "Alpha should be 0.5, got {}", alpha);
         assert!((alpha + one_m_alpha - 1.0).abs() < 1e-6, "Should sum to 1.0");
         Ok(())
     }
@@ -223,7 +226,8 @@ mod tests {
         let mhc = MhcLiteN2Train::new(vb.pp("test"))?;
 
         let inf = mhc.to_inference_values()?;
-        assert!((inf.alpha_logit - 5.0).abs() < 1e-5, "Alpha logit should be 5.0");
+        // FIXED: Alpha logit should be 0.0 for balanced mixing
+        assert!((inf.alpha_logit - 0.0).abs() < 1e-5, "Alpha logit should be 0.0, got {}", inf.alpha_logit);
         assert_eq!(inf.pre_bias, [0.5, 0.5]);
         Ok(())
     }
