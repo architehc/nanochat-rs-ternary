@@ -24,7 +24,7 @@ pub fn wsd_schedule(
     }
 
     let decay_steps = total_steps.saturating_sub(decay_start).max(1);
-    let progress = (step - decay_start) as f64 / decay_steps as f64;
+    let progress = ((step - decay_start) as f64 / decay_steps as f64).min(1.0);  // Clamp at 1.0
     min_lr_frac + 0.5 * (1.0 - min_lr_frac) * (1.0 + (std::f64::consts::PI * progress).cos())
 }
 

@@ -456,6 +456,18 @@ impl Trainer {
                         }
                     }
                 }
+
+                // Check if we've reached total_steps
+                if self.global_step >= self.config.total_steps {
+                    println!("\n✓ Reached total_steps={}, stopping training", self.config.total_steps);
+                    break;
+                }
+            }
+
+            // Check again after epoch
+            if self.global_step >= self.config.total_steps {
+                println!("✓ Training complete at step {}", self.global_step);
+                break;
             }
 
             let epoch_elapsed = epoch_start.elapsed().as_secs_f64();

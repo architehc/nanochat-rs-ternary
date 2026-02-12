@@ -154,8 +154,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.lr = args.lr as f64;
     config.grad_clip = args.grad_clip as f64;
 
+    // Calculate actual param count
+    let param_count = {
+        let embed = config.vocab_size * config.dim;
+        let ffn_dim = (config.dim as f32 * config.ffn_mult) as usize;
+        let per_layer = 4 * config.dim * config.dim  // Q,K,V,O
+            + 3 * config.dim * ffn_dim;  // gate, up, down
+        let total = embed + config.n_layers * per_layer + config.dim;  // +final norm
+        total / 1_000_000  // in millions
+    };
+
     println!("Model Configuration:");
-    println!("  Model: nano-125M (127M params)");
+    println!("  Model: d20 (~{}M params)", param_count);
     println!("  Device: {:?}", device);
     println!("  Dimension: {}", config.dim);
     println!("  Layers: {}", config.n_layers);
