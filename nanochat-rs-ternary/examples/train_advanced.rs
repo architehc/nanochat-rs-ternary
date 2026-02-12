@@ -172,14 +172,6 @@ fn main() -> candle_core::Result<()> {
     let mut best_eval_loss = best_loss;
 
     // Progress bar
-    let pb = ProgressBar::new(args.total_steps as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")
-            .unwrap()
-            .progress_chars("=>-"),
-    );
-
     // Training loop with gradient accumulation
     while global_step < args.total_steps {
         let step_start = Instant::now();
@@ -216,8 +208,6 @@ fn main() -> candle_core::Result<()> {
                 global_step, args.total_steps, accumulated_loss, lr, grad_norm, tokens_per_sec, elapsed
             );
 
-            pb.set_position(global_step as u64);
-            pb.set_message(format!("loss={:.4}", accumulated_loss));
         }
 
         // Evaluation
@@ -256,7 +246,7 @@ fn main() -> candle_core::Result<()> {
         }
     }
 
-    pb.finish_with_message("Training complete!");
+    println!("Training complete!\n");
 
     println!("\n═══════════════════════════════════════════════════════════");
     println!("Training Complete!");
