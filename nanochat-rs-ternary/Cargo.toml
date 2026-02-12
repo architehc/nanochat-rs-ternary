@@ -77,3 +77,7 @@ path = "examples/test_layer_outputs.rs"
 [[example]]
 name = "test_loss_alignment"
 path = "examples/test_loss_alignment.rs"
+
+[[example]]
+name = "train_diagnostic"
+path = "examples/train_diagnostic.rs"
