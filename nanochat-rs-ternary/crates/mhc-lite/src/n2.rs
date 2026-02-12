@@ -105,8 +105,13 @@ impl MhcLiteN2 {
         out
     }
 
-    /// Apply residual update:
-    /// x_out = H_res @ x + H_post^T * layer_output
+    /// Apply residual update with training-matching semantics.
+    ///
+    /// FIXED: Apply residual to each stream FIRST, then mix streams.
+    /// Old formula: x_out = H_res @ x + H_post^T * layer_output
+    /// New formula: x_out = H_res @ (x + H_post^T * layer_output)
+    ///
+    /// This matches the training code and prevents identity bypass.
     ///
     /// x:            [batch, 2*C]  (two streams)
     /// layer_output: [batch, C]    (single stream from layer F)
@@ -126,9 +131,13 @@ impl MhcLiteN2 {
                 .split_at_mut(dim_c);
 
             for i in 0..dim_c {
-                // Residual mixing
-                o0[i] = h_res[0][0] * s0[i] + h_res[0][1] * s1[i] + h_post[0] * ly[i];
-                o1[i] = h_res[1][0] * s0[i] + h_res[1][1] * s1[i] + h_post[1] * ly[i];
+                // FIXED: Apply residual to each stream FIRST
+                let s0_with_res = s0[i] + h_post[0] * ly[i];
+                let s1_with_res = s1[i] + h_post[1] * ly[i];
+
+                // THEN mix streams with H_res
+                o0[i] = h_res[0][0] * s0_with_res + h_res[0][1] * s1_with_res;
+                o1[i] = h_res[1][0] * s0_with_res + h_res[1][1] * s1_with_res;
             }
         }
         out

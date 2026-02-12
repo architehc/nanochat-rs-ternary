@@ -151,6 +151,24 @@ fn run_roundtrip(cfg: &TrainConfig) {
         "  correlation={:.4} (positive means same direction)",
         correlation
     );
+
+    // CRITICAL: Assert correlation is positive and reasonably strong.
+    // Negative correlation means train/inference are completely misaligned!
+    assert!(
+        correlation > 0.0,
+        "CRITICAL: Negative correlation ({:.4}) indicates train/inference mismatch!",
+        correlation
+    );
+
+    // For random weights, correlation should still be weakly positive (>0.1)
+    // For trained weights, correlation should be strong (>0.8)
+    assert!(
+        correlation > 0.05,
+        "Correlation too weak ({:.4}), possible train/inference divergence",
+        correlation
+    );
+
+    println!("  ✓ Correlation check passed (>{:.2})", 0.05);
 }
 
 #[test]
