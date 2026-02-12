@@ -134,8 +134,8 @@ pub struct Trainer {
     pub config: TrainConfig,
     pub device: Device,
     pub global_step: usize,
-    base_lr_muon: f64,
-    base_lr_lion: f64,
+    pub base_lr_muon: f64,   // Made public for CLI overrides
+    pub base_lr_lion: f64,   // Made public for CLI overrides
 }
 
 impl Trainer {

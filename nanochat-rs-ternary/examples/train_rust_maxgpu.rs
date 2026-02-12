@@ -211,6 +211,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut t = Trainer::from_checkpoint(&checkpoint_path, device)?;
         t.global_step = resume_step;
         println!("✓ Trainer loaded from checkpoint (step {})\n", resume_step);
+
+        // Apply CLI overrides to checkpoint config
+        let mut overrides = Vec::new();
+        if t.config.total_steps != args.total_steps {
+            overrides.push(format!("total_steps: {} -> {}", t.config.total_steps, args.total_steps));
+            t.config.total_steps = args.total_steps;
+        }
+        if t.config.lr != args.lr as f64 {
+            overrides.push(format!("lr: {:.6} -> {:.6}", t.config.lr, args.lr));
+            t.config.lr = args.lr as f64;
+            t.base_lr_muon = args.lr as f64;
+        }
+        if t.config.grad_clip != args.grad_clip as f64 {
+            overrides.push(format!("grad_clip: {:.2} -> {:.2}", t.config.grad_clip, args.grad_clip));
+            t.config.grad_clip = args.grad_clip as f64;
+        }
+        if t.config.warmup_steps != args.warmup_steps {
+            overrides.push(format!("warmup_steps: {} -> {}", t.config.warmup_steps, args.warmup_steps));
+            t.config.warmup_steps = args.warmup_steps;
+        }
+        if t.config.batch_size != args.batch_size {
+            overrides.push(format!("batch_size: {} -> {}", t.config.batch_size, args.batch_size));
+            t.config.batch_size = args.batch_size;
+        }
+        if t.config.max_seq_len != args.seq_len {
+            overrides.push(format!("max_seq_len: {} -> {}", t.config.max_seq_len, args.seq_len));
+            t.config.max_seq_len = args.seq_len;
+        }
+
+        if !overrides.is_empty() {
+            println!("⚠ CLI overrides applied to checkpoint config:");
+            for override_msg in overrides {
+                println!("  • {}", override_msg);
+            }
+            println!();
+        }
+
         (t, true)
     } else {
         (Trainer::new(config, device)?, false)
