@@ -88,25 +88,36 @@ impl MhcLiteN2Train {
 
     /// Apply residual: update expanded state with sub-layer output.
     /// x_exp: [batch, seq, 2*dim], layer_out: [batch, seq, dim]
+    ///
+    /// FIXED: Apply standard residual FIRST, then mix streams.
+    /// This prevents the degenerate solution where computation is bypassed.
     pub fn apply(&self, x_exp: &Tensor, layer_out: &Tensor, dim: usize) -> Result<Tensor> {
         let last = x_exp.dims().len() - 1;
         let s0 = x_exp.narrow(last, 0, dim)?;
         let s1 = x_exp.narrow(last, dim, dim)?;
 
+        // FIXED: Apply h_post projection to layer output FIRST
+        // This ensures the computation actually affects the output
+        let h_post = self.h_post()?;
+        let p0 = h_post.get(0)?;
+        let p1 = h_post.get(1)?;
+
+        // Standard residual: x = x + layer_out
+        // But distribute the output across streams using h_post
+        let s0_with_residual = (s0 + layer_out.broadcast_mul(&p0)?)?;
+        let s1_with_residual = (s1 + layer_out.broadcast_mul(&p1)?)?;
+
+        // THEN mix streams with H_res
+        // This allows cross-stream communication without bypassing computation
         let alpha_t = sigmoid(&self.alpha_logit)?;
         let alpha = &alpha_t;
         let one_minus_alpha = (1.0 - &alpha_t)?;
 
         // H_res: [[alpha, 1-alpha], [1-alpha, alpha]]
-        let new_s0 = (s0.broadcast_mul(alpha)? + s1.broadcast_mul(&one_minus_alpha)?)?;
-        let new_s1 = (s0.broadcast_mul(&one_minus_alpha)? + s1.broadcast_mul(alpha)?)?;
-
-        // H_post scaled layer output
-        let h_post = self.h_post()?;
-        let p0 = h_post.get(0)?;
-        let p1 = h_post.get(1)?;
-        let out_s0 = (new_s0 + layer_out.broadcast_mul(&p0)?)?;
-        let out_s1 = (new_s1 + layer_out.broadcast_mul(&p1)?)?;
+        let out_s0 = (s0_with_residual.broadcast_mul(alpha)? +
+                      s1_with_residual.broadcast_mul(&one_minus_alpha)?)?;
+        let out_s1 = (s0_with_residual.broadcast_mul(&one_minus_alpha)? +
+                      s1_with_residual.broadcast_mul(alpha)?)?;
 
         Tensor::cat(&[&out_s0, &out_s1], last)
     }
