@@ -8,22 +8,15 @@ use nanochat_model::model::NanochatModel;
 use nanochat_serve::engine::{InferenceEngine, SamplingParams};
 
 fn make_test_config() -> ModelConfig {
-    ModelConfig {
-        dim: 128,
-        n_layers: 4,
-        n_heads: 4,
-        n_kv_heads: 4,
-        ffn_mult: 2.667,
-        vocab_size: 256,
-        max_seq_len: 64,
-        group_size: 128,
-        mhc_n_streams: 2,
-        rope_theta: 10000.0,
-        n_experts: None,
-        n_active_experts: None,
-        deltanet_ratio: None,
-        weight_tied: false,
-    }
+    // Use d20 config and modify for smaller test
+    let mut config = ModelConfig::d20();
+    config.dim = 128;
+    config.n_layers = 4;
+    config.n_heads = 4;
+    config.n_kv_heads = 4;
+    config.vocab_size = 256;
+    config.max_seq_len = 64;
+    config
 }
 
 // ───────────────────── Forward Pass Tests ─────────────────────

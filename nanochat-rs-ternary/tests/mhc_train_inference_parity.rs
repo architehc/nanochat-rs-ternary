@@ -93,21 +93,17 @@ fn test_mhc_apply_parity() -> Result<()> {
 fn test_mhc_with_different_params() -> Result<()> {
     // Test with non-default parameters to ensure parity holds generally
     let device = Device::Cpu;
+
+    // Create mHC with custom initialization to test parity with non-default params
     let varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-    let mhc_train = MhcLiteN2Train::new(vb.pp("test"))?;
-
-    // Note: Can't easily modify Var parameters after creation, so we create
-    // a new one with different initial values instead
-    let varmap2 = VarMap::new();
-    let vb2 = VarBuilder::from_varmap(&varmap2, DType::F32, &device);
 
     // Manually create with custom init
-    let alpha_logit = vb2.get_with_hints(1, "alpha_logit", candle_nn::Init::Const(1.5))?;
-    let pre_logits = vb2.get_with_hints(2, "pre_logits", candle_nn::Init::Randn { mean: 0.0, stdev: 0.5 })?;
-    let pre_bias = vb2.get_with_hints(2, "pre_bias", candle_nn::Init::Const(0.5))?;
-    let post_logits = vb2.get_with_hints(2, "post_logits", candle_nn::Init::Randn { mean: 0.0, stdev: 0.3 })?;
-    let post_bias = vb2.get_with_hints(2, "post_bias", candle_nn::Init::Const(0.5))?;
+    let alpha_logit = vb.get_with_hints(1, "alpha_logit", candle_nn::Init::Const(1.5))?;
+    let pre_logits = vb.get_with_hints(2, "pre_logits", candle_nn::Init::Randn { mean: 0.0, stdev: 0.5 })?;
+    let pre_bias = vb.get_with_hints(2, "pre_bias", candle_nn::Init::Const(0.5))?;
+    let post_logits = vb.get_with_hints(2, "post_logits", candle_nn::Init::Randn { mean: 0.0, stdev: 0.3 })?;
+    let post_bias = vb.get_with_hints(2, "post_bias", candle_nn::Init::Const(0.5))?;
 
     let mhc_train = MhcLiteN2Train {
         alpha_logit,

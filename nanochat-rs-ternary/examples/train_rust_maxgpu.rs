@@ -1,13 +1,14 @@
-//! Train nano-125M on Real Rust Code - MAX GPU UTILIZATION (24GB)
+//! Train Nanochat Model on Real Rust Code - MAX GPU UTILIZATION
 //!
-//! Optimized for RTX 4090 24GB:
-//! - nano-125M model (127M params)
+//! Optimized for high-end GPUs (24GB+):
+//! - Default: d20 config (~17M params)
+//! - Supports larger configs via TrainConfig
 //! - Large batch size for maximum throughput
-//! - Real Rust code dataset (Tokio, Serde, Clap)
+//! - Real Rust code dataset
 //! - Target: Coherent Rust code completion
 //!
-//! Dataset: 4.2M tokens from production Rust codebases
-//! Expected training time: 3-7 hours for 30K steps
+//! Dataset: 68M tokens from production Rust codebases (13 repos)
+//! Expected training time: 3-7 hours for 20K steps (d20)
 
 use nanochat_train::{
     config::TrainConfig,
@@ -20,7 +21,7 @@ use std::path::Path;
 
 #[derive(Parser, Debug)]
 #[command(name = "train_rust_maxgpu")]
-#[command(about = "Train nano-125M on Real Rust Code - MAX GPU! 🦀")]
+#[command(about = "Train Nanochat on Real Rust Code - MAX GPU! 🦀")]
 struct Args {
     /// Path to tokenized Rust data
     #[arg(long, default_value = "data/rust_tokens.bin")]
@@ -114,8 +115,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     println!("\n═══════════════════════════════════════════════════════════");
-    println!("  Training nano-125M on Real Rust Code 🦀");
-    println!("  MAX GPU UTILIZATION (24GB) 🚀");
+    println!("  Training Nanochat on Real Rust Code 🦀");
+    println!("  MAX GPU UTILIZATION 🚀");
     println!("═══════════════════════════════════════════════════════════\n");
 
     // Device setup
@@ -177,13 +178,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Learning rate: {}", args.lr);
     println!("  Gradient clip: {}\n", args.grad_clip);
 
-    // Memory estimate
-    let model_params_gb = 127.0 * 4.0 / 1024.0;
-    let batch_mem_gb = (args.batch_size * args.seq_len * 768 * 4 * 12) as f64 / 1024.0 / 1024.0 / 1024.0;
+    // Memory estimate based on actual config
+    let model_params_gb = param_count as f64 * 4.0 / 1024.0;  // FP32 in GB
+    let batch_mem_gb = (args.batch_size * args.seq_len * config.dim * 4 * 12) as f64 / 1024.0 / 1024.0 / 1024.0;
     println!("Estimated GPU Memory Usage:");
     println!("  Model + grads + optimizer: ~{:.1} GB", model_params_gb * 4.5);
     println!("  Activations (batch): ~{:.1} GB", batch_mem_gb);
-    println!("  Total estimated: ~{:.1} GB / 24 GB\n", model_params_gb * 4.5 + batch_mem_gb);
+    println!("  Total estimated: ~{:.1} GB\n", model_params_gb * 4.5 + batch_mem_gb);
 
     // Create trainer
     println!("═══════════════════════════════════════════════════════════");
@@ -279,13 +280,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Next steps:");
     println!("1. Export to GGUF:");
     println!("   cargo run --release -p nanochat-train --example export_checkpoint -- \\");
-    println!("     --checkpoint {}/step_30000 \\", args.checkpoint_dir);
-    println!("     --output models/rust-nano-125m.gguf\n");
+    println!("     --checkpoint {}/step_{} \\", args.checkpoint_dir, args.total_steps);
+    println!("     --output models/rust-d20.gguf\n");
 
     println!("2. Test Rust code completion:");
     println!("   cargo run --release -p nanochat-serve -- \\");
-    println!("     --model models/rust-nano-125m.gguf \\");
-    println!("     --mhc models/rust-nano-125m.mhc \\");
+    println!("     --model models/rust-d20.gguf \\");
+    println!("     --mhc models/rust-d20.mhc \\");
     println!("     --tokenizer models/gpt2-tokenizer.json \\");
     println!("     --port 8085\n");
 
