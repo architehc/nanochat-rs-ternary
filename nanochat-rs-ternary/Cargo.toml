@@ -18,6 +18,7 @@ candle-nn = "0.9"
 name = "nanochat-rs-ternary"
 version = "0.1.0"
 edition = "2021"
+autoexamples = false  # Explicitly list working examples only
 
 [dependencies]
 ternary-core = { path = "crates/ternary-core" }
@@ -51,3 +52,28 @@ harness = false
 [[bench]]
 name = "mhc_overhead"
 harness = false
+
+# Working examples (experimental examples excluded)
+[[example]]
+name = "train_rust_maxgpu"
+path = "examples/train_rust_maxgpu.rs"
+
+[[example]]
+name = "debug_generation"
+path = "examples/debug_generation.rs"
+
+[[example]]
+name = "test_context_dependence"
+path = "examples/test_context_dependence.rs"
+
+[[example]]
+name = "test_data_shift"
+path = "examples/test_data_shift.rs"
+
+[[example]]
+name = "test_layer_outputs"
+path = "examples/test_layer_outputs.rs"
+
+[[example]]
+name = "test_loss_alignment"
+path = "examples/test_loss_alignment.rs"

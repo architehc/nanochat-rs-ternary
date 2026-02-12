@@ -9,7 +9,7 @@
 use clap::Parser;
 use nanochat_train::{
     config::TrainConfig,
-    data::SyntheticCodeDataset,
+    data::dataset::SyntheticDataset,
     train::Trainer,
     model::NanochatTrainModel,
     checkpoint,
@@ -18,7 +18,7 @@ use nanochat_train::{
 use candle_core::{Device, DType};
 use candle_nn::VarBuilder;
 use std::time::Instant;
-use indicatif::{ProgressBar, ProgressStyle};
+// Note: indicatif removed - use simple logging instead
 
 #[derive(Parser, Debug)]
 #[command(name = "train_advanced")]
@@ -157,8 +157,8 @@ fn main() -> candle_core::Result<()> {
 
     // Create datasets (train + eval)
     println!("Creating synthetic code datasets...");
-    let train_dataset = SyntheticCodeDataset::new(80000, args.seq_len);
-    let eval_dataset = SyntheticCodeDataset::new(1000, args.seq_len); // Small eval set
+    let train_dataset = SyntheticDataset::new(80000, args.seq_len);
+    let eval_dataset = SyntheticDataset::new(1000, args.seq_len); // Small eval set
     println!("✓ Train dataset: {} samples", train_dataset.len());
     println!("✓ Eval dataset: {} samples\n", eval_dataset.len());
 
@@ -275,7 +275,7 @@ fn main() -> candle_core::Result<()> {
 /// Evaluate model on validation set
 fn evaluate(
     model: &NanochatTrainModel,
-    dataset: &SyntheticCodeDataset,
+    dataset: &SyntheticDataset,
     batch_size: usize,
 ) -> candle_core::Result<f32> {
     let mut total_loss = 0.0f32;
