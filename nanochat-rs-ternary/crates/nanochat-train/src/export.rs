@@ -34,6 +34,20 @@ pub fn export_gguf(
     writer.add_metadata("nanochat.rope_theta", GgufValue::F32(config.rope_theta));
     writer.add_metadata("nanochat.ffn_mult", GgufValue::F32(config.ffn_mult));
 
+    // LoopLM metadata (if present)
+    if let Some(ref loop_cfg) = config.loop_config {
+        writer.add_metadata("nanochat.loop.local_before", GgufValue::U32(loop_cfg.local_before as u32));
+        writer.add_metadata("nanochat.loop.local_after", GgufValue::U32(loop_cfg.local_after as u32));
+        writer.add_metadata("nanochat.loop.loop_count", GgufValue::U32(loop_cfg.loop_count as u32));
+
+        // Adaptive loop config (optional)
+        if let Some(ref adaptive) = loop_cfg.adaptive_loop {
+            writer.add_metadata("nanochat.loop.adaptive.min_loops", GgufValue::U32(adaptive.min_loops as u32));
+            writer.add_metadata("nanochat.loop.adaptive.max_loops", GgufValue::U32(adaptive.max_loops as u32));
+            writer.add_metadata("nanochat.loop.adaptive.perplexity_threshold", GgufValue::F32(adaptive.perplexity_threshold));
+        }
+    }
+
     // Token embedding (FP32 -> stored as f32 in GGUF)
     let embed_data = model.tok_embed.embeddings().flatten_all()?.to_vec1::<f32>()?;
     writer.add_f32_tensor(
@@ -42,9 +56,8 @@ pub fn export_gguf(
         &embed_data,
     );
 
-    // Per-layer weights
-    for (i, block) in model.blocks.iter().enumerate() {
-        let prefix = format!("blocks.{}", i);
+    // Helper to export a single block's weights
+    let export_block = |writer: &mut GgufWriter, prefix: &str, block: &crate::block::TransformerBlockTrain| -> Result<()> {
 
         // Attention ternary weights
         for (name, layer) in [
@@ -96,6 +109,82 @@ pub fn export_gguf(
             &[config.dim as u64],
             &norm_ffn,
         );
+
+        Ok(())
+    };
+
+    // Export blocks based on architecture
+    if let Some(_loop_cfg) = &config.loop_config {
+        // LoopLM architecture: local_before + shared_loop + local_after
+        for (i, block) in model.local_blocks_before.iter().enumerate() {
+            export_block(&mut writer, &format!("local_before.{}", i), block)?;
+        }
+
+        // Export shared loop block
+        if let Some(ref loop_block) = model.shared_loop_block {
+            let prefix = "shared_loop";
+
+            // Attention weights
+            for (name, layer) in [
+                ("attention.wq", &loop_block.wq),
+                ("attention.wk", &loop_block.wk),
+                ("attention.wv", &loop_block.wv),
+                ("attention.wo", &loop_block.wo),
+            ] {
+                let (w_ternary, _scales) = layer.get_ternary_weights()?;
+                let w_flat = w_ternary.flatten_all()?.to_vec1::<f32>()?;
+                let rows = layer.out_features;
+                let cols = layer.in_features;
+
+                let pw = PlanarWeights::from_row_major(&w_flat, rows, cols, config.group_size);
+                writer.add_ternary_tensor(&format!("{}.{}.weight", prefix, name), &pw);
+            }
+
+            // Global gates
+            for (name, layer) in [
+                ("g_qk", &loop_block.g_qk),
+                ("g_ffn", &loop_block.g_ffn),
+            ] {
+                let (w_ternary, _scales) = layer.get_ternary_weights()?;
+                let w_flat = w_ternary.flatten_all()?.to_vec1::<f32>()?;
+                let rows = layer.out_features;
+                let cols = layer.in_features;
+
+                let pw = PlanarWeights::from_row_major(&w_flat, rows, cols, config.group_size);
+                writer.add_ternary_tensor(&format!("{}.{}.weight", prefix, name), &pw);
+            }
+
+            // FFN weights
+            for (name, layer) in [
+                ("ffn.w_gate", &loop_block.w_gate),
+                ("ffn.w_up", &loop_block.w_up),
+                ("ffn.w_down", &loop_block.w_down),
+            ] {
+                let (w_ternary, _scales) = layer.get_ternary_weights()?;
+                let w_flat = w_ternary.flatten_all()?.to_vec1::<f32>()?;
+                let rows = layer.out_features;
+                let cols = layer.in_features;
+
+                let pw = PlanarWeights::from_row_major(&w_flat, rows, cols, config.group_size);
+                writer.add_ternary_tensor(&format!("{}.{}.weight", prefix, name), &pw);
+            }
+
+            // Norms
+            let norm_attn = loop_block.norm_attn.weight().flatten_all()?.to_vec1::<f32>()?;
+            writer.add_f32_tensor(&format!("{}.norm_attn.weight", prefix), &[config.dim as u64], &norm_attn);
+
+            let norm_ffn = loop_block.norm_ffn.weight().flatten_all()?.to_vec1::<f32>()?;
+            writer.add_f32_tensor(&format!("{}.norm_ffn.weight", prefix), &[config.dim as u64], &norm_ffn);
+        }
+
+        for (i, block) in model.local_blocks_after.iter().enumerate() {
+            export_block(&mut writer, &format!("local_after.{}", i), block)?;
+        }
+    } else {
+        // Standard architecture
+        for (i, block) in model.blocks.iter().enumerate() {
+            export_block(&mut writer, &format!("blocks.{}", i), block)?;
+        }
     }
 
     // Final norm
@@ -127,11 +216,38 @@ pub fn export_mhc(
     use mhc_lite::io::{save_mhc_file, MhcLayerParams};
 
     let mut layers = Vec::new();
-    for block in &model.blocks {
-        let attn_mhc = block.mhc_attn.to_inference_values()?;
-        let ffn_mhc = block.mhc_ffn.to_inference_values()?;
-        layers.push(MhcLayerParams::N2(attn_mhc));
-        layers.push(MhcLayerParams::N2(ffn_mhc));
+
+    // Export mHC based on architecture
+    if config.loop_config.is_some() {
+        // LoopLM architecture
+        for block in &model.local_blocks_before {
+            let attn_mhc = block.mhc_attn.to_inference_values()?;
+            let ffn_mhc = block.mhc_ffn.to_inference_values()?;
+            layers.push(MhcLayerParams::N2(attn_mhc));
+            layers.push(MhcLayerParams::N2(ffn_mhc));
+        }
+
+        if let Some(ref loop_block) = model.shared_loop_block {
+            let attn_mhc = loop_block.mhc_attn.to_inference_values()?;
+            let ffn_mhc = loop_block.mhc_ffn.to_inference_values()?;
+            layers.push(MhcLayerParams::N2(attn_mhc));
+            layers.push(MhcLayerParams::N2(ffn_mhc));
+        }
+
+        for block in &model.local_blocks_after {
+            let attn_mhc = block.mhc_attn.to_inference_values()?;
+            let ffn_mhc = block.mhc_ffn.to_inference_values()?;
+            layers.push(MhcLayerParams::N2(attn_mhc));
+            layers.push(MhcLayerParams::N2(ffn_mhc));
+        }
+    } else {
+        // Standard architecture
+        for block in &model.blocks {
+            let attn_mhc = block.mhc_attn.to_inference_values()?;
+            let ffn_mhc = block.mhc_ffn.to_inference_values()?;
+            layers.push(MhcLayerParams::N2(attn_mhc));
+            layers.push(MhcLayerParams::N2(ffn_mhc));
+        }
     }
 
     save_mhc_file(path, config.mhc_n_streams as u32, &layers)
@@ -171,6 +287,7 @@ mod tests {
             mhc_n_streams: 2,
             weight_tied: true,
             rope_theta: 10000.0,
+            loop_config: None,
             lr: 0.02,
             mhc_lr: 1e-4,
             weight_decay: 0.0,
@@ -183,6 +300,9 @@ mod tests {
             ns_steps: 3,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
         }
     }
 

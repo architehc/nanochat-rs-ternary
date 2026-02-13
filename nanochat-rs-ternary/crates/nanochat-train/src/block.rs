@@ -94,6 +94,7 @@ mod tests {
             mhc_n_streams: 2,
             weight_tied: true,
             rope_theta: 10000.0,
+            loop_config: None,
             lr: 0.02,
             mhc_lr: 1e-4,
             weight_decay: 0.0,
@@ -106,6 +107,9 @@ mod tests {
             ns_steps: 5,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
         }
     }
 

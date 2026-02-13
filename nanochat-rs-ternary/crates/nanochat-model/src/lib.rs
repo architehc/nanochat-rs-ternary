@@ -6,5 +6,6 @@ pub mod attention;
 pub mod deltanet;
 pub mod ffn;
 pub mod block;
+pub mod loop_block;
 pub mod model;
 pub mod bench;

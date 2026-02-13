@@ -27,6 +27,7 @@ fn tiny_config(weight_tied: bool) -> TrainConfig {
         mhc_n_streams: 2,
         weight_tied,
         rope_theta: 10000.0,
+        loop_config: None,
         lr: 0.02,
         mhc_lr: 1e-4,
         weight_decay: 0.0,
@@ -39,17 +40,21 @@ fn tiny_config(weight_tied: bool) -> TrainConfig {
         ns_steps: 3,
         muon_momentum: 0.95,
         lion_betas: (0.9, 0.99),
+        distill_teacher: None,
+        distill_kl_weight: 0.0,
+        loop_scale_penalty: 0.0,
     }
 }
 
 /// Run the export-load roundtrip test with given config.
 fn run_roundtrip(cfg: &TrainConfig) {
-    // FIXED: Set deterministic seed for reproducible weights
     use candle_core::DType;
 
     let device = Device::Cpu;
-    // NOTE: Candle uses its own internal RNG for weight initialization.
-    // Random correlation variance is expected and acceptable for this test.
+
+    // NOTE: Candle's CPU backend uses non-deterministic weight initialization.
+    // This test uses correlation metrics (not exact equality) to validate
+    // the export/load pipeline preserves numerical properties.
     let varmap = VarMap::new();
     let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
     let train_model = NanochatTrainModel::new(cfg, vb).unwrap();
@@ -144,40 +149,49 @@ fn run_roundtrip(cfg: &TrainConfig) {
     // packed GEMV in inference introduces significant differences with
     // random weights. Weight-tied models amplify this through the FP32 LM head.
     // After training, errors are much smaller as the model adapts to quantization.
-    // Correlation check: the logit vectors should trend in the same direction.
+
+    // Pearson correlation (normalized to [-1, 1])
     let train_mean = train_last.iter().sum::<f32>() / train_last.len() as f32;
     let inf_mean = inf_logits.iter().sum::<f32>() / inf_logits.len() as f32;
-    let correlation: f32 = train_last
+
+    let cov: f32 = train_last
         .iter()
         .zip(inf_logits.iter())
         .map(|(a, b)| (a - train_mean) * (b - inf_mean))
         .sum();
+
+    let train_std: f32 = train_last
+        .iter()
+        .map(|a| (a - train_mean).powi(2))
+        .sum::<f32>()
+        .sqrt();
+
+    let inf_std: f32 = inf_logits
+        .iter()
+        .map(|b| (b - inf_mean).powi(2))
+        .sum::<f32>()
+        .sqrt();
+
+    let pearson = if train_std > 0.0 && inf_std > 0.0 {
+        cov / (train_std * inf_std)
+    } else {
+        0.0 // Degenerate case: constant logits
+    };
+
     println!(
-        "  correlation={:.4} (positive means same direction)",
-        correlation
+        "  Pearson correlation={:.4} (range: -1 to +1)",
+        pearson
     );
 
-    // Correlation analysis:
-    // - With TRAINED weights: expect strong positive correlation (>0.5)
-    // - With RANDOM weights: correlation is variable due to quantization noise
-    //
-    // This test uses random weights, so we can't enforce strict correlation.
-    // However, EXTREMELY negative correlation (< -100) suggests a systematic
-    // train/inference mismatch (like reversed apply() order).
-    //
-    // For strict parity validation, use test_mhc_train_inference_parity.
-    
-    println!(
-        "  correlation={:.4} (positive means same direction)",
-        correlation
-    );
-
-    // Fail if correlation is EXTREMELY negative (systematic mismatch)
+    // With RANDOM weights, expect weak but not systematically negative correlation.
+    // Strong negative correlation (< -0.5) would indicate a systematic bug like
+    // reversed mHC apply() order or sign flip.
+    // With TRAINED weights, expect strong positive correlation (> 0.8).
     assert!(
-        correlation > -100.0,
-        "Extremely negative correlation ({:.4}) suggests train/inference mismatch. \
-         Expected random variance around 0, not systematic anti-correlation.",
-        correlation
+        pearson > -0.5,
+        "Strong negative Pearson correlation ({:.4}) suggests train/inference mismatch. \
+         With random weights, expected near-zero, not systematic anti-correlation.",
+        pearson
     );
 
     println!("  ✓ Export-load roundtrip completed successfully");

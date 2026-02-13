@@ -71,6 +71,7 @@ fn main() -> Result<()> {
         mhc_n_streams: 2,
         weight_tied: false,    // 🔑 NO WEIGHT TYING!
         rope_theta: 10000.0,
+        loop_config: None,
         lr: 0.001,             // Conservative LR
         mhc_lr: 1e-4,
         weight_decay: 0.0,
@@ -83,6 +84,9 @@ fn main() -> Result<()> {
         ns_steps: 3,
         muon_momentum: 0.95,
         lion_betas: (0.9, 0.99),
+        distill_teacher: None,
+        distill_kl_weight: 0.0,
+        loop_scale_penalty: 0.0,
     };
 
     println!("Model config:");

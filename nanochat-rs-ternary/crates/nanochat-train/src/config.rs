@@ -2,6 +2,42 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Adaptive loop control for inference (LoopLM).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveLoopConfig {
+    /// Minimum number of loop iterations
+    pub min_loops: usize,
+    /// Maximum number of loop iterations
+    pub max_loops: usize,
+    /// Perplexity threshold for early stopping
+    pub perplexity_threshold: f32,
+}
+
+/// LoopLM configuration: recurrent loop mechanics per arXiv:2510.25741.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopConfig {
+    /// Number of local (non-looped) layers before the shared loop block
+    pub local_before: usize,
+    /// Number of local (non-looped) layers after the shared loop block
+    pub local_after: usize,
+    /// Number of shared loop iterations (L in paper)
+    pub loop_count: usize,
+    /// Optional: adaptive loop control for inference (can vary loop_count at runtime)
+    pub adaptive_loop: Option<AdaptiveLoopConfig>,
+}
+
+impl LoopConfig {
+    /// Total effective depth: local_before + loop_count + local_after
+    pub fn effective_depth(&self) -> usize {
+        self.local_before + self.loop_count + self.local_after
+    }
+
+    /// Whether this config uses looping (loop_count > 1)
+    pub fn is_looped(&self) -> bool {
+        self.loop_count > 1
+    }
+}
+
 /// Model + training hyperparameter configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrainConfig {
@@ -18,6 +54,10 @@ pub struct TrainConfig {
     pub weight_tied: bool,
     pub rope_theta: f32,
 
+    /// LoopLM configuration (None = standard fixed-depth transformer)
+    #[serde(default)]
+    pub loop_config: Option<LoopConfig>,
+
     // Training hyperparams
     pub lr: f64,
     pub mhc_lr: f64,
@@ -31,6 +71,17 @@ pub struct TrainConfig {
     pub ns_steps: usize,
     pub muon_momentum: f64,
     pub lion_betas: (f64, f64),
+
+    // Stage-1 distillation hyperparams (LoopLM training)
+    /// Teacher model path for distillation (None = no distillation)
+    #[serde(default)]
+    pub distill_teacher: Option<String>,
+    /// KL divergence weight for distillation loss
+    #[serde(default)]
+    pub distill_kl_weight: f64,
+    /// Loop scale penalty weight (annealed during training)
+    #[serde(default)]
+    pub loop_scale_penalty: f64,
 }
 
 impl TrainConfig {
@@ -80,6 +131,7 @@ impl TrainConfig {
             mhc_n_streams: 2,
             weight_tied: true,
             rope_theta: 10000.0,
+            loop_config: None,
 
             lr: 0.02,
             mhc_lr: 1e-4,
@@ -93,6 +145,9 @@ impl TrainConfig {
             ns_steps: 5,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
         }
     }
 
@@ -110,6 +165,7 @@ impl TrainConfig {
             mhc_n_streams: 2,
             weight_tied: true,
             rope_theta: 10000.0,
+            loop_config: None,
 
             lr: 0.02,
             mhc_lr: 1e-4,
@@ -123,6 +179,52 @@ impl TrainConfig {
             ns_steps: 5,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+        }
+    }
+
+    /// LoopLM variant of d20: 2 local + 4-iteration shared loop = 6 effective layers.
+    pub fn d20_loop() -> Self {
+        Self {
+            dim: 256,
+            n_layers: 3, // 2 local + 1 shared
+            n_heads: 4,
+            n_kv_heads: 4,
+            ffn_mult: 2.6875,
+            vocab_size: 50257,
+            max_seq_len: 256,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: Some(LoopConfig {
+                local_before: 1,
+                local_after: 1,
+                loop_count: 4,
+                adaptive_loop: Some(AdaptiveLoopConfig {
+                    min_loops: 2,
+                    max_loops: 6,
+                    perplexity_threshold: 5.0,
+                }),
+            }),
+
+            lr: 0.02,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 32,
+            grad_accum_steps: 1,
+            warmup_steps: 100,
+            total_steps: 5000,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+            distill_teacher: None, // Can be set to teacher model path
+            distill_kl_weight: 1.0,
+            loop_scale_penalty: 0.1, // Annealed during training
         }
     }
 
@@ -141,6 +243,7 @@ impl TrainConfig {
             mhc_n_streams: 2,
             weight_tied: true,
             rope_theta: 10000.0,
+            loop_config: None,
 
             lr: 0.02,
             mhc_lr: 1e-4,
@@ -154,6 +257,9 @@ impl TrainConfig {
             ns_steps: 3,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
         }
     }
 
@@ -171,6 +277,7 @@ impl TrainConfig {
             mhc_n_streams: 2,
             weight_tied: true,
             rope_theta: 10000.0,
+            loop_config: None,
 
             lr: 0.02,
             mhc_lr: 1e-4,
@@ -184,6 +291,9 @@ impl TrainConfig {
             ns_steps: 5,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
         }
     }
 }

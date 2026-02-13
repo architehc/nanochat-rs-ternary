@@ -9,6 +9,7 @@ use crate::attention::precompute_rope_freqs;
 use crate::block::TransformerBlockTrain;
 use crate::config::TrainConfig;
 use crate::layers::RMSNormTrain;
+use crate::loop_block::SharedLoopBlock;
 use crate::mhc::MhcLiteN2Train;
 
 /// Parameter groups for split optimizers (Muon for linear, Lion for rest).
@@ -23,7 +24,12 @@ pub struct ParamGroups {
 pub struct NanochatTrainModel {
     pub config: TrainConfig,
     pub tok_embed: candle_nn::Embedding,
+    // Standard architecture (used when loop_config is None)
     pub blocks: Vec<TransformerBlockTrain>,
+    // LoopLM architecture (used when loop_config is Some)
+    pub local_blocks_before: Vec<TransformerBlockTrain>,
+    pub shared_loop_block: Option<SharedLoopBlock>,
+    pub local_blocks_after: Vec<TransformerBlockTrain>,
     pub norm_final: RMSNormTrain,
     pub lm_head_weight: Option<Tensor>, // None if weight-tied
     freqs_cos: Tensor,
@@ -33,9 +39,31 @@ pub struct NanochatTrainModel {
 impl NanochatTrainModel {
     pub fn new(config: &TrainConfig, vb: VarBuilder) -> Result<Self> {
         let tok_embed = candle_nn::embedding(config.vocab_size, config.dim, vb.pp("tok_embed"))?;
-        let blocks = (0..config.n_layers)
-            .map(|i| TransformerBlockTrain::new(config, vb.pp(format!("blocks.{i}"))))
-            .collect::<Result<Vec<_>>>()?;
+
+        // Build architecture based on loop_config
+        let (blocks, local_blocks_before, shared_loop_block, local_blocks_after) =
+            if let Some(loop_cfg) = &config.loop_config {
+                // LoopLM architecture: local_before + shared_loop + local_after
+                let before: Vec<_> = (0..loop_cfg.local_before)
+                    .map(|i| TransformerBlockTrain::new(config, vb.pp(format!("local_before.{i}"))))
+                    .collect::<Result<Vec<_>>>()?;
+
+                let shared = SharedLoopBlock::new(config, vb.pp("shared_loop"))?;
+
+                let after: Vec<_> = (0..loop_cfg.local_after)
+                    .map(|i| TransformerBlockTrain::new(config, vb.pp(format!("local_after.{i}"))))
+                    .collect::<Result<Vec<_>>>()?;
+
+                (Vec::new(), before, Some(shared), after)
+            } else {
+                // Standard architecture: n_layers blocks
+                let blocks = (0..config.n_layers)
+                    .map(|i| TransformerBlockTrain::new(config, vb.pp(format!("blocks.{i}"))))
+                    .collect::<Result<Vec<_>>>()?;
+
+                (blocks, Vec::new(), None, Vec::new())
+            };
+
         let norm_final = RMSNormTrain::new(config.dim, vb.pp("norm_final"))?;
 
         let lm_head_weight = if !config.weight_tied {
@@ -58,6 +86,9 @@ impl NanochatTrainModel {
             config: config.clone(),
             tok_embed,
             blocks,
+            local_blocks_before,
+            shared_loop_block,
+            local_blocks_after,
             norm_final,
             lm_head_weight,
             freqs_cos,
@@ -79,9 +110,32 @@ impl NanochatTrainModel {
         let cos = self.freqs_cos.narrow(0, 0, seq_len)?;
         let sin = self.freqs_sin.narrow(0, 0, seq_len)?;
 
-        // 4. Transformer blocks
-        for block in &self.blocks {
-            x_exp = block.forward(&x_exp, &cos, &sin)?;
+        // 4. Transformer blocks (loop or standard)
+        if let Some(ref loop_block) = self.shared_loop_block {
+            let loop_cfg = self.config.loop_config.as_ref().unwrap();
+
+            // 4a. Local layers before
+            for block in &self.local_blocks_before {
+                x_exp = block.forward(&x_exp, &cos, &sin)?;
+            }
+
+            // 4b. Shared loop (N iterations)
+            let mut global_state: Option<Tensor> = None;
+            for _ in 0..loop_cfg.loop_count {
+                let (x_out, g_state) = loop_block.forward(&x_exp, global_state.as_ref())?;
+                x_exp = x_out;
+                global_state = Some(g_state);
+            }
+
+            // 4c. Local layers after
+            for block in &self.local_blocks_after {
+                x_exp = block.forward(&x_exp, &cos, &sin)?;
+            }
+        } else {
+            // Standard architecture
+            for block in &self.blocks {
+                x_exp = block.forward(&x_exp, &cos, &sin)?;
+            }
         }
 
         // 5. Collapse to single stream
@@ -128,7 +182,27 @@ impl NanochatTrainModel {
         let mut norm = Vec::new();
         let embed = vec![self.tok_embed.embeddings().clone()];
 
+        // Standard blocks
         for block in &self.blocks {
+            linear.extend(block.linear_params().into_iter().cloned());
+            mhc.extend(block.mhc_params().into_iter().cloned());
+            norm.extend(block.norm_params().into_iter().cloned());
+        }
+
+        // LoopLM blocks
+        for block in &self.local_blocks_before {
+            linear.extend(block.linear_params().into_iter().cloned());
+            mhc.extend(block.mhc_params().into_iter().cloned());
+            norm.extend(block.norm_params().into_iter().cloned());
+        }
+
+        if let Some(ref loop_block) = self.shared_loop_block {
+            linear.extend(loop_block.linear_params().into_iter().cloned());
+            mhc.extend(loop_block.mhc_params().into_iter().cloned());
+            norm.extend(loop_block.norm_params().into_iter().cloned());
+        }
+
+        for block in &self.local_blocks_after {
             linear.extend(block.linear_params().into_iter().cloned());
             mhc.extend(block.mhc_params().into_iter().cloned());
             norm.extend(block.norm_params().into_iter().cloned());
@@ -173,6 +247,7 @@ mod tests {
             mhc_n_streams: 2,
             weight_tied: true,
             rope_theta: 10000.0,
+            loop_config: None,
             lr: 0.02,
             mhc_lr: 1e-4,
             weight_decay: 0.0,
@@ -185,6 +260,9 @@ mod tests {
             ns_steps: 5,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
         }
     }
 
@@ -273,6 +351,39 @@ mod tests {
         // Should be > 0 and reasonable for tiny config
         assert!(count > 10_000, "Too few params: {}", count);
         assert!(count < 1_000_000, "Too many params for tiny config: {}", count);
+        Ok(())
+    }
+
+    #[test]
+    fn test_loop_architecture_construction() -> Result<()> {
+        let device = Device::Cpu;
+
+        // Test standard config (no loop)
+        let cfg_std = TrainConfig::d20();
+        assert!(cfg_std.loop_config.is_none());
+        let varmap_std = VarMap::new();
+        let vb_std = VarBuilder::from_varmap(&varmap_std, DType::F32, &device);
+        let model_std = NanochatTrainModel::new(&cfg_std, vb_std)?;
+
+        assert_eq!(model_std.blocks.len(), 6, "d20 should have 6 standard blocks");
+        assert_eq!(model_std.local_blocks_before.len(), 0);
+        assert_eq!(model_std.local_blocks_after.len(), 0);
+        assert!(model_std.shared_loop_block.is_none());
+
+        // Test loop config
+        let cfg_loop = TrainConfig::d20_loop();
+        assert!(cfg_loop.loop_config.is_some());
+        let loop_cfg = cfg_loop.loop_config.as_ref().unwrap();
+
+        let varmap_loop = VarMap::new();
+        let vb_loop = VarBuilder::from_varmap(&varmap_loop, DType::F32, &device);
+        let model_loop = NanochatTrainModel::new(&cfg_loop, vb_loop)?;
+
+        assert_eq!(model_loop.blocks.len(), 0, "d20_loop should have 0 standard blocks");
+        assert_eq!(model_loop.local_blocks_before.len(), loop_cfg.local_before);
+        assert_eq!(model_loop.local_blocks_after.len(), loop_cfg.local_after);
+        assert!(model_loop.shared_loop_block.is_some());
+
         Ok(())
     }
 }

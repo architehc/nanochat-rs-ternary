@@ -1,5 +1,41 @@
 //! Model configuration for nanochat-rs ternary models.
 
+/// Adaptive loop control for inference (LoopLM).
+#[derive(Debug, Clone)]
+pub struct AdaptiveLoopConfig {
+    /// Minimum number of loop iterations
+    pub min_loops: usize,
+    /// Maximum number of loop iterations
+    pub max_loops: usize,
+    /// Perplexity threshold for early stopping
+    pub perplexity_threshold: f32,
+}
+
+/// LoopLM configuration: recurrent loop mechanics per arXiv:2510.25741.
+#[derive(Debug, Clone)]
+pub struct LoopConfig {
+    /// Number of local (non-looped) layers before the shared loop block
+    pub local_before: usize,
+    /// Number of local (non-looped) layers after the shared loop block
+    pub local_after: usize,
+    /// Number of shared loop iterations (L in paper) - can be overridden at inference time
+    pub loop_count: usize,
+    /// Optional: adaptive loop control for inference (can vary loop_count at runtime)
+    pub adaptive_loop: Option<AdaptiveLoopConfig>,
+}
+
+impl LoopConfig {
+    /// Total effective depth: local_before + loop_count + local_after
+    pub fn effective_depth(&self) -> usize {
+        self.local_before + self.loop_count + self.local_after
+    }
+
+    /// Whether this config uses looping (loop_count > 1)
+    pub fn is_looped(&self) -> bool {
+        self.loop_count > 1
+    }
+}
+
 /// Hybrid layer sequencing pattern for Qwen3-style architectures.
 #[derive(Debug, Clone)]
 pub enum LayerSequence {
@@ -63,6 +99,8 @@ pub struct ModelConfig {
     pub weight_tied: bool,
     /// Whether to use gated attention (multiply attention output by learned gate)
     pub gated_attention: bool,
+    /// LoopLM configuration (None = standard fixed-depth transformer)
+    pub loop_config: Option<LoopConfig>,
 }
 
 impl ModelConfig {
@@ -76,7 +114,31 @@ impl ModelConfig {
             n_experts: None, n_active_experts: None,
             use_shared_expert: false, expert_dim: None,
             deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false,
+            weight_tied: false, gated_attention: false, loop_config: None,
+        }
+    }
+
+    /// LoopLM variant of d20: 2 local + 4-iteration shared loop = 6 effective layers
+    pub fn d20_loop() -> Self {
+        Self {
+            dim: 256, n_layers: 3, n_heads: 4, n_kv_heads: 4,  // 1 before + 1 shared + 1 after
+            deltanet_v_heads: None, deltanet_qk_heads: None,
+            ffn_mult: 2.6875, vocab_size: 50257, max_seq_len: 256,  // Aligned with training config
+            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0, rope_scale: 1.0,
+            n_experts: None, n_active_experts: None,
+            use_shared_expert: false, expert_dim: None,
+            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
+            weight_tied: true, gated_attention: false,  // Aligned with training config
+            loop_config: Some(LoopConfig {
+                local_before: 1,
+                local_after: 1,
+                loop_count: 4,
+                adaptive_loop: Some(AdaptiveLoopConfig {
+                    min_loops: 2,
+                    max_loops: 6,
+                    perplexity_threshold: 5.0,
+                }),
+            }),
         }
     }
 
@@ -90,7 +152,7 @@ impl ModelConfig {
             n_experts: None, n_active_experts: None,
             use_shared_expert: false, expert_dim: None,
             deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false,
+            weight_tied: false, gated_attention: false, loop_config: None,
         }
     }
 
@@ -104,7 +166,7 @@ impl ModelConfig {
             n_experts: None, n_active_experts: None,
             use_shared_expert: false, expert_dim: None,
             deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false,
+            weight_tied: false, gated_attention: false, loop_config: None,
         }
     }
 
@@ -118,7 +180,7 @@ impl ModelConfig {
             n_experts: None, n_active_experts: None,
             use_shared_expert: false, expert_dim: None,
             deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: true, gated_attention: false,
+            weight_tied: true, gated_attention: false, loop_config: None,
         }
     }
 
@@ -132,7 +194,7 @@ impl ModelConfig {
             n_experts: None, n_active_experts: None,
             use_shared_expert: false, expert_dim: None,
             deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false,
+            weight_tied: false, gated_attention: false, loop_config: None,
         }
     }
 
@@ -146,7 +208,7 @@ impl ModelConfig {
             n_experts: Some(8), n_active_experts: Some(2),
             use_shared_expert: false, expert_dim: None,
             deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false,
+            weight_tied: false, gated_attention: false, loop_config: None,
         }
     }
 
@@ -160,7 +222,7 @@ impl ModelConfig {
             n_experts: Some(16), n_active_experts: Some(2),
             use_shared_expert: false, expert_dim: None,
             deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false,
+            weight_tied: false, gated_attention: false, loop_config: None,
         }
     }
 
@@ -213,6 +275,7 @@ impl ModelConfig {
             layer_sequence: LayerSequence::Pattern(pattern),
             weight_tied: false,
             gated_attention: true, // Qwen3 uses gated attention
+            loop_config: None,
         }
     }
 
@@ -279,6 +342,7 @@ impl ModelConfig {
             layer_sequence: LayerSequence::Interleaved,
             weight_tied: false,
             gated_attention: false,
+            loop_config: None,
         }
     }
 
