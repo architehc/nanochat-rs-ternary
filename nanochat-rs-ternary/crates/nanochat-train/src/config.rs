@@ -290,6 +290,66 @@ impl TrainConfig {
         }
     }
 
+    /// Production d20 (560M) with full E3 optimization stack.
+    /// Designed for RTX PRO 6000 Ada (96GB VRAM).
+    pub fn d20_e3_full() -> Self {
+        Self {
+            // d20 architecture (560M params)
+            dim: 768,
+            n_layers: 24,
+            n_heads: 12,
+            n_kv_heads: 12,
+            ffn_mult: 3.5,
+            vocab_size: 50257,
+            max_seq_len: 2048,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: false,
+            rope_theta: 10000.0,
+            loop_config: None,
+
+            // WSD optimizer (optimized for Ada GPU)
+            lr: 0.02,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 8,           // 8 × 2048 = 16K tokens/batch
+            grad_accum_steps: 4,      // Effective: 65K tokens
+            warmup_steps: 2000,
+            total_steps: 50_000,      // 3.25B tokens total
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 3,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+
+            // E2 Advanced (disabled for baseline)
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+
+            // E3 P0: Multi-Token Prediction (ENABLED)
+            use_mtp: true,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+
+            // E3 P1: Collider Token Filtering (ENABLED)
+            use_collider: true,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+
+            // E3 P0: Async Data Loader (ENABLED)
+            use_async_loader: true,
+            async_n_workers: 6,
+            async_prefetch_size: 12,
+
+            // Distillation (disabled)
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+        }
+    }
+
     /// Test config for 8-bit optimizer validation (small, fast).
     pub fn test_8bit() -> Self {
         Self {
