@@ -1,0 +1,108 @@
+# Training Config: 3B Model on Dual EPYC 9654 + RTX 4090
+# Hybrid config combining Config B (3B model) with Config C (dual-EPYC optimizations)
+
+[model]
+name = "nanochat-3b-looplm-epyc"
+architecture = "LoopLM"
+dim = 1536                # Config B: 3B params
+n_layers = 20             # Config B
+n_heads = 12              # Config B
+vocab_size = 50257
+max_seq_len = 4096        # Config B
+group_size = 128
+mhc_n_streams = 4
+n_loops = 4               # LoopLM recurrent steps
+
+[training]
+batch_size = 16           # Adjusted for dual-EPYC + single GPU
+seq_len = 4096
+total_steps = 150000      # Config B
+warmup_steps = 2000
+stable_steps = 120000
+decay_steps = 28000
+peak_lr = 0.0004
+min_lr = 0.00004
+muon_lr = 0.020
+lion_lr = 0.0001
+entropy_weight = 0.05     # LoopLM entropy regularization
+max_loop_depth = 4
+grad_clip = 4.5
+accumulation_steps = 2
+
+[training.optimizer]
+type = "Hybrid"
+muon_momentum = 0.95
+lion_beta1 = 0.9
+lion_beta2 = 0.99
+weight_decay = 0.01
+
+[data]
+num_workers = 112         # Config C: dual-EPYC massive parallelism
+prefetch_factor = 8
+pin_memory = true
+verify_every_n_examples = 200
+min_compile_rate = 0.88   # Config B target
+
+[data.mix]
+high_quality_rust = 0.40
+verified_examples = 0.35
+synthetic_data = 0.20
+documentation = 0.05
+
+[hardware]
+numa_aware = true
+numa_nodes = 16           # Config C: dual-socket EPYC
+cpu_threads = 224         # Config C: all cores
+interop_threads = 28
+gpu_memory_fraction = 0.90
+mixed_precision = true
+gradient_checkpointing = true
+preferred_kernel = "AVX2" # Config C: Zen4 EPYC
+use_openmp = true
+openmp_threads = 56
+
+[hardware.numa]
+socket_0_nodes = "0-7"
+socket_1_nodes = "8-15"
+memory_policy = "interleave"
+
+[hardware.openmp]
+dynamic = false
+nested = false
+thread_limit = 56
+
+[checkpointing]
+interval = 1000
+keep_last_n = 5
+save_optimizer_state = true
+async_save = true
+
+[evaluation]
+eval_every = 5000
+metrics = ["loss", "perplexity", "compile_rate", "entropy", "exit_distribution"]
+n_eval_examples = 1000
+
+[logging]
+level = "INFO"
+log_file = "training_3b_epyc.log"
+use_tensorboard = false
+log_every = 100
+
+[looplm]
+# LoopLM-specific settings
+n_loops = 4
+entropy_weight = 0.05
+exit_temperature = 1.0
+track_exit_probs = true
+
+[compiler_verification]
+# Compiler-verified training settings
+enabled = true
+min_compile_rate = 0.88
+use_negative_examples = true
+difficulty_easy = 0.3
+difficulty_medium = 0.5
+difficulty_hard = 0.2
+compile_success_reward = 1.0
+complexity_bonus = 0.01
+unsafe_penalty = 0.1

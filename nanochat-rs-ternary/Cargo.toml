@@ -93,3 +93,7 @@ path = "examples/test_loss_alignment.rs"
 [[example]]
 name = "train_diagnostic"
 path = "examples/train_diagnostic.rs"
+
+[[example]]
+name = "benchmark_memory"
+path = "examples/benchmark_memory.rs"

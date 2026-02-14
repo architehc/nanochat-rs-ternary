@@ -1,0 +1,84 @@
+# Config A: Threadripper 3995WX Pro + 96GB Blackwell
+# Training Configuration for Maximum Memory Bandwidth
+
+[model]
+name = "nanochat-7b-looplm"
+architecture = "LoopLM"
+dim = 2048
+n_layers = 24
+n_heads = 16
+vocab_size = 50257
+max_seq_len = 8192
+group_size = 128
+mhc_n_streams = 4
+n_loops = 4
+
+[training]
+batch_size = 32
+seq_len = 8192
+total_steps = 100000
+warmup_steps = 2000
+stable_steps = 80000
+decay_steps = 18000
+peak_lr = 0.0003
+min_lr = 0.00003
+muon_lr = 0.02
+lion_lr = 0.0001
+entropy_weight = 0.05
+max_loop_depth = 4
+grad_clip = 5.0
+accumulation_steps = 4
+
+[training.optimizer]
+type = "Hybrid"
+muon_momentum = 0.95
+lion_beta1 = 0.9
+lion_beta2 = 0.99
+weight_decay = 0.01
+
+[data]
+num_workers = 64
+prefetch_factor = 10
+pin_memory = true
+verify_every_n_examples = 100
+min_compile_rate = 0.85
+
+[data.mix]
+high_quality_rust = 0.40
+verified_examples = 0.30
+synthetic_data = 0.20
+documentation = 0.10
+
+[hardware]
+numa_aware = true
+numa_nodes = 8
+cpu_threads = 128
+interop_threads = 16
+gpu_memory_fraction = 0.95
+mixed_precision = true
+gradient_checkpointing = true
+preferred_kernel = "AVX512"
+fallback_kernel = "AVX2"
+
+[hardware.numa]
+node_0 = "0-15,64-79"
+node_1 = "16-31,80-95"
+node_2 = "32-47,96-111"
+node_3 = "48-63,112-127"
+
+[checkpointing]
+interval = 1000
+keep_last_n = 5
+save_optimizer_state = true
+async_save = true
+
+[evaluation]
+eval_every = 5000
+metrics = ["loss", "perplexity", "compile_rate", "humaneval_pass@1"]
+n_eval_examples = 1000
+
+[logging]
+level = "INFO"
+log_file = "training_config_a.log"
+use_tensorboard = true
+tensorboard_dir = "runs/config_a"
