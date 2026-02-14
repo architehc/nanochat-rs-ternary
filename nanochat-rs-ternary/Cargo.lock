@@ -3151,6 +3151,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "libc",
+ "log",
  "memmap2",
  "rayon",
 ]
@@ -3160,6 +3161,8 @@ name = "ternary-kernels"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "log",
+ "once_cell",
  "rayon",
  "ternary-core",
 ]

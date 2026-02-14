@@ -45,6 +45,29 @@ fn to_c_struct(pw: &PlanarWeights) -> PlanarWeightsC {
     }
 }
 
+/// Check if AVX2 is available on this CPU.
+#[cfg(target_arch = "x86_64")]
+pub fn has_avx2() -> bool {
+    std::arch::is_x86_feature_detected!("avx2")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn has_avx2() -> bool {
+    false
+}
+
+/// Check if AVX-512 is available on this CPU.
+#[cfg(target_arch = "x86_64")]
+pub fn has_avx512() -> bool {
+    std::arch::is_x86_feature_detected!("avx512f")
+        && std::arch::is_x86_feature_detected!("avx512bw")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn has_avx512() -> bool {
+    false
+}
+
 /// Safe GEMV dispatch — calls the best available kernel automatically.
 ///
 /// # Arguments

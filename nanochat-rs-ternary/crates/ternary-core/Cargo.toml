@@ -8,3 +8,4 @@ bytemuck = { workspace = true }
 memmap2 = { workspace = true }
 rayon = { workspace = true }
 libc = "0.2"
+log = "0.4"
