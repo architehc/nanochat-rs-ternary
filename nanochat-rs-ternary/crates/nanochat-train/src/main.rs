@@ -93,6 +93,9 @@ enum Commands {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize structured logging
+    tracing_subscriber::fmt::init();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -115,12 +118,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Set thread count before anything else
             if let Some(n) = threads {
                 std::env::set_var("RAYON_NUM_THREADS", n.to_string());
-                println!("Threads: {} (set via RAYON_NUM_THREADS)", n);
+                tracing::info!("Threads: {} (set via RAYON_NUM_THREADS)", n);
             } else {
                 let n = std::thread::available_parallelism()
                     .map(|p| p.get())
                     .unwrap_or(1);
-                println!("Threads: {} (auto-detected)", n);
+                tracing::info!("Threads: {} (auto-detected)", n);
             }
 
             let device = match device.as_str() {
@@ -128,7 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 #[cfg(feature = "cuda")]
                 "cuda" => candle_core::Device::new_cuda(0)?,
                 other => {
-                    eprintln!("Unknown device: {}. Use 'cpu' or 'cuda'.", other);
+                    tracing::error!("Unknown device: {}. Use 'cpu' or 'cuda'.", other);
                     std::process::exit(1);
                 }
             };
@@ -140,7 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "tiny-cpu" | "tiny_cpu" => nanochat_train::config::TrainConfig::tiny_cpu(),
                 "test-8bit" | "test_8bit" => nanochat_train::config::TrainConfig::test_8bit(),
                 other => {
-                    eprintln!(
+                    tracing::error!(
                         "Unknown config: {}. Use d20, nano-125m, nano-1b, tiny-cpu, or test-8bit.",
                         other
                     );
@@ -154,24 +157,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let effective_seq_len = seq_len.unwrap_or(cfg.max_seq_len / 2);
 
-            println!("=== nanochat-train ===");
-            println!("Config: {}", config);
-            println!(
+            tracing::info!("=== nanochat-train ===");
+            tracing::info!("Config: {}", config);
+            tracing::info!(
                 "Model params: ~{:.1}M",
                 cfg.param_count_estimate() as f64 / 1e6
             );
-            println!("FFN dim: {}", cfg.ffn_dim());
-            println!("Device: {:?}", device);
-            println!("Batch size: {}", cfg.batch_size);
-            println!("Seq len: {}", effective_seq_len);
-            println!("Epochs: {}", epochs);
-            println!("Log interval: {} steps", log_interval);
-            println!("Checkpoint interval: {} steps", checkpoint_interval);
-            println!();
+            tracing::info!("FFN dim: {}", cfg.ffn_dim());
+            tracing::info!("Device: {:?}", device);
+            tracing::info!("Batch size: {}", cfg.batch_size);
+            tracing::info!("Seq len: {}", effective_seq_len);
+            tracing::info!("Epochs: {}", epochs);
+            tracing::info!("Log interval: {} steps", log_interval);
+            tracing::info!("Checkpoint interval: {} steps", checkpoint_interval);
+            tracing::info!("");
 
             // Resume from checkpoint if specified
             let mut trainer = if let Some(ref ckpt_dir) = resume {
-                println!("Resuming from checkpoint: {}", ckpt_dir);
+                tracing::info!("Resuming from checkpoint: {}", ckpt_dir);
                 let meta_json = std::fs::read_to_string(format!("{}/meta.json", ckpt_dir))?;
                 let meta: nanochat_train::checkpoint::CheckpointMeta =
                     serde_json::from_str(&meta_json)?;
@@ -182,13 +185,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .varmap
                     .load(format!("{}/model.safetensors", ckpt_dir))?;
                 trainer.global_step = meta.step;
-                println!("Resumed at step {} (loss={:.4})", meta.step, meta.loss);
+                tracing::info!("Resumed at step {} (loss={:.4})", meta.step, meta.loss);
                 trainer
             } else {
                 nanochat_train::train::Trainer::new(cfg.clone(), device)?
             };
 
-            println!(
+            tracing::info!(
                 "Model initialized. Total params: {}",
                 trainer.model.param_count()
             );
@@ -211,15 +214,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 }
                 other => {
-                    eprintln!("Unknown dataset: {}. Use 'synthetic' or 'tokens'.", other);
+                    tracing::error!("Unknown dataset: {}. Use 'synthetic' or 'tokens'.", other);
                     std::process::exit(1);
                 }
             };
 
-            println!("Dataset: {} samples", ds.len());
+            tracing::info!("Dataset: {} samples", ds.len());
             let tokens_per_epoch = ds.len() as f64 * effective_seq_len as f64;
-            println!("Tokens per epoch: {:.1}M", tokens_per_epoch / 1e6);
-            println!();
+            tracing::info!("Tokens per epoch: {:.1}M", tokens_per_epoch / 1e6);
+            tracing::info!("");
 
             // Run training loop with per-step logging and checkpoint management
             trainer.train_loop(
@@ -252,7 +255,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let device = candle_core::Device::Cpu;
 
-            println!("Loading checkpoint from {}...", checkpoint);
+            tracing::info!("Loading checkpoint from {}...", checkpoint);
             let meta_json = std::fs::read_to_string(format!("{}/meta.json", checkpoint))?;
             let meta: nanochat_train::checkpoint::CheckpointMeta =
                 serde_json::from_str(&meta_json)?;
@@ -264,9 +267,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Load saved weights
             varmap.load(format!("{}/model.safetensors", checkpoint))?;
 
-            println!("Exporting to {} and {}...", gguf, mhc);
+            tracing::info!("Exporting to {} and {}...", gguf, mhc);
             nanochat_train::export::export_model(&model, &meta.config, &gguf, &mhc)?;
-            println!("Export complete!");
+            tracing::info!("Export complete!");
         }
     }
 
