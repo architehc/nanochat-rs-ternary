@@ -85,6 +85,10 @@ fn main() -> Result<()> {
         distill_teacher: None,
         distill_kl_weight: 0.0,
         loop_scale_penalty: 0.0,
+        use_8bit_optim: false,
+        use_galore: false,
+        galore_rank: 256,
+        galore_update_freq: 200,
     };
 
     println!("Model config:");
