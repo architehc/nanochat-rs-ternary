@@ -18,6 +18,7 @@ pub mod maxrl;
 pub mod qwen;
 pub mod reward;
 pub mod trainer;
+pub mod training_free_grpo;
 
 pub use ast_analysis::{analyze_ast, AstMetrics};
 pub use compiler::{CompileResult, CompilerFeedback};
@@ -25,6 +26,7 @@ pub use grpo::{GrpoConfig, GrpoTrainer};
 pub use maxrl::{MaxRLConfig, MaxRLStats, MaxRLTrainer};
 pub use reward::{compute_reward, RewardConfig};
 pub use trainer::RLTrainer;
+pub use training_free_grpo::{Experience, GRPOConfig, GRPOStats, TrainingFreeGRPO};
 
 /// Configuration for RL training
 #[derive(Debug, Clone)]
