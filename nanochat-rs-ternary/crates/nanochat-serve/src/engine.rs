@@ -98,6 +98,18 @@ impl InferenceEngine {
     ) where
         F: FnMut(GeneratedToken) -> bool,
     {
+        // Validate prompt length to prevent RoPE assert panics
+        let max_seq_len = self.model.config.max_seq_len;
+        if prompt_ids.len() >= max_seq_len {
+            eprintln!(
+                "ERROR: Prompt length {} exceeds model max_seq_len {}, returning empty generation",
+                prompt_ids.len(),
+                max_seq_len
+            );
+            // Return early without generating anything
+            return;
+        }
+
         self.model.reset_caches();
 
         let mut rng: Box<dyn RngCore> = match params.seed {

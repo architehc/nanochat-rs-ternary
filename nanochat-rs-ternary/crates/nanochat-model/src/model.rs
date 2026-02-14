@@ -36,6 +36,10 @@ pub struct NanochatModel {
     pub lm_head: Option<BitLinear>,
     pub weight_tied: bool,
     pub rope: RopeFreqs,
+
+    /// Tracks if the last forward pass encountered a LoopLM error (degraded output).
+    /// Provides structured error signal to callers without breaking API.
+    last_forward_degraded: std::cell::Cell<bool>,
 }
 
 impl NanochatModel {
@@ -163,6 +167,7 @@ impl NanochatModel {
             weight_tied,
             rope,
             config,
+            last_forward_degraded: std::cell::Cell::new(false),
         }
     }
 
@@ -421,6 +426,7 @@ impl NanochatModel {
             weight_tied,
             rope,
             config,
+            last_forward_degraded: std::cell::Cell::new(false),
         })
     }
 
@@ -759,10 +765,25 @@ impl NanochatModel {
         }
     }
 
+    /// Check if the last forward pass encountered a LoopLM error (degraded output).
+    ///
+    /// When LoopLM shared blocks encounter errors (missing cache, forward failures),
+    /// the model logs the error and continues with degraded output to avoid panics.
+    /// Callers can use this method to detect such cases and handle them appropriately.
+    ///
+    /// Returns true if the last forward_token() or forward_sequence_batched() call
+    /// encountered an error and produced degraded output.
+    pub fn last_forward_was_degraded(&self) -> bool {
+        self.last_forward_degraded.get()
+    }
+
     /// Forward pass for a single token at position `pos`.
     ///
     /// Returns logits [vocab_size].
     pub fn forward_token(&mut self, token_id: u32, pos: usize) -> Vec<f32> {
+        // Reset degraded flag at start of forward
+        self.last_forward_degraded.set(false);
+
         let dim = self.config.dim;
         // 1. Embed
         let mut x = vec![0.0f32; dim];
@@ -842,14 +863,16 @@ impl NanochatModel {
                                 "ERROR: Loop block forward failed at iter {}: {} (continuing with degraded output)",
                                 iter, e
                             );
-                            // Continue with current x_exp - degraded but non-fatal
+                            // Mark as degraded and continue with current x_exp
+                            self.last_forward_degraded.set(true);
                             break;
                         }
                     }
                 }
             } else {
                 eprintln!("ERROR: loop_kv_cache not initialized for LoopLM model, skipping loop block");
-                // Continue without loop block - degraded mode
+                // Mark as degraded and continue without loop block
+                self.last_forward_degraded.set(true);
             }
         }
 
@@ -880,6 +903,8 @@ impl NanochatModel {
     /// Returns logits for the last token only.
     pub fn forward_sequence_batched(&mut self, token_ids: &[u32]) -> Vec<f32> {
         self.reset_caches();
+        // Reset degraded flag at start of forward
+        self.last_forward_degraded.set(false);
 
         let seq_len = token_ids.len();
         if seq_len == 0 {
@@ -946,14 +971,16 @@ impl NanochatModel {
                                     "ERROR: Loop batched forward failed at iter {}: {} (using degraded output)",
                                     iter, e
                                 );
-                                // Stop loop iterations, continue with current x_exp_all
+                                // Mark as degraded and stop loop iterations
+                                self.last_forward_degraded.set(true);
                                 break;
                             }
                         }
                     }
                 } else {
                     eprintln!("ERROR: loop_kv_cache not initialized for LoopLM batched forward, skipping");
-                    // Continue with degraded output (skip loop block)
+                    // Mark as degraded and continue without loop block
+                    self.last_forward_degraded.set(true);
                 }
             }
 

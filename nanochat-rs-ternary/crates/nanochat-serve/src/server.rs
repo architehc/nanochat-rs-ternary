@@ -78,6 +78,11 @@ async fn non_stream_completion(
     state: Arc<AppState>,
     req: ChatCompletionRequest,
 ) -> Json<ChatCompletionResponse> {
+    // Metrics instrumentation
+    let _active_guard = metrics::ActiveRequestGuard::new();
+    let _timer = metrics::LatencyTimer::new();
+    metrics::INFERENCE_REQUESTS.inc();
+
     let prompt = req.to_prompt_string();
     let params = req.to_sampling_params();
     let model_name = state.model_name.clone();
@@ -118,6 +123,8 @@ async fn non_stream_completion(
     let (generated_text, prompt_tokens, completion_tokens) = match result {
         Ok(Ok(data)) => data,
         Ok(Err(err)) => {
+            // Track error
+            metrics::INFERENCE_ERRORS.inc();
             // Return error as assistant message
             return Json(ChatCompletionResponse {
                 id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -139,6 +146,8 @@ async fn non_stream_completion(
             });
         }
         Err(join_err) => {
+            // Track error
+            metrics::INFERENCE_ERRORS.inc();
             // spawn_blocking panic or cancellation
             return Json(ChatCompletionResponse {
                 id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -166,6 +175,9 @@ async fn non_stream_completion(
         .unwrap()
         .as_secs();
 
+    // Track generated tokens
+    metrics::TOKENS_GENERATED.inc_by(completion_tokens as f64);
+
     Json(ChatCompletionResponse {
         id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
         object: "chat.completion".to_string(),
@@ -187,6 +199,11 @@ async fn stream_completion(
     state: Arc<AppState>,
     req: ChatCompletionRequest,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    // Metrics instrumentation
+    let _active_guard = metrics::ActiveRequestGuard::new();
+    let _timer = metrics::LatencyTimer::new();
+    metrics::INFERENCE_REQUESTS.inc();
+
     let prompt = req.to_prompt_string();
     let params = req.to_sampling_params();
     let model_name = state.model_name.clone();
@@ -228,8 +245,11 @@ async fn stream_completion(
                     finish_reason: Some("error".to_string()),
                 }],
             };
+            metrics::INFERENCE_ERRORS.inc();
             let json = serde_json::to_string(&error_chunk).unwrap();
             let _ = tx.blocking_send(Ok(Event::default().data(json)));
+            // Send [DONE] even on error path for OpenAI compatibility
+            let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
             return;
         }
 
@@ -261,7 +281,10 @@ async fn stream_completion(
 
         let mut engine = state.engine.lock().unwrap();
 
+        let mut token_count = 0usize;
         engine.generate_streaming(&token_ids, &params, |tok| {
+            token_count += 1;
+
             let text = state
                 .tokenizer
                 .decode(&[tok.token_id], true)
@@ -289,6 +312,9 @@ async fn stream_completion(
             let json = serde_json::to_string(&chunk).unwrap();
             tx.blocking_send(Ok(Event::default().data(json))).is_ok()
         });
+
+        // Track generated tokens
+        metrics::TOKENS_GENERATED.inc_by(token_count as f64);
 
         // Send [DONE]
         let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
