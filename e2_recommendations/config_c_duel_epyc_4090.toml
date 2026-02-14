@@ -1,0 +1,89 @@
+# Config C: Dual EPYC 56-core + RTX 4090
+# Training Configuration for Massive CPU Parallelism
+
+[model]
+name = "nanochat-5b-looplm"
+architecture = "LoopLM"
+dim = 1792
+n_layers = 22
+n_heads = 14
+vocab_size = 50257
+max_seq_len = 6144
+group_size = 128
+mhc_n_streams = 4
+n_loops = 4
+
+[training]
+batch_size = 24
+seq_len = 6144
+total_steps = 120000
+warmup_steps = 1500
+stable_steps = 96000
+decay_steps = 22500
+peak_lr = 0.00035
+min_lr = 0.000035
+muon_lr = 0.022
+lion_lr = 0.00011
+entropy_weight = 0.06
+max_loop_depth = 4
+grad_clip = 4.5
+accumulation_steps = 2
+
+[training.optimizer]
+type = "Hybrid"
+muon_momentum = 0.95
+lion_beta1 = 0.9
+lion_beta2 = 0.99
+weight_decay = 0.01
+
+[data]
+num_workers = 112
+prefetch_factor = 8
+pin_memory = true
+verify_every_n_examples = 200
+min_compile_rate = 0.87
+
+[data.mix]
+high_quality_rust = 0.45
+verified_examples = 0.35
+synthetic_data = 0.15
+documentation = 0.05
+
+[hardware]
+numa_aware = true
+numa_nodes = 16
+cpu_threads = 224
+interop_threads = 28
+gpu_memory_fraction = 0.90
+mixed_precision = true
+gradient_checkpointing = true
+preferred_kernel = "AVX2"
+use_openmp = true
+openmp_threads = 56
+
+[hardware.numa]
+socket_0_nodes = "0-7"
+socket_1_nodes = "8-15"
+memory_policy = "interleave"
+
+[hardware.openmp]
+dynamic = false
+nested = false
+thread_limit = 56
+
+[checkpointing]
+interval = 1000
+keep_last_n = 5
+save_optimizer_state = true
+async_save = true
+
+[evaluation]
+eval_every = 5000
+metrics = ["loss", "perplexity", "compile_rate", "humaneval_pass@1"]
+n_eval_examples = 1000
+
+[logging]
+level = "INFO"
+log_file = "training_config_c.log"
+use_tensorboard = true
+tensorboard_dir = "runs/config_c"
