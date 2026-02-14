@@ -18,6 +18,14 @@ fn default_mtp_weight() -> f64 {
     0.2 // 20% weight for auxiliary MTP losses
 }
 
+fn default_collider_threshold() -> f64 {
+    0.3 // Filter tokens with importance < 0.3
+}
+
+fn default_collider_sparsity() -> f64 {
+    0.35 // Target 35% sparsity for 35% backprop speedup
+}
+
 /// Adaptive loop control for inference (LoopLM).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveLoopConfig {
@@ -113,6 +121,17 @@ pub struct TrainConfig {
     #[serde(default = "default_mtp_weight")]
     pub mtp_weight: f64,
 
+    // Collider Token Filtering (arXiv:2502.00340)
+    /// Use Collider for token filtering (35% faster backprop)
+    #[serde(default)]
+    pub use_collider: bool,
+    /// Importance threshold for filtering (0-1)
+    #[serde(default = "default_collider_threshold")]
+    pub collider_threshold: f64,
+    /// Target sparsity ratio (0-1)
+    #[serde(default = "default_collider_sparsity")]
+    pub collider_sparsity: f64,
+
     // Stage-1 distillation hyperparams (LoopLM training)
     /// Teacher model path for distillation (None = no distillation)
     #[serde(default)]
@@ -193,6 +212,9 @@ impl TrainConfig {
             use_mtp: false,
             mtp_n_tokens: 3,
             mtp_weight: 0.2,
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -234,6 +256,9 @@ impl TrainConfig {
             use_mtp: false,
             mtp_n_tokens: 3,
             mtp_weight: 0.2,
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -275,6 +300,9 @@ impl TrainConfig {
             use_mtp: false,
             mtp_n_tokens: 3,
             mtp_weight: 0.2,
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -325,6 +353,9 @@ impl TrainConfig {
             use_mtp: false,
             mtp_n_tokens: 3,
             mtp_weight: 0.2,
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
             distill_teacher: None, // Can be set to teacher model path
             distill_kl_weight: 1.0,
             loop_scale_penalty: 0.1, // Annealed during training
@@ -367,6 +398,9 @@ impl TrainConfig {
             use_mtp: false,
             mtp_n_tokens: 3,
             mtp_weight: 0.2,
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -408,6 +442,9 @@ impl TrainConfig {
             use_mtp: false,
             mtp_n_tokens: 3,
             mtp_weight: 0.2,
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,

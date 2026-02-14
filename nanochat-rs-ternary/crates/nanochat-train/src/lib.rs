@@ -1,6 +1,7 @@
 pub mod attention;
 pub mod block;
 pub mod checkpoint;
+pub mod collider;
 pub mod config;
 pub mod data;
 pub mod distill;
