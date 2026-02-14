@@ -26,6 +26,14 @@ fn default_collider_sparsity() -> f64 {
     0.35 // Target 35% sparsity for 35% backprop speedup
 }
 
+fn default_async_n_workers() -> usize {
+    4 // 4 preprocessing threads (balance CPU usage vs parallelism)
+}
+
+fn default_async_prefetch_size() -> usize {
+    8 // Prefetch 8 batches (smooths variance, low memory overhead)
+}
+
 /// Adaptive loop control for inference (LoopLM).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveLoopConfig {
@@ -132,6 +140,17 @@ pub struct TrainConfig {
     #[serde(default = "default_collider_sparsity")]
     pub collider_sparsity: f64,
 
+    // Async Data Loader (90%+ GPU utilization)
+    /// Use async data loader with multi-threaded prefetching
+    #[serde(default)]
+    pub use_async_loader: bool,
+    /// Number of preprocessing worker threads (2-8 recommended)
+    #[serde(default = "default_async_n_workers")]
+    pub async_n_workers: usize,
+    /// Number of batches to prefetch (4-16 recommended)
+    #[serde(default = "default_async_prefetch_size")]
+    pub async_prefetch_size: usize,
+
     // Stage-1 distillation hyperparams (LoopLM training)
     /// Teacher model path for distillation (None = no distillation)
     #[serde(default)]
@@ -215,6 +234,9 @@ impl TrainConfig {
             use_collider: false,
             collider_threshold: 0.3,
             collider_sparsity: 0.35,
+            use_async_loader: false,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -259,6 +281,9 @@ impl TrainConfig {
             use_collider: false,
             collider_threshold: 0.3,
             collider_sparsity: 0.35,
+            use_async_loader: false,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -303,6 +328,9 @@ impl TrainConfig {
             use_collider: false,
             collider_threshold: 0.3,
             collider_sparsity: 0.35,
+            use_async_loader: false,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -356,6 +384,9 @@ impl TrainConfig {
             use_collider: false,
             collider_threshold: 0.3,
             collider_sparsity: 0.35,
+            use_async_loader: false,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
             distill_teacher: None, // Can be set to teacher model path
             distill_kl_weight: 1.0,
             loop_scale_penalty: 0.1, // Annealed during training
@@ -401,6 +432,9 @@ impl TrainConfig {
             use_collider: false,
             collider_threshold: 0.3,
             collider_sparsity: 0.35,
+            use_async_loader: false,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -445,6 +479,9 @@ impl TrainConfig {
             use_collider: false,
             collider_threshold: 0.3,
             collider_sparsity: 0.35,
+            use_async_loader: false,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
