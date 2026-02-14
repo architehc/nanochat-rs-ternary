@@ -52,14 +52,16 @@ cargo run --release -p nanochat-serve -- \
   --mhc hybrid.mhc \
   --port 8080
 
-# Run evaluation
-cargo run --release --example evaluate_codegen -- \
-  --dataset humaneval \
-  --data-path HumanEval.jsonl \
-  --model-endpoint http://localhost:8080/v1/completions \
-  --model-name qwen3-ternary \
-  --num-samples 10 \
-  --output results.json
+# Run evaluation (NOTE: evaluate_codegen example is experimental and not yet exposed)
+# Use the Python evaluation script instead or implement custom evaluation
+# Example (placeholder - actual implementation needed):
+# cargo run --release --example evaluate_codegen -- \
+#   --dataset humaneval \
+#   --data-path HumanEval.jsonl \
+#   --model-endpoint http://localhost:8080/v1/completions \
+#   --model-name qwen3-ternary \
+#   --num-samples 10 \
+#   --output results.json
 ```
 
 ### With Baseline Comparison

@@ -144,7 +144,7 @@ This training run validates the complete Rust-native training pipeline:
 ## Training Configuration Used
 
 ```bash
-cargo run --release --example train_nano_simple -- \
+cargo run --release --example train_rust_maxgpu -- \
   --total-steps 1000 \
   --checkpoint-dir checkpoints/tiny-cpu-demo \
   --device cpu \
@@ -177,7 +177,8 @@ cargo run --release --bin nanochat-serve -- \
 
 ### 3. Evaluate on HumanEval
 ```bash
-cargo run --release --example evaluate_codegen -- \
+# NOTE: evaluate_codegen is experimental and not yet exposed
+# cargo run --release --example evaluate_codegen -- \
   --dataset humaneval \
   --data-path HumanEval.jsonl \
   --model-endpoint http://localhost:8080/v1/completions \

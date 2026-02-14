@@ -23,7 +23,7 @@ The model uses ternary quantization with our custom AVX2/AVX-512 kernels:
 ### Usage:
 ```bash
 # Train model
-cargo run --release --example train_nano_simple --features nanochat-train/cuda -- \
+cargo run --release --example train_rust_maxgpu --features nanochat-train/cuda -- \
   --total-steps 17000 \
   --device cuda:0 \
   --checkpoint-dir checkpoints/nano-125m-gpu
@@ -131,7 +131,7 @@ Candle handles gradient scaling automatically when using FP16:
 
 ### Enable FP16:
 ```bash
-cargo run --release --example train_nano_simple -- \
+cargo run --release --example train_rust_maxgpu -- \
   --device cuda:0 \
   --fp16  # <-- Add this flag (when implemented)
 ```
@@ -235,7 +235,7 @@ if global_step % args.eval_interval == 0 {
 
 ```bash
 # Start training with all features
-cargo run --release --example train_nano_simple --features nanochat-train/cuda -- \
+cargo run --release --example train_rust_maxgpu --features nanochat-train/cuda -- \
   --total-steps 20000 \
   --warmup-steps 2000 \
   --batch-size 1 \              # Small micro-batch for memory

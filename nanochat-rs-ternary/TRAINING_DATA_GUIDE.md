@@ -111,7 +111,7 @@ print(f"Total: {len(tokens)} tokens (~{len(tokens)//512} samples at seq_len=512)
 EOF
 
 # 2. Train
-cargo run --release --example train_nano_simple --features nanochat-train/cuda -- \
+cargo run --release --example train_rust_maxgpu --features nanochat-train/cuda -- \
   --data data/python_code_tokens.bin \
   --total-steps 20000 \
   --device cuda:0
@@ -133,7 +133,7 @@ I've created `CodePatternsDataset` with realistic Python token patterns:
 
 **Usage:**
 ```rust
-// Replace in train_nano_simple.rs:
+// Replace in train_rust_maxgpu.rs:
 // let dataset = SyntheticDataset::new(...);
 use nanochat_train::data::CodePatternsDataset;
 let dataset = CodePatternsDataset::new(
@@ -232,7 +232,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("✓ Loaded {} samples from {}", dataset.len(), args.data);
 
-    // Train (same as train_nano_simple.rs)
+    // Train (same as train_rust_maxgpu.rs)
     let config = TrainConfig::nano_125m();
     let mut trainer = Trainer::new(config, device)?;
     trainer.train_loop(&dataset, epochs, ...)?;

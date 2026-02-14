@@ -56,22 +56,25 @@ All model configs are supported:
 
 ### Basic Example
 
+**NOTE:** The `benchmark_inference` example is experimental and not yet exposed. Use `cargo bench` for performance benchmarks instead.
+
 ```bash
-cargo run --release --example benchmark_inference -- \
-  --model model.gguf \
-  --config qwen3_coder_80b \
-  --prompt-lengths 128,512,2048 \
-  --num-tokens 100
+# Use Criterion benchmarks instead:
+cargo bench --workspace
+
+# Or benchmark specific components:
+cargo bench -p ternary-kernels  # GEMV kernels
+cargo bench mhc_overhead        # mHC overhead
 ```
 
-### Full Options
+### Full Options (Experimental - not yet available)
 
 ```bash
-cargo run --release --example benchmark_inference -- \
-  --model hybrid.gguf \              # Model file (currently placeholder)
-  --mhc hybrid.mhc \                 # mHC weights (optional)
-  --config qwen3_coder_80b \         # Model configuration
-  --prompt-lengths 128,512,2048 \    # Comma-separated prompt lengths
+# cargo run --release --example benchmark_inference -- \
+#   --model hybrid.gguf \              # Model file (currently placeholder)
+#   --mhc hybrid.mhc \                 # mHC weights (optional)
+#   --config qwen3_coder_80b \         # Model configuration
+#   --prompt-lengths 128,512,2048 \    # Comma-separated prompt lengths
   --num-tokens 100 \                 # Decode tokens to generate
   --batch-size 1 \                   # Prefill batch size
   --warmup 3 \                       # Warmup iterations

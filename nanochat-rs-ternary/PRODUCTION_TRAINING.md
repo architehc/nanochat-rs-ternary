@@ -86,7 +86,7 @@ ls -lh checkpoints/production-supervised/step_*/
 ls -lh checkpoints/production-supervised/step_* | tail -1
 
 # Test generation (when ready)
-cargo run --example generate_code
+cargo run --example debug_generation
 ```
 
 ## 📊 Expected Checkpoints
@@ -251,7 +251,7 @@ Check progress every few hours:
 Don't wait for completion - test intermediate steps:
 ```bash
 # Test at step_5000, step_10000, etc.
-cargo run --example generate_code -- --checkpoint checkpoints/production-supervised/step_5000
+cargo run --example debug_generation -- --checkpoint checkpoints/production-supervised/step_5000
 ```
 
 ### 4. Clean old checkpoints
@@ -277,7 +277,7 @@ After training completes:
 
 ### 1. Test the model
 ```bash
-cargo run --example generate_code -- --checkpoint checkpoints/production-supervised/step_15000
+cargo run --example debug_generation -- --checkpoint checkpoints/production-supervised/step_15000
 ```
 
 ### 2. Run benchmarks

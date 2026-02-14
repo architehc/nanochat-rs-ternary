@@ -65,7 +65,7 @@ Successfully created end-to-end training infrastructure for ternary quantized la
 ### Option 1: GPU Training (Recommended)
 Use CUDA-enabled system for 50-100x speedup:
 ```bash
-cargo run --release --example train_nano_simple -- \
+cargo run --release --example train_rust_maxgpu -- \
   --total-steps 5000 \
   --device cuda:0 \
   --batch-size 16
@@ -97,7 +97,7 @@ Even without completed training, we have:
 
 ## Files Created/Modified
 
-- `examples/train_nano_simple.rs` - Simple training script without distillation
+- `examples/train_rust_maxgpu.rs` - Simple training script without distillation
 - `examples/train_nano_125m.rs` - Distillation training (for future use)
 - `TRAINING_PLAN.md` - Comprehensive training strategy
 - `START_TRAINING.md` - Quick start guide

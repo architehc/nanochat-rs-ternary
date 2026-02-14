@@ -116,13 +116,15 @@ cargo run --release -p nanochat-rl --example train_rl -- \
     --checkpoint "$BEST_SUPERVISED" \
     --iterations 1000
 
-# NEW: MaxRL
-cargo run --release -p nanochat-rl --example train_maxrl -- \
+# NEW: MaxRL (NOTE: train_maxrl is experimental and not yet exposed)
+# Use train_rl instead, or implement MaxRL features in train_rl:
+cargo run --release -p nanochat-rl --example train_rl -- \
     --checkpoint "$BEST_SUPERVISED" \
-    --iterations 1000 \
-    --n-samples 8 \
-    --correctness-threshold 20.0 \
-    --temperature 1.0
+    --iterations 1000
+    # Add MaxRL-specific flags when implemented:
+    # --n-samples 8 \
+    # --correctness-threshold 20.0 \
+    # --temperature 1.0
 ```
 
 ### Option 2: Hybrid Approach

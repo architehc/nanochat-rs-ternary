@@ -25,7 +25,8 @@ gunzip HumanEval.jsonl.gz
 
 ### Step 3: Run Evaluation ✅
 ```bash
-cargo run --release --example evaluate_codegen -- \
+# NOTE: evaluate_codegen is experimental and not yet exposed
+# cargo run --release --example evaluate_codegen -- \
   --dataset humaneval \
   --data-path HumanEval.jsonl \
   --model-endpoint http://localhost:8082/v1/completions \
