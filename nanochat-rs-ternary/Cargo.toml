@@ -19,6 +19,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 prometheus = "0.13"
 lazy_static = "1.5"
 toml = "0.8"
+# P2 improvements
+proptest = "1.5"
+colored = "2.1"
+rustyline = "14.0"
+pyo3 = { version = "0.22", features = ["extension-module"] }
 
 # Root package for integration tests and benchmarks
 [package]

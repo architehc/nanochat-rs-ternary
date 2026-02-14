@@ -1,0 +1,18 @@
+[package]
+name = "nanochat-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "nanochat"
+path = "src/main.rs"
+
+[dependencies]
+nanochat-model = { path = "../nanochat-model" }
+nanochat-core = { path = "../nanochat-core" }
+ternary-core = { path = "../ternary-core" }
+clap = { version = "4", features = ["derive"] }
+colored = { workspace = true }
+rustyline = { workspace = true }
+anyhow = "1.0"
+tokenizers = "0.20"

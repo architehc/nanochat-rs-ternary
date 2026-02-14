@@ -1,0 +1,25 @@
+[package]
+name = "nanochat-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ternary-core = { path = "../crates/ternary-core" }
+tempfile = "3"
+
+[[bin]]
+name = "fuzz_ternary_packing"
+path = "fuzz_targets/fuzz_ternary_packing.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_gguf_parsing"
+path = "fuzz_targets/fuzz_gguf_parsing.rs"
+test = false
+doc = false
