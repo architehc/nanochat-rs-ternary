@@ -11,6 +11,7 @@ pub mod logging;
 pub mod loop_block;
 pub mod mhc;
 pub mod model;
+pub mod mtp;
 pub mod optim;
 pub mod quantize;
 pub mod sensitivity;

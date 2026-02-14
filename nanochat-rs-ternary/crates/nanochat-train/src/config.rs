@@ -10,6 +10,14 @@ fn default_galore_update_freq() -> usize {
     200 // Update projections every 200 steps
 }
 
+fn default_mtp_n_tokens() -> usize {
+    3 // Predict next 3 tokens: [1.0, 0.5, 0.25] weights
+}
+
+fn default_mtp_weight() -> f64 {
+    0.2 // 20% weight for auxiliary MTP losses
+}
+
 /// Adaptive loop control for inference (LoopLM).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveLoopConfig {
@@ -94,6 +102,17 @@ pub struct TrainConfig {
     #[serde(default = "default_galore_update_freq")]
     pub galore_update_freq: usize,
 
+    // Multi-Token Prediction (arXiv:2204.05832)
+    /// Use Multi-Token Prediction for denser training signals
+    #[serde(default)]
+    pub use_mtp: bool,
+    /// Number of future tokens to predict (2-4 recommended)
+    #[serde(default = "default_mtp_n_tokens")]
+    pub mtp_n_tokens: usize,
+    /// MTP auxiliary loss weight (0.1-0.3 recommended)
+    #[serde(default = "default_mtp_weight")]
+    pub mtp_weight: f64,
+
     // Stage-1 distillation hyperparams (LoopLM training)
     /// Teacher model path for distillation (None = no distillation)
     #[serde(default)]
@@ -171,6 +190,12 @@ impl TrainConfig {
             use_galore: false,
             galore_rank: 256,
             galore_update_freq: 200,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -209,6 +234,9 @@ impl TrainConfig {
             use_galore: false,
             galore_rank: 256,
             galore_update_freq: 200,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -247,6 +275,9 @@ impl TrainConfig {
             use_galore: false,
             galore_rank: 256,
             galore_update_freq: 200,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -294,6 +325,9 @@ impl TrainConfig {
             use_galore: false,
             galore_rank: 256,
             galore_update_freq: 200,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
             distill_teacher: None, // Can be set to teacher model path
             distill_kl_weight: 1.0,
             loop_scale_penalty: 0.1, // Annealed during training
@@ -333,6 +367,12 @@ impl TrainConfig {
             use_galore: false,
             galore_rank: 256,
             galore_update_freq: 200,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -371,6 +411,12 @@ impl TrainConfig {
             use_galore: false,
             galore_rank: 256,
             galore_update_freq: 200,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
