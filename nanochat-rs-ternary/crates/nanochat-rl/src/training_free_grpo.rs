@@ -487,7 +487,8 @@ mod tests {
         let other_exps = grpo.get_experiences_for_prompt("other_prompt");
 
         assert!(test_exps.len() > 0);
-        assert!(other_exps.len() >= 0); // Might be 0 if below mean
+        // other_exps might be empty if below mean, just check it's a valid vec
+        let _ = other_exps.len();
     }
 
     #[test]

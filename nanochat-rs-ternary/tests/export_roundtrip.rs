@@ -47,6 +47,15 @@ fn tiny_config(weight_tied: bool) -> TrainConfig {
         use_galore: false,
         galore_rank: 256,
         galore_update_freq: 200,
+        use_mtp: false,
+        mtp_n_tokens: 2,
+        mtp_weight: 0.1,
+        use_collider: false,
+        collider_threshold: 0.3,
+        collider_sparsity: 0.35,
+        use_async_loader: false,
+        async_n_workers: 4,
+        async_prefetch_size: 8,
     }
 }
 
