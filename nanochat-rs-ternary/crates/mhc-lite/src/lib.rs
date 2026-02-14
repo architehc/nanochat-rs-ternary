@@ -14,11 +14,13 @@
 //   MhcLiteN2 — 2-stream, 1 learnable param, recommended starting point
 //   MhcLiteN4 — 4-stream, full BvN with 24 permutation matrices
 
+pub mod analysis;
 pub mod io;
 pub mod n2;
 pub mod n4;
 pub mod verify;
 
+pub use analysis::{AdaptiveInit, LayerStats, MhcAnalyzer, ModelAnalysis};
 pub use io::{load_mhc_file, save_mhc_file, MhcFileHeader, MhcLayerParams};
 pub use n2::MhcLiteN2;
 pub use n4::MhcLiteN4;
