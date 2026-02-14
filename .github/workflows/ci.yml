@@ -34,16 +34,20 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check formatting
+        working-directory: nanochat-rs-ternary
         run: cargo fmt --all -- --check
 
       - name: Run clippy
+        working-directory: nanochat-rs-ternary
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Run tests
+        working-directory: nanochat-rs-ternary
         run: cargo test --workspace --verbose
         timeout-minutes: 30
 
       - name: Build release
+        working-directory: nanochat-rs-ternary
         run: cargo build --release --workspace
 
   integration-tests:
@@ -65,9 +69,11 @@ jobs:
           key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run E2 optimizer tests
+        working-directory: nanochat-rs-ternary
         run: cargo test -p nanochat-train --test test_e2_integration -- --nocapture
 
       - name: Run integration tests
+        working-directory: nanochat-rs-ternary
         run: cargo test --workspace --test '*' -- --nocapture
         timeout-minutes: 45
 
@@ -90,6 +96,7 @@ jobs:
           key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run benchmarks (smoke test)
+        working-directory: nanochat-rs-ternary
         run: cargo bench --workspace --no-run
 
   security-audit:
@@ -105,6 +112,7 @@ jobs:
         run: cargo install cargo-audit
 
       - name: Run security audit
+        working-directory: nanochat-rs-ternary
         run: cargo audit --ignore RUSTSEC-0000-0000
 
   coverage:
@@ -120,6 +128,7 @@ jobs:
         run: cargo install cargo-tarpaulin
 
       - name: Generate coverage
+        working-directory: nanochat-rs-ternary
         run: cargo tarpaulin --workspace --timeout 300 --out Xml
 
       - name: Upload coverage to Codecov
@@ -151,6 +160,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
+        working-directory: nanochat-rs-ternary
         run: cargo build --release --target ${{ matrix.target }}
 
   docs:
@@ -163,9 +173,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build documentation
+        working-directory: nanochat-rs-ternary
         run: cargo doc --workspace --no-deps --all-features
 
       - name: Check for broken links
+        working-directory: nanochat-rs-ternary
         run: |
           cargo install cargo-deadlinks
           cargo deadlinks --check-http
