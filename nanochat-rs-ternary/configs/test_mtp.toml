@@ -1,0 +1,46 @@
+# Test configuration for Multi-Token Prediction (MTP)
+# Expected: 15-20% better data efficiency
+
+[model]
+dim = 512
+n_layers = 8
+n_heads = 8
+n_kv_heads = 2
+ffn_mult = 2.67
+vocab_size = 4096
+max_seq_len = 1024
+group_size = 128
+mhc_n_streams = 2
+
+[training]
+batch_size = 4
+total_steps = 1000
+log_interval = 50
+checkpoint_interval = 500
+keep_last_checkpoints = 2
+
+# Multi-Token Prediction (arXiv:2204.05832)
+# Predicts next N tokens simultaneously for denser training signals
+use_mtp = true
+mtp_n_tokens = 3              # Predict next 3 tokens [weights: 1.0, 0.5, 0.25]
+mtp_weight = 0.2              # 20% weight for auxiliary losses
+
+# Standard optimizer settings
+use_8bit_optim = false
+use_galore = false
+muon_lr = 0.02
+muon_momentum = 0.95
+lion_lr = 0.0001
+warmup_steps = 100
+gradient_clip_norm = 1.0
+
+# mHC architecture
+use_mhc = true
+
+# Regularization
+entropy_weight = 0.01
+
+# Expected Benefits:
+# - Data efficiency: ~1.75× (from loss weights: 1.0 + 0.5 + 0.25 = 1.75)
+# - Better gradient signals from multiple prediction targets
+# - Faster convergence on sequential tasks
