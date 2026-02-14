@@ -544,7 +544,9 @@ mod tests {
 
         // Compute attention (token at position 2 attends to all 3 cached tokens)
         let mut out = vec![0.0f32; dim];
-        block.compute_attention(&q, &kv_cache, 2, &mut out);
+        block
+            .compute_attention(&q, &kv_cache, 2, &mut out)
+            .expect("compute_attention should succeed with valid inputs");
 
         // Output should have correct shape and be non-zero
         assert_eq!(out.len(), dim);

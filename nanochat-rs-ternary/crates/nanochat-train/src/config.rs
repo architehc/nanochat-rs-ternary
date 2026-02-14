@@ -215,6 +215,44 @@ impl TrainConfig {
         }
     }
 
+    /// Test config for 8-bit optimizer validation (small, fast).
+    pub fn test_8bit() -> Self {
+        Self {
+            dim: 256,
+            n_layers: 4,
+            n_heads: 8,
+            n_kv_heads: 8,
+            ffn_mult: 2.0,
+            vocab_size: 50257,
+            max_seq_len: 256,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: false,
+            rope_theta: 10000.0,
+            loop_config: None,
+
+            lr: 0.02,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 1,
+            warmup_steps: 20,
+            total_steps: 100,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 3,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+            use_8bit_optim: true, // ← 8-bit enabled for testing
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+        }
+    }
+
     /// LoopLM variant of d20: 2 local + 4-iteration shared loop = 6 effective layers.
     pub fn d20_loop() -> Self {
         Self {

@@ -239,9 +239,17 @@ impl NumaInferenceEngine {
             thread_pools.push(pool);
         }
 
+        // Use model vocab for eot_token (same logic as standard engine)
+        let vocab = model.config.vocab_size;
+        let eot_token = if vocab <= 50256 {
+            (vocab - 1) as u32
+        } else {
+            50256 // GPT-2 standard
+        };
+
         Self {
             model,
-            eot_token: 50256,
+            eot_token,
             numa_config,
             thread_pools,
             layer_split,
@@ -305,6 +313,7 @@ impl NumaInferenceEngine {
             }
 
             let next_token = sample_token(&logits, params, &mut *rng);
+            tokens.push(next_token); // Push token before checking eot (matches standard engine)
 
             let is_eot = next_token == self.eot_token;
             let at_limit = pos + 1 >= self.model.config.max_seq_len;
@@ -313,7 +322,6 @@ impl NumaInferenceEngine {
                 break;
             }
 
-            tokens.push(next_token);
             logits = self.model.forward_token(next_token, pos);
             pos += 1;
         }
@@ -349,13 +357,27 @@ pub fn sample_token(logits: &[f32], params: &SamplingParams, rng: &mut dyn RngCo
         return argmax(logits);
     }
 
-    // Apply temperature
-    let mut probs: Vec<f32> = logits.iter().map(|&l| l / params.temperature).collect();
+    // Replace non-finite logits with large negative value
+    let mut probs: Vec<f32> = logits
+        .iter()
+        .map(|&l| {
+            if l.is_finite() {
+                l / params.temperature
+            } else {
+                f32::NEG_INFINITY
+            }
+        })
+        .collect();
 
     // Top-k filtering
     if params.top_k > 0 && params.top_k < probs.len() {
         let mut indices: Vec<usize> = (0..probs.len()).collect();
-        indices.sort_unstable_by(|&a, &b| probs[b].partial_cmp(&probs[a]).unwrap());
+        // Handle NaN by treating it as less than any finite value
+        indices.sort_unstable_by(|&a, &b| {
+            probs[b]
+                .partial_cmp(&probs[a])
+                .unwrap_or(std::cmp::Ordering::Less)
+        });
         let threshold = probs[indices[params.top_k - 1]];
         for p in probs.iter_mut() {
             if *p < threshold {
@@ -369,9 +391,13 @@ pub fn sample_token(logits: &[f32], params: &SamplingParams, rng: &mut dyn RngCo
     let mut sum = 0.0f32;
     for p in probs.iter_mut() {
         *p = (*p - max_val).exp();
+        if !p.is_finite() {
+            *p = 0.0; // Clamp non-finite results to 0
+        }
         sum += *p;
     }
-    let inv_sum = 1.0 / sum;
+    // Handle edge case where all probabilities are 0 or non-finite
+    let inv_sum = if sum > 0.0 { 1.0 / sum } else { 0.0 };
     for p in probs.iter_mut() {
         *p *= inv_sum;
     }
@@ -379,7 +405,11 @@ pub fn sample_token(logits: &[f32], params: &SamplingParams, rng: &mut dyn RngCo
     // Top-p (nucleus) filtering
     if params.top_p < 1.0 {
         let mut sorted: Vec<(usize, f32)> = probs.iter().cloned().enumerate().collect();
-        sorted.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        // Safe comparison handling NaN
+        sorted.sort_unstable_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Less)
+        });
         let mut cumsum = 0.0;
         let mut cutoff_idx = sorted.len();
         for (i, &(_, p)) in sorted.iter().enumerate() {

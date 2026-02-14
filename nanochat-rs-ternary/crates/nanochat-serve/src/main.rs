@@ -78,6 +78,9 @@ fn parse_args() -> Args {
 async fn main() {
     tracing_subscriber::fmt::init();
 
+    // Register Prometheus metrics
+    nanochat_serve::metrics::register_metrics();
+
     let args = parse_args();
 
     // Load model
@@ -121,6 +124,7 @@ async fn main() {
 
     let model_name = format!("nanochat-{}m", model.param_count().total / 1_000_000);
     let vocab_size = model.config.vocab_size as u32;
+    let max_seq_len = model.config.max_seq_len;
     let engine = InferenceEngine::new(model);
 
     let state = Arc::new(AppState {
@@ -128,6 +132,7 @@ async fn main() {
         tokenizer,
         model_name,
         vocab_size,
+        max_seq_len,
     });
 
     let app = build_router(state);

@@ -138,9 +138,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "nano-125m" | "nano_125m" => nanochat_train::config::TrainConfig::nano_125m(),
                 "nano-1b" | "nano_1b" => nanochat_train::config::TrainConfig::nano_1b(),
                 "tiny-cpu" | "tiny_cpu" => nanochat_train::config::TrainConfig::tiny_cpu(),
+                "test-8bit" | "test_8bit" => nanochat_train::config::TrainConfig::test_8bit(),
                 other => {
                     eprintln!(
-                        "Unknown config: {}. Use d20, nano-125m, nano-1b, or tiny-cpu.",
+                        "Unknown config: {}. Use d20, nano-125m, nano-1b, tiny-cpu, or test-8bit.",
                         other
                     );
                     std::process::exit(1);

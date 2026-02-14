@@ -821,25 +821,35 @@ impl NanochatModel {
 
         // 2. Shared loop layer (iterated loop_count times)
         if let Some(ref loop_block) = self.shared_loop_block {
-            let mut global_state: Option<Vec<f32>> = None;
-            let kv_cache = self
-                .loop_kv_cache
-                .as_mut()
-                .expect("loop_kv_cache should be initialized for LoopLM models");
+            if let Some(kv_cache) = self.loop_kv_cache.as_mut() {
+                let mut global_state: Option<Vec<f32>> = None;
 
-            for iter in 0..loop_count {
-                let append_kv = iter == 0; // Only append KV on first iteration
-                let (x_out, g_state) = loop_block
-                    .forward(
+                for iter in 0..loop_count {
+                    let append_kv = iter == 0; // Only append KV on first iteration
+                    match loop_block.forward(
                         &x_exp,
                         global_state.as_deref(),
                         kv_cache,
                         append_kv,
                         Some(pos), // Pass explicit token position for causal masking
-                    )
-                    .expect("Loop block forward failed: token_pos/cache mismatch");
-                x_exp = x_out;
-                global_state = Some(g_state);
+                    ) {
+                        Ok((x_out, g_state)) => {
+                            x_exp = x_out;
+                            global_state = Some(g_state);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "ERROR: Loop block forward failed at iter {}: {} (continuing with degraded output)",
+                                iter, e
+                            );
+                            // Continue with current x_exp - degraded but non-fatal
+                            break;
+                        }
+                    }
+                }
+            } else {
+                eprintln!("ERROR: loop_kv_cache not initialized for LoopLM model, skipping loop block");
+                // Continue without loop block - degraded mode
             }
         }
 
@@ -912,27 +922,38 @@ impl NanochatModel {
             // 3b. Shared loop block (N iterations)
             // Must maintain per-token global states for causal correctness
             if let Some(ref loop_block) = self.shared_loop_block {
-                let loop_kv_cache = self.loop_kv_cache.as_mut().unwrap();
+                if let Some(loop_kv_cache) = self.loop_kv_cache.as_mut() {
+                    // Initialize per-token global states
+                    let mut global_states: Vec<Option<Vec<f32>>> = vec![None; seq_len];
 
-                // Initialize per-token global states
-                let mut global_states: Vec<Option<Vec<f32>>> = vec![None; seq_len];
-
-                // Process entire sequence through each loop iteration
-                // Each token maintains its own global state across iterations
-                for iter in 0..loop_cfg.loop_count {
-                    let append_kv = (iter == 0);
-                    let new_states = loop_block
-                        .forward_batch(
+                    // Process entire sequence through each loop iteration
+                    // Each token maintains its own global state across iterations
+                    for iter in 0..loop_cfg.loop_count {
+                        let append_kv = (iter == 0);
+                        match loop_block.forward_batch(
                             &mut x_exp_all,
                             &global_states,
                             loop_kv_cache,
                             append_kv,
                             seq_len,
-                        )
-                        .expect("Loop batched forward failed: token_pos/cache mismatch");
-
-                    // Update global states for next iteration
-                    global_states = new_states.into_iter().map(Some).collect();
+                        ) {
+                            Ok(new_states) => {
+                                // Update global states for next iteration (convert to Option wrapper)
+                                global_states = new_states.into_iter().map(Some).collect();
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "ERROR: Loop batched forward failed at iter {}: {} (using degraded output)",
+                                    iter, e
+                                );
+                                // Stop loop iterations, continue with current x_exp_all
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    eprintln!("ERROR: loop_kv_cache not initialized for LoopLM batched forward, skipping");
+                    // Continue with degraded output (skip loop block)
                 }
             }
 

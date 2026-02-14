@@ -23,6 +23,7 @@ pub struct AppState {
     pub tokenizer: tokenizers::Tokenizer,
     pub model_name: String,
     pub vocab_size: u32,
+    pub max_seq_len: usize,
 }
 
 /// Build the Axum router.
@@ -80,31 +81,85 @@ async fn non_stream_completion(
     let prompt = req.to_prompt_string();
     let params = req.to_sampling_params();
     let model_name = state.model_name.clone();
+    let max_seq_len = state.max_seq_len;
 
-    let (generated_text, prompt_tokens, completion_tokens) =
-        tokio::task::spawn_blocking(move || {
-            let prompt_ids = state
-                .tokenizer
-                .encode(prompt.as_str(), false)
-                .map(|e| e.get_ids().to_vec())
-                .unwrap_or_default();
-            let prompt_len = prompt_ids.len();
-            let vs = state.vocab_size;
-            let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
+    let result = tokio::task::spawn_blocking(move || {
+        let prompt_ids = state
+            .tokenizer
+            .encode(prompt.as_str(), false)
+            .map(|e| e.get_ids().to_vec())
+            .unwrap_or_default();
+        let prompt_len = prompt_ids.len();
 
-            let mut engine = state.engine.lock().unwrap();
-            let output_ids = engine.generate(&token_ids, &params);
-            let output_len = output_ids.len();
+        // Validate prompt length to prevent RoPE assert panics
+        if prompt_len >= max_seq_len {
+            return Err(format!(
+                "Prompt too long: {} tokens exceeds model limit of {}",
+                prompt_len, max_seq_len
+            ));
+        }
 
-            let text = state
-                .tokenizer
-                .decode(&output_ids, true)
-                .unwrap_or_default();
+        let vs = state.vocab_size;
+        let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
 
-            (text, prompt_len, output_len)
-        })
-        .await
-        .unwrap();
+        let mut engine = state.engine.lock().unwrap();
+        let output_ids = engine.generate(&token_ids, &params);
+        let output_len = output_ids.len();
+
+        let text = state
+            .tokenizer
+            .decode(&output_ids, true)
+            .unwrap_or_default();
+
+        Ok((text, prompt_len, output_len))
+    })
+    .await;
+
+    let (generated_text, prompt_tokens, completion_tokens) = match result {
+        Ok(Ok(data)) => data,
+        Ok(Err(err)) => {
+            // Return error as assistant message
+            return Json(ChatCompletionResponse {
+                id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                object: "chat.completion".to_string(),
+                created: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                model: model_name,
+                choices: vec![ChatChoice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: Role::Assistant,
+                        content: format!("Error: {}", err),
+                    },
+                    finish_reason: "error".to_string(),
+                }],
+                usage: Usage::new(0, 0),
+            });
+        }
+        Err(join_err) => {
+            // spawn_blocking panic or cancellation
+            return Json(ChatCompletionResponse {
+                id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                object: "chat.completion".to_string(),
+                created: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                model: model_name,
+                choices: vec![ChatChoice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: Role::Assistant,
+                        content: format!("Internal error: {}", join_err),
+                    },
+                    finish_reason: "error".to_string(),
+                }],
+                usage: Usage::new(0, 0),
+            });
+        }
+    };
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -136,6 +191,7 @@ async fn stream_completion(
     let params = req.to_sampling_params();
     let model_name = state.model_name.clone();
     let request_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+    let max_seq_len = state.max_seq_len;
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(64);
 
@@ -147,6 +203,36 @@ async fn stream_completion(
             .encode(prompt.as_str(), false)
             .map(|e| e.get_ids().to_vec())
             .unwrap_or_default();
+
+        // Validate prompt length before streaming
+        if prompt_ids.len() >= max_seq_len {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let error_chunk = ChatCompletionChunk {
+                id: req_id,
+                object: "chat.completion.chunk".to_string(),
+                created: now,
+                model,
+                choices: vec![ChunkChoice {
+                    index: 0,
+                    delta: ChunkDelta {
+                        role: Some(Role::Assistant),
+                        content: Some(format!(
+                            "Error: Prompt too long ({} tokens exceeds limit of {})",
+                            prompt_ids.len(),
+                            max_seq_len
+                        )),
+                    },
+                    finish_reason: Some("error".to_string()),
+                }],
+            };
+            let json = serde_json::to_string(&error_chunk).unwrap();
+            let _ = tx.blocking_send(Ok(Event::default().data(json)));
+            return;
+        }
+
         let vs = state.vocab_size;
         let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
 
@@ -409,6 +495,7 @@ mod tests {
 
     fn make_test_state() -> Arc<AppState> {
         let config = ModelConfig::test_config(128, 2, 4, 256);
+        let max_seq_len = config.max_seq_len;
         let engine = InferenceEngine::new_random(config);
         let tokenizer = make_test_tokenizer();
 
@@ -417,6 +504,7 @@ mod tests {
             tokenizer,
             model_name: "nanochat-test".to_string(),
             vocab_size: 256,
+            max_seq_len,
         })
     }
 
