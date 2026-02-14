@@ -1,7 +1,7 @@
 //! Test if data loader properly shifts targets
 
-use nanochat_train::data::dataset::{Dataset, TokenFileDataset};
 use anyhow::Result;
+use nanochat_train::data::dataset::{Dataset, TokenFileDataset};
 
 fn main() -> Result<()> {
     println!("Testing data loader target shifting...\n");
@@ -27,7 +27,12 @@ fn main() -> Result<()> {
         for i in 0..input.len() {
             if target[i] != input[i] + 10 {
                 correct = false;
-                println!("  ❌ ERROR: target[{}] = {}, expected {}", i, target[i], input[i] + 10);
+                println!(
+                    "  ❌ ERROR: target[{}] = {}, expected {}",
+                    i,
+                    target[i],
+                    input[i] + 10
+                );
             }
         }
 

@@ -86,7 +86,9 @@ mod tests {
             assert!(
                 (x[i] - expected).abs() < 1e-5,
                 "idx {}: got {}, expected {}",
-                i, x[i], expected
+                i,
+                x[i],
+                expected
             );
         }
     }
@@ -121,7 +123,9 @@ mod tests {
             assert!(
                 (x_inplace[i] - x_out[i]).abs() < 1e-7,
                 "mismatch at {}: {} vs {}",
-                i, x_inplace[i], x_out[i]
+                i,
+                x_inplace[i],
+                x_out[i]
             );
         }
     }

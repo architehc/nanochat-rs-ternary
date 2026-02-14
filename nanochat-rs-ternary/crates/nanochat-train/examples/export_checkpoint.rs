@@ -5,13 +5,9 @@
 //!     --checkpoint checkpoints/tiny-cpu-demo/final \
 //!     --output models/tiny-cpu.gguf
 
-use clap::Parser;
 use candle_core::{DType, Device};
-use nanochat_train::{
-    model::NanochatTrainModel,
-    checkpoint,
-    export,
-};
+use clap::Parser;
+use nanochat_train::{checkpoint, export, model::NanochatTrainModel};
 
 #[derive(Parser)]
 #[command(name = "export_checkpoint")]
@@ -50,7 +46,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ Checkpoint loaded");
     println!("  Step: {}", step);
     println!("  Loss: {:.4}", loss);
-    println!("  Model: {}D, {} layers, {} heads", config.dim, config.n_layers, config.n_heads);
+    println!(
+        "  Model: {}D, {} layers, {} heads",
+        config.dim, config.n_layers, config.n_heads
+    );
     println!();
 
     // Create model from checkpoint
@@ -60,13 +59,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Failed to create model: {}", e))?;
 
     println!("✓ Model created");
-    println!("  Parameters: {}", format_count(config.param_count_estimate()));
+    println!(
+        "  Parameters: {}",
+        format_count(config.param_count_estimate())
+    );
     println!();
 
     // Determine mHC output path
-    let mhc_path = args.mhc_output.unwrap_or_else(|| {
-        format!("{}.mhc", args.output.trim_end_matches(".gguf"))
-    });
+    let mhc_path = args
+        .mhc_output
+        .unwrap_or_else(|| format!("{}.mhc", args.output.trim_end_matches(".gguf")));
 
     // Export to GGUF + mHC
     println!("Exporting to GGUF...");

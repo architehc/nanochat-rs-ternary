@@ -1,12 +1,14 @@
 //! Trainable layers: BitLinearSTE, RMSNorm, Embedding (Candle versions).
 //! Implemented in Phase B.
 
-use candle_core::{Result, Tensor};
 #[cfg(test)]
 use candle_core::DType;
+use candle_core::{Result, Tensor};
 use candle_nn::VarBuilder;
 
-use crate::quantize::{absmean_quantize, dequantize_ternary, per_token_absmax_quantize, dequantize_activations};
+use crate::quantize::{
+    absmean_quantize, dequantize_activations, dequantize_ternary, per_token_absmax_quantize,
+};
 
 /// Ternary linear layer with STE for training.
 ///
@@ -21,7 +23,14 @@ pub struct BitLinearSTE {
 
 impl BitLinearSTE {
     pub fn new(in_f: usize, out_f: usize, gs: usize, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get_with_hints((out_f, in_f), "weight", candle_nn::Init::Randn { mean: 0.0, stdev: 0.02 })?;
+        let weight = vb.get_with_hints(
+            (out_f, in_f),
+            "weight",
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: 0.02,
+            },
+        )?;
         Ok(Self {
             weight,
             in_features: in_f,
@@ -74,7 +83,11 @@ pub struct RMSNormTrain {
 impl RMSNormTrain {
     pub fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
         let weight = vb.get_with_hints(dim, "weight", candle_nn::Init::Const(1.0))?;
-        Ok(Self { weight, eps: 1e-6, dim })
+        Ok(Self {
+            weight,
+            eps: 1e-6,
+            dim,
+        })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -121,7 +134,9 @@ mod tests {
         let grads = loss.backward()?;
 
         // Gradient should exist for weight
-        let grad = grads.get(&layer.weight).expect("Gradient should exist for weight");
+        let grad = grads
+            .get(&layer.weight)
+            .expect("Gradient should exist for weight");
         let grad_norm = grad.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
         assert!(grad_norm > 0.0, "Gradient norm should be non-zero");
         Ok(())
@@ -141,7 +156,8 @@ mod tests {
         for &v in &vals {
             assert!(
                 (v + 1.0).abs() < 1e-6 || v.abs() < 1e-6 || (v - 1.0).abs() < 1e-6,
-                "Non-ternary: {}", v
+                "Non-ternary: {}",
+                v
             );
         }
         Ok(())

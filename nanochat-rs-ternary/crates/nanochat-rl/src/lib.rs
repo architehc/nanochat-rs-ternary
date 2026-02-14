@@ -11,19 +11,19 @@
 //! 4. **GRPO Algorithm**: Group-based policy optimization with relative rewards
 //! 5. **External Evaluation**: Optional Qwen3 coder endpoint for additional feedback
 
-pub mod compiler;
 pub mod ast_analysis;
-pub mod reward;
+pub mod compiler;
 pub mod grpo;
 pub mod maxrl;
 pub mod qwen;
+pub mod reward;
 pub mod trainer;
 
-pub use compiler::{CompilerFeedback, CompileResult};
-pub use ast_analysis::{AstMetrics, analyze_ast};
-pub use reward::{RewardConfig, compute_reward};
+pub use ast_analysis::{analyze_ast, AstMetrics};
+pub use compiler::{CompileResult, CompilerFeedback};
 pub use grpo::{GrpoConfig, GrpoTrainer};
-pub use maxrl::{MaxRLConfig, MaxRLTrainer, MaxRLStats};
+pub use maxrl::{MaxRLConfig, MaxRLStats, MaxRLTrainer};
+pub use reward::{compute_reward, RewardConfig};
 pub use trainer::RLTrainer;
 
 /// Configuration for RL training

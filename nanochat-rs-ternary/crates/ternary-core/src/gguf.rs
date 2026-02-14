@@ -22,6 +22,7 @@ const GGUF_VERSION: u32 = 3;
 
 /// GGUF data types (standard + custom).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum GgufType {
     F32 = 0,
     F16 = 1,
@@ -92,12 +93,18 @@ impl GgufFile {
         // Read header
         let magic = read_u32(&mut file)?;
         if magic != GGUF_MAGIC {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid GGUF magic: {:#010x}", magic)));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid GGUF magic: {:#010x}", magic),
+            ));
         }
 
         let version = read_u32(&mut file)?;
         if !(2..=3).contains(&version) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported GGUF version: {}", version)));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsupported GGUF version: {}", version),
+            ));
         }
 
         let n_tensors = read_u64(&mut file)?;
@@ -122,7 +129,13 @@ impl GgufFile {
             }
             let dtype = read_u32(&mut file)?;
             let offset = read_u64(&mut file)?;
-            tensors.push(TensorDescriptor { name, n_dims, dims, dtype, offset });
+            tensors.push(TensorDescriptor {
+                name,
+                n_dims,
+                dims,
+                dtype,
+                offset,
+            });
         }
 
         // Data section starts at next 32-byte aligned position
@@ -132,7 +145,12 @@ impl GgufFile {
         // Memory-map the entire file
         let mmap = unsafe { Mmap::map(&file)? };
 
-        Ok(Self { metadata, tensors, _mmap: mmap, data_offset })
+        Ok(Self {
+            metadata,
+            tensors,
+            _mmap: mmap,
+            data_offset,
+        })
     }
 
     /// Get raw tensor data bytes for a given tensor descriptor.
@@ -153,7 +171,9 @@ impl GgufFile {
                 // For a 2D [rows, cols] tensor with group_size from metadata:
                 let rows = tensor.dims.first().copied().unwrap_or(0) as usize;
                 let cols = tensor.dims.get(1).copied().unwrap_or(0) as usize;
-                let gs = match self.metadata.get("nanochat.group_size")
+                let gs = match self
+                    .metadata
+                    .get("nanochat.group_size")
                     .or_else(|| self.metadata.get("model.group_size"))
                 {
                     Some(GgufValue::U32(v)) => *v as usize,
@@ -170,11 +190,7 @@ impl GgufFile {
     }
 
     /// Load a ternary tensor and convert to PlanarWeights.
-    pub fn load_planar_weights(
-        &self,
-        name: &str,
-        group_size: usize,
-    ) -> io::Result<PlanarWeights> {
+    pub fn load_planar_weights(&self, name: &str, group_size: usize) -> io::Result<PlanarWeights> {
         let tensor = self
             .tensors
             .iter()
@@ -189,10 +205,7 @@ impl GgufFile {
         if tensor.n_dims != 2 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!(
-                    "expected 2D tensor, got {}D for '{}'",
-                    tensor.n_dims, name
-                ),
+                format!("expected 2D tensor, got {}D for '{}'", tensor.n_dims, name),
             ));
         }
 
@@ -460,8 +473,7 @@ fn read_gguf_string(r: &mut impl Read) -> io::Result<String> {
     let len = read_u64(r)? as usize;
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
-    String::from_utf8(buf)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 fn read_gguf_value(r: &mut impl Read) -> io::Result<GgufValue> {
@@ -678,9 +690,10 @@ mod tests {
         writer.add_metadata("key_u32", GgufValue::U32(42));
         writer.add_metadata("key_str", GgufValue::String("hello".to_string()));
         writer.add_metadata("key_u64", GgufValue::U64(9999999));
-        writer.add_ternary_tensor("w", &PlanarWeights::from_row_major(
-            &vec![1.0f32; 4 * 128], 4, 128, 128,
-        ));
+        writer.add_ternary_tensor(
+            "w",
+            &PlanarWeights::from_row_major(&vec![1.0f32; 4 * 128], 4, 128, 128),
+        );
         writer.write(&path).unwrap();
 
         let gguf = GgufFile::open(&path).unwrap();
@@ -716,7 +729,11 @@ mod tests {
         let result = GgufFile::open(&path);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("magic"), "error should mention magic: {}", err_msg);
+        assert!(
+            err_msg.contains("magic"),
+            "error should mention magic: {}",
+            err_msg
+        );
 
         std::fs::remove_file(&path).ok();
     }
@@ -746,9 +763,10 @@ mod tests {
 
         let mut writer = GgufWriter::new();
         writer.add_metadata("model.group_size", GgufValue::U32(128));
-        writer.add_ternary_tensor("w0", &PlanarWeights::from_row_major(
-            &vec![1.0f32; 4 * 128], 4, 128, 128,
-        ));
+        writer.add_ternary_tensor(
+            "w0",
+            &PlanarWeights::from_row_major(&vec![1.0f32; 4 * 128], 4, 128, 128),
+        );
         writer.write(&path).unwrap();
 
         let gguf = GgufFile::open(&path).unwrap();
@@ -772,12 +790,14 @@ mod tests {
 
         let mut writer = GgufWriter::new();
         writer.add_metadata("model.group_size", GgufValue::U32(128));
-        writer.add_ternary_tensor("w0", &PlanarWeights::from_row_major(
-            &vec![1.0f32; 4 * 128], 4, 128, 128,
-        ));
-        writer.add_ternary_tensor("w1", &PlanarWeights::from_row_major(
-            &vec![-1.0f32; 8 * 256], 8, 256, 128,
-        ));
+        writer.add_ternary_tensor(
+            "w0",
+            &PlanarWeights::from_row_major(&vec![1.0f32; 4 * 128], 4, 128, 128),
+        );
+        writer.add_ternary_tensor(
+            "w1",
+            &PlanarWeights::from_row_major(&vec![-1.0f32; 8 * 256], 8, 256, 128),
+        );
         writer.add_f32_tensor("norm", &[4], &[1.0, 1.0, 1.0, 1.0]);
         writer.write(&path).unwrap();
 
@@ -805,10 +825,10 @@ mod tests {
             GgufValue::I16(-100),
             GgufValue::U32(1000),
             GgufValue::I32(-1000),
-            GgufValue::F32(3.14),
+            GgufValue::F32(std::f32::consts::PI),
             GgufValue::U64(99999),
             GgufValue::I64(-99999),
-            GgufValue::F64(2.718),
+            GgufValue::F64(std::f64::consts::E),
             GgufValue::Bool(true),
             GgufValue::String("test".to_string()),
             GgufValue::Array(vec![GgufValue::U32(1)]),
@@ -837,7 +857,7 @@ mod tests {
 
         let mut writer = GgufWriter::new();
         writer.add_metadata("int_val", GgufValue::I32(-42));
-        writer.add_metadata("float_val", GgufValue::F32(3.14));
+        writer.add_metadata("float_val", GgufValue::F32(std::f32::consts::PI));
         writer.add_f32_tensor("t", &[2], &[1.0, 2.0]);
         writer.write(&path).unwrap();
 
@@ -847,7 +867,7 @@ mod tests {
             _ => panic!("int_val wrong"),
         }
         match gguf.metadata.get("float_val") {
-            Some(GgufValue::F32(v)) => assert!((*v - 3.14).abs() < 0.01),
+            Some(GgufValue::F32(v)) => assert!((*v - std::f32::consts::PI).abs() < 0.01),
             _ => panic!("float_val wrong"),
         }
 
@@ -863,7 +883,7 @@ mod tests {
         f.write_all(&GGUF_VERSION.to_le_bytes()).unwrap();
         f.write_all(&0u64.to_le_bytes()).unwrap(); // n_tensors=0
         f.write_all(&1u64.to_le_bytes()).unwrap(); // n_metadata=1
-        // metadata key (GGUF string: u64 len + bytes)
+                                                   // metadata key (GGUF string: u64 len + bytes)
         write_gguf_string(&mut f, key).unwrap();
         // value type + data
         f.write_all(&vtype.to_le_bytes()).unwrap();
@@ -952,10 +972,10 @@ mod tests {
     fn test_gguf_read_f64_value() {
         let path = test_path("test_f64_val.gguf");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        write_raw_gguf_with_meta(&path, "val", 12, &(3.14159f64).to_le_bytes());
+        write_raw_gguf_with_meta(&path, "val", 12, &(std::f64::consts::PI).to_le_bytes());
         let gguf = GgufFile::open(&path).unwrap();
         match gguf.metadata.get("val") {
-            Some(GgufValue::F64(v)) => assert!((*v - 3.14159).abs() < 1e-10),
+            Some(GgufValue::F64(v)) => assert!((*v - std::f64::consts::PI).abs() < 1e-10),
             other => panic!("expected F64, got {:?}", other),
         }
         std::fs::remove_file(&path).ok();
@@ -977,8 +997,12 @@ mod tests {
         match gguf.metadata.get("val") {
             Some(GgufValue::Array(arr)) => {
                 assert_eq!(arr.len(), 3);
-                if let GgufValue::U32(v) = &arr[0] { assert_eq!(*v, 10); }
-                if let GgufValue::U32(v) = &arr[2] { assert_eq!(*v, 30); }
+                if let GgufValue::U32(v) = &arr[0] {
+                    assert_eq!(*v, 10);
+                }
+                if let GgufValue::U32(v) = &arr[2] {
+                    assert_eq!(*v, 30);
+                }
             }
             other => panic!("expected Array, got {:?}", other),
         }
@@ -1056,8 +1080,12 @@ mod tests {
         match gguf.metadata.get("val") {
             Some(GgufValue::Array(arr)) => {
                 assert_eq!(arr.len(), 2);
-                if let GgufValue::F32(v) = &arr[0] { assert!((*v - 1.5).abs() < 1e-6); }
-                if let GgufValue::F32(v) = &arr[1] { assert!((*v - 2.5).abs() < 1e-6); }
+                if let GgufValue::F32(v) = &arr[0] {
+                    assert!((*v - 1.5).abs() < 1e-6);
+                }
+                if let GgufValue::F32(v) = &arr[1] {
+                    assert!((*v - 2.5).abs() < 1e-6);
+                }
             }
             other => panic!("expected Array, got {:?}", other),
         }
@@ -1072,7 +1100,7 @@ mod tests {
         let mut val_bytes = Vec::new();
         val_bytes.extend_from_slice(&8u32.to_le_bytes()); // arr_type = String
         val_bytes.extend_from_slice(&1u64.to_le_bytes()); // arr_len = 1
-        // String: u64 len + bytes
+                                                          // String: u64 len + bytes
         let s = "hello";
         val_bytes.extend_from_slice(&(s.len() as u64).to_le_bytes());
         val_bytes.extend_from_slice(s.as_bytes());
@@ -1081,7 +1109,9 @@ mod tests {
         match gguf.metadata.get("val") {
             Some(GgufValue::Array(arr)) => {
                 assert_eq!(arr.len(), 1);
-                if let GgufValue::String(v) = &arr[0] { assert_eq!(v, "hello"); }
+                if let GgufValue::String(v) = &arr[0] {
+                    assert_eq!(v, "hello");
+                }
             }
             other => panic!("expected Array, got {:?}", other),
         }
@@ -1114,13 +1144,13 @@ mod tests {
         f.write_all(&GGUF_VERSION.to_le_bytes()).unwrap();
         f.write_all(&1u64.to_le_bytes()).unwrap(); // n_tensors = 1
         f.write_all(&0u64.to_le_bytes()).unwrap(); // n_metadata = 0
-        // tensor descriptor: name
+                                                   // tensor descriptor: name
         write_gguf_string(&mut f, "t").unwrap();
         f.write_all(&1u32.to_le_bytes()).unwrap(); // n_dims = 1
         f.write_all(&4u64.to_le_bytes()).unwrap(); // dim[0] = 4
         f.write_all(&1u32.to_le_bytes()).unwrap(); // dtype = 1 (F16)
         f.write_all(&0u64.to_le_bytes()).unwrap(); // offset = 0
-        // Pad to 32-byte alignment
+                                                   // Pad to 32-byte alignment
         let pos = f.stream_position().unwrap() as usize;
         let pad = ((pos + 31) & !31) - pos;
         f.write_all(&vec![0u8; pad]).unwrap();
@@ -1188,7 +1218,7 @@ mod tests {
         f.write_all(&vec![0u8; pad]).unwrap();
         // packed bytes: 4 rows * 32 bytes = 128 bytes
         // scales: 4 rows * 1 group * 4 bytes = 16 bytes
-        f.write_all(&vec![0u8; 128 + 16]).unwrap();
+        f.write_all(&[0u8; 128 + 16]).unwrap();
         drop(f);
 
         let gguf = GgufFile::open(&path).unwrap();
@@ -1211,7 +1241,7 @@ mod tests {
         f.write_all(&GGUF_VERSION.to_le_bytes()).unwrap();
         f.write_all(&1u64.to_le_bytes()).unwrap(); // n_tensors = 1
         f.write_all(&1u64.to_le_bytes()).unwrap(); // n_metadata = 1
-        // metadata: model.group_size = 128
+                                                   // metadata: model.group_size = 128
         write_gguf_string(&mut f, "model.group_size").unwrap();
         f.write_all(&4u32.to_le_bytes()).unwrap(); // type = U32
         f.write_all(&128u32.to_le_bytes()).unwrap();
@@ -1226,7 +1256,7 @@ mod tests {
         let pad = ((pos + 31) & !31) - pos;
         f.write_all(&vec![0u8; pad]).unwrap();
         // Write only 10 bytes (far too short: need 128 + 16 = 144)
-        f.write_all(&vec![0u8; 10]).unwrap();
+        f.write_all(&[0u8; 10]).unwrap();
         drop(f);
 
         let gguf = GgufFile::open(&path).unwrap();

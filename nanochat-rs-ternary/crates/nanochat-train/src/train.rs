@@ -5,14 +5,14 @@ use candle_nn::VarMap;
 use std::time::Instant;
 
 use crate::config::TrainConfig;
-use crate::data::{Dataset, DataLoader};
+use crate::data::{DataLoader, Dataset};
 use crate::model::NanochatTrainModel;
-use crate::optim::{Muon, Lion, wsd_schedule};
+use crate::optim::{wsd_schedule, Lion, Muon};
 
 /// Checkpoint management utilities
 mod checkpoint_manager {
-    use std::path::{Path, PathBuf};
     use std::fs;
+    use std::path::{Path, PathBuf};
 
     /// Get disk space info for path
     pub fn get_disk_space(path: &Path) -> Result<(u64, u64), String> {
@@ -42,7 +42,8 @@ mod checkpoint_manager {
                 let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
                 let path = entry.path();
                 if path.is_file() {
-                    total += entry.metadata()
+                    total += entry
+                        .metadata()
                         .map_err(|e| format!("Failed to read metadata: {}", e))?
                         .len();
                 } else if path.is_dir() {
@@ -54,14 +55,19 @@ mod checkpoint_manager {
     }
 
     /// Clean old checkpoints, keeping only the last N
-    pub fn cleanup_old_checkpoints(checkpoint_dir: &Path, keep_last: usize) -> Result<usize, String> {
+    pub fn cleanup_old_checkpoints(
+        checkpoint_dir: &Path,
+        keep_last: usize,
+    ) -> Result<usize, String> {
         if !checkpoint_dir.exists() {
             return Ok(0);
         }
 
         // List all checkpoint directories (step_NNNNN)
         let mut checkpoints: Vec<(PathBuf, u32)> = Vec::new();
-        for entry in fs::read_dir(checkpoint_dir).map_err(|e| format!("Failed to read dir: {}", e))? {
+        for entry in
+            fs::read_dir(checkpoint_dir).map_err(|e| format!("Failed to read dir: {}", e))?
+        {
             let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
             let path = entry.path();
             if path.is_dir() {
@@ -134,16 +140,18 @@ pub struct Trainer {
     pub config: TrainConfig,
     pub device: Device,
     pub global_step: usize,
-    pub base_lr_muon: f64,   // Made public for CLI overrides
-    pub base_lr_lion: f64,   // Made public for CLI overrides
+    pub base_lr_muon: f64, // Made public for CLI overrides
+    pub base_lr_lion: f64, // Made public for CLI overrides
 }
 
 impl Trainer {
     /// Create a new trainer from a saved checkpoint
     pub fn from_checkpoint(checkpoint_dir: &str, device: Device) -> Result<Self> {
         // Load checkpoint
-        let (varmap, config, step, _loss) = crate::checkpoint::load_checkpoint(checkpoint_dir, &device)
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to load checkpoint: {}", e)))?;
+        let (varmap, config, step, _loss) =
+            crate::checkpoint::load_checkpoint(checkpoint_dir, &device).map_err(|e| {
+                candle_core::Error::Msg(format!("Failed to load checkpoint: {}", e))
+            })?;
 
         // Create model from loaded varmap
         let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
@@ -310,7 +318,11 @@ impl Trainer {
         let loss_val = loss.to_scalar::<f32>()? as f64;
         let elapsed = step_start.elapsed().as_secs_f64();
         let n_tokens = (batch * seq_len) as f64;
-        let tokens_per_sec = if elapsed > 0.0 { n_tokens / elapsed } else { 0.0 };
+        let tokens_per_sec = if elapsed > 0.0 {
+            n_tokens / elapsed
+        } else {
+            0.0
+        };
 
         // Explicitly drop intermediate tensors to free GPU memory
         drop(loss);
@@ -347,7 +359,11 @@ impl Trainer {
             n_steps += 1;
         }
 
-        Ok(if n_steps > 0 { total_loss / n_steps as f64 } else { 0.0 })
+        Ok(if n_steps > 0 {
+            total_loss / n_steps as f64
+        } else {
+            0.0
+        })
     }
 
     /// Production training loop with per-step logging and checkpointing.
@@ -412,15 +428,16 @@ impl Trainer {
                 }
 
                 // Checkpoint with disk monitoring and cleanup
-                if checkpoint_interval > 0
-                    && self.global_step.is_multiple_of(checkpoint_interval)
-                {
+                if checkpoint_interval > 0 && self.global_step.is_multiple_of(checkpoint_interval) {
                     if let Some(dir) = checkpoint_dir {
                         // Check disk space before saving
-                        if let Ok((total, avail)) = checkpoint_manager::get_disk_space(std::path::Path::new(dir)) {
+                        if let Ok((total, avail)) =
+                            checkpoint_manager::get_disk_space(std::path::Path::new(dir))
+                        {
                             let usage_pct = ((total - avail) as f64 / total as f64) * 100.0;
                             if usage_pct > 90.0 {
-                                println!("  WARNING: Disk {}% full ({} / {} available)",
+                                println!(
+                                    "  WARNING: Disk {}% full ({} / {} available)",
                                     usage_pct as u32,
                                     checkpoint_manager::format_bytes(avail),
                                     checkpoint_manager::format_bytes(total)
@@ -431,9 +448,15 @@ impl Trainer {
                         // Clean old checkpoints if requested
                         if keep_last_checkpoints > 0 {
                             let dir_path = std::path::Path::new(dir);
-                            if let Ok(removed) = checkpoint_manager::cleanup_old_checkpoints(dir_path, keep_last_checkpoints) {
+                            if let Ok(removed) = checkpoint_manager::cleanup_old_checkpoints(
+                                dir_path,
+                                keep_last_checkpoints,
+                            ) {
                                 if removed > 0 {
-                                    println!("  Cleaned {} old checkpoint(s), keeping last {}", removed, keep_last_checkpoints);
+                                    println!(
+                                        "  Cleaned {} old checkpoint(s), keeping last {}",
+                                        removed, keep_last_checkpoints
+                                    );
                                 }
                             }
                         }
@@ -449,8 +472,13 @@ impl Trainer {
                         .map_err(|e| candle_core::Error::Msg(format!("checkpoint save: {}", e)))?;
 
                         // Report checkpoint size
-                        if let Ok(size) = checkpoint_manager::dir_size(std::path::Path::new(&path)) {
-                            println!("  -> checkpoint saved to {} ({})", path, checkpoint_manager::format_bytes(size));
+                        if let Ok(size) = checkpoint_manager::dir_size(std::path::Path::new(&path))
+                        {
+                            println!(
+                                "  -> checkpoint saved to {} ({})",
+                                path,
+                                checkpoint_manager::format_bytes(size)
+                            );
                         } else {
                             println!("  -> checkpoint saved to {}", path);
                         }
@@ -459,7 +487,10 @@ impl Trainer {
 
                 // Check if we've reached total_steps
                 if self.global_step >= self.config.total_steps {
-                    println!("\n✓ Reached total_steps={}, stopping training", self.config.total_steps);
+                    println!(
+                        "\n✓ Reached total_steps={}, stopping training",
+                        self.config.total_steps
+                    );
                     break;
                 }
             }
@@ -565,7 +596,11 @@ mod tests {
         let target_ids = Tensor::zeros((2, 8), DType::U32, &trainer.device)?;
 
         let stats = trainer.train_step(&input_ids, &target_ids)?;
-        assert!(stats.loss.is_finite(), "Loss should be finite: {}", stats.loss);
+        assert!(
+            stats.loss.is_finite(),
+            "Loss should be finite: {}",
+            stats.loss
+        );
         assert!(stats.grad_norm.is_finite(), "Grad norm should be finite");
         Ok(())
     }
@@ -590,7 +625,12 @@ mod tests {
         // Loss should decrease overall
         let first = losses[0];
         let last = *losses.last().unwrap();
-        assert!(last < first, "Loss should decrease: first={:.4} last={:.4}", first, last);
+        assert!(
+            last < first,
+            "Loss should decrease: first={:.4} last={:.4}",
+            first,
+            last
+        );
         Ok(())
     }
 
@@ -607,7 +647,11 @@ mod tests {
 
         // During warmup, LR should be less than base
         let stats = trainer.train_step(&input_ids, &target_ids)?;
-        assert!(stats.lr < 0.02, "LR should be ramping during warmup: {}", stats.lr);
+        assert!(
+            stats.lr < 0.02,
+            "LR should be ramping during warmup: {}",
+            stats.lr
+        );
         assert!(stats.lr > 0.0, "LR should be positive: {}", stats.lr);
         Ok(())
     }

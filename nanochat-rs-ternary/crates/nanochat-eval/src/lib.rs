@@ -7,11 +7,11 @@
 //! - Model comparison tools
 
 pub mod datasets;
+pub mod eval;
 pub mod executor;
 pub mod metrics;
-pub mod eval;
 
-pub use datasets::{HumanEvalDataset, MBPPDataset, CodeProblem};
+pub use datasets::{CodeProblem, HumanEvalDataset, MBPPDataset};
+pub use eval::{EvalReport, EvaluationConfig, Evaluator};
 pub use executor::{CodeExecutor, ExecutionResult};
 pub use metrics::{EvalMetrics, PassAtK};
-pub use eval::{EvaluationConfig, Evaluator, EvalReport};

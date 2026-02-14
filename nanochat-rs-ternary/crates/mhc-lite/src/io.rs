@@ -41,13 +41,19 @@ pub fn load_mhc_file<P: AsRef<Path>>(path: P) -> io::Result<(MhcFileHeader, Vec<
     file.read_exact(&mut buf4)?;
     let magic = u32::from_le_bytes(buf4);
     if magic != MHC_MAGIC {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid mHC magic: {:#010x}", magic)));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid mHC magic: {:#010x}", magic),
+        ));
     }
 
     file.read_exact(&mut buf4)?;
     let version = u32::from_le_bytes(buf4);
     if version != MHC_VERSION {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported mHC version: {}", version)));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unsupported mHC version: {}", version),
+        ));
     }
 
     file.read_exact(&mut buf4)?;
@@ -67,7 +73,12 @@ pub fn load_mhc_file<P: AsRef<Path>>(path: P) -> io::Result<(MhcFileHeader, Vec<
     let bytes_per_layer = match n_streams {
         2 => 36,
         4 => 160,
-        _ => { return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unsupported n_streams: {}", n_streams))); }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsupported n_streams: {}", n_streams),
+            ));
+        }
     };
 
     let mut layers = Vec::with_capacity(n_layers as usize);

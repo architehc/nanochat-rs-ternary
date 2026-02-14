@@ -28,11 +28,7 @@ fn load_npy_f32(path: &str) -> Vec<f32> {
         ".npy file too small: {} bytes",
         data.len()
     );
-    assert_eq!(
-        &data[..6],
-        b"\x93NUMPY",
-        "not a .npy file (bad magic)"
-    );
+    assert_eq!(&data[..6], b"\x93NUMPY", "not a .npy file (bad magic)");
 
     let major = data[6];
     let header_len = if major == 1 {
@@ -121,7 +117,9 @@ fn cross_validate_python_rust() {
         .expect("failed to load GGUF + mHC model");
 
     // Verify mHC matrices are doubly stochastic
-    model.verify_mhc().expect("mHC verification failed on loaded model");
+    model
+        .verify_mhc()
+        .expect("mHC verification failed on loaded model");
 
     // Run the same input sequence as Python: [1, 5, 10, 20, 42]
     let tokens: Vec<u32> = vec![1, 5, 10, 20, 42];
@@ -131,7 +129,10 @@ fn cross_validate_python_rust() {
         "Rust model logits: {} values, range [{:.6}, {:.6}]",
         rust_logits.len(),
         rust_logits.iter().cloned().fold(f32::INFINITY, f32::min),
-        rust_logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+        rust_logits
+            .iter()
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max),
     );
 
     // Verify sizes match

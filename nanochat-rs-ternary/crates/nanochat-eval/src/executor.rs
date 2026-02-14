@@ -2,8 +2,8 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
-use tokio::process::Command;
 use std::time::Duration;
+use tokio::process::Command;
 
 /// Result of executing generated code with tests.
 #[derive(Debug, Clone)]
@@ -214,7 +214,7 @@ mod tests {
     #[tokio::test]
     async fn test_failed_assertion() {
         let executor = CodeExecutor::new();
-        let solution = "def add(a, b):\n    return a - b";  // Wrong!
+        let solution = "def add(a, b):\n    return a - b"; // Wrong!
         let test = "def check(candidate):\n    assert candidate(1, 2) == 3";
 
         let result = executor.execute(solution, test, "add").await.unwrap();
@@ -225,7 +225,7 @@ mod tests {
     #[tokio::test]
     async fn test_syntax_error() {
         let executor = CodeExecutor::new();
-        let solution = "def add(a, b)\n    return a + b";  // Missing colon
+        let solution = "def add(a, b)\n    return a + b"; // Missing colon
         let test = "def check(candidate):\n    assert candidate(1, 2) == 3";
 
         let result = executor.execute(solution, test, "add").await.unwrap();

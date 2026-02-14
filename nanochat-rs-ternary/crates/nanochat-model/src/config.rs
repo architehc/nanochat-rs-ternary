@@ -107,28 +107,55 @@ impl ModelConfig {
     /// ~20M param debug/test config
     pub fn d20() -> Self {
         Self {
-            dim: 256, n_layers: 6, n_heads: 4, n_kv_heads: 4,
-            deltanet_v_heads: None, deltanet_qk_heads: None,
-            ffn_mult: 2.667, vocab_size: 32000, max_seq_len: 512,
-            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0, rope_scale: 1.0,
-            n_experts: None, n_active_experts: None,
-            use_shared_expert: false, expert_dim: None,
-            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false, loop_config: None,
+            dim: 256,
+            n_layers: 6,
+            n_heads: 4,
+            n_kv_heads: 4,
+            deltanet_v_heads: None,
+            deltanet_qk_heads: None,
+            ffn_mult: 2.667,
+            vocab_size: 32000,
+            max_seq_len: 512,
+            group_size: 128,
+            mhc_n_streams: 2,
+            rope_theta: 10000.0,
+            rope_scale: 1.0,
+            n_experts: None,
+            n_active_experts: None,
+            use_shared_expert: false,
+            expert_dim: None,
+            deltanet_ratio: None,
+            layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false,
+            gated_attention: false,
+            loop_config: None,
         }
     }
 
     /// LoopLM variant of d20: 2 local + 4-iteration shared loop = 6 effective layers
     pub fn d20_loop() -> Self {
         Self {
-            dim: 256, n_layers: 3, n_heads: 4, n_kv_heads: 4,  // 1 before + 1 shared + 1 after
-            deltanet_v_heads: None, deltanet_qk_heads: None,
-            ffn_mult: 2.6875, vocab_size: 50257, max_seq_len: 256,  // Aligned with training config
-            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0, rope_scale: 1.0,
-            n_experts: None, n_active_experts: None,
-            use_shared_expert: false, expert_dim: None,
-            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: true, gated_attention: false,  // Aligned with training config
+            dim: 256,
+            n_layers: 3,
+            n_heads: 4,
+            n_kv_heads: 4, // 1 before + 1 shared + 1 after
+            deltanet_v_heads: None,
+            deltanet_qk_heads: None,
+            ffn_mult: 2.6875,
+            vocab_size: 50257,
+            max_seq_len: 256, // Aligned with training config
+            group_size: 128,
+            mhc_n_streams: 2,
+            rope_theta: 10000.0,
+            rope_scale: 1.0,
+            n_experts: None,
+            n_active_experts: None,
+            use_shared_expert: false,
+            expert_dim: None,
+            deltanet_ratio: None,
+            layer_sequence: LayerSequence::Interleaved,
+            weight_tied: true,
+            gated_attention: false, // Aligned with training config
             loop_config: Some(LoopConfig {
                 local_before: 1,
                 local_after: 1,
@@ -145,84 +172,168 @@ impl ModelConfig {
     /// ~125M param config (trained on TinyStories)
     pub fn nano_125m() -> Self {
         Self {
-            dim: 768, n_layers: 12, n_heads: 12, n_kv_heads: 12,
-            deltanet_v_heads: None, deltanet_qk_heads: None,
-            ffn_mult: 2.667, vocab_size: 50257, max_seq_len: 2048,
-            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0, rope_scale: 1.0,
-            n_experts: None, n_active_experts: None,
-            use_shared_expert: false, expert_dim: None,
-            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false, loop_config: None,
+            dim: 768,
+            n_layers: 12,
+            n_heads: 12,
+            n_kv_heads: 12,
+            deltanet_v_heads: None,
+            deltanet_qk_heads: None,
+            ffn_mult: 2.667,
+            vocab_size: 50257,
+            max_seq_len: 2048,
+            group_size: 128,
+            mhc_n_streams: 2,
+            rope_theta: 10000.0,
+            rope_scale: 1.0,
+            n_experts: None,
+            n_active_experts: None,
+            use_shared_expert: false,
+            expert_dim: None,
+            deltanet_ratio: None,
+            layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false,
+            gated_attention: false,
+            loop_config: None,
         }
     }
 
     /// ~560M param config
     pub fn nano_560m() -> Self {
         Self {
-            dim: 1024, n_layers: 24, n_heads: 16, n_kv_heads: 16,
-            deltanet_v_heads: None, deltanet_qk_heads: None,
-            ffn_mult: 2.667, vocab_size: 32000, max_seq_len: 2048,
-            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0, rope_scale: 1.0,
-            n_experts: None, n_active_experts: None,
-            use_shared_expert: false, expert_dim: None,
-            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false, loop_config: None,
+            dim: 1024,
+            n_layers: 24,
+            n_heads: 16,
+            n_kv_heads: 16,
+            deltanet_v_heads: None,
+            deltanet_qk_heads: None,
+            ffn_mult: 2.667,
+            vocab_size: 32000,
+            max_seq_len: 2048,
+            group_size: 128,
+            mhc_n_streams: 2,
+            rope_theta: 10000.0,
+            rope_scale: 1.0,
+            n_experts: None,
+            n_active_experts: None,
+            use_shared_expert: false,
+            expert_dim: None,
+            deltanet_ratio: None,
+            layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false,
+            gated_attention: false,
+            loop_config: None,
         }
     }
 
     /// ~1.1B param GPT-2-scale config (weight-tied)
     pub fn nano_1b() -> Self {
         Self {
-            dim: 2048, n_layers: 20, n_heads: 16, n_kv_heads: 16,
-            deltanet_v_heads: None, deltanet_qk_heads: None,
-            ffn_mult: 2.667, vocab_size: 50257, max_seq_len: 1024,
-            group_size: 128, mhc_n_streams: 2, rope_theta: 10000.0, rope_scale: 1.0,
-            n_experts: None, n_active_experts: None,
-            use_shared_expert: false, expert_dim: None,
-            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: true, gated_attention: false, loop_config: None,
+            dim: 2048,
+            n_layers: 20,
+            n_heads: 16,
+            n_kv_heads: 16,
+            deltanet_v_heads: None,
+            deltanet_qk_heads: None,
+            ffn_mult: 2.667,
+            vocab_size: 50257,
+            max_seq_len: 1024,
+            group_size: 128,
+            mhc_n_streams: 2,
+            rope_theta: 10000.0,
+            rope_scale: 1.0,
+            n_experts: None,
+            n_active_experts: None,
+            use_shared_expert: false,
+            expert_dim: None,
+            deltanet_ratio: None,
+            layer_sequence: LayerSequence::Interleaved,
+            weight_tied: true,
+            gated_attention: false,
+            loop_config: None,
         }
     }
 
     /// ~7B param config
     pub fn nano_7b() -> Self {
         Self {
-            dim: 4096, n_layers: 32, n_heads: 32, n_kv_heads: 8,
-            deltanet_v_heads: None, deltanet_qk_heads: None,
-            ffn_mult: 2.667, vocab_size: 128256, max_seq_len: 8192,
-            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0, rope_scale: 1.0,
-            n_experts: None, n_active_experts: None,
-            use_shared_expert: false, expert_dim: None,
-            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false, loop_config: None,
+            dim: 4096,
+            n_layers: 32,
+            n_heads: 32,
+            n_kv_heads: 8,
+            deltanet_v_heads: None,
+            deltanet_qk_heads: None,
+            ffn_mult: 2.667,
+            vocab_size: 128256,
+            max_seq_len: 8192,
+            group_size: 128,
+            mhc_n_streams: 4,
+            rope_theta: 500000.0,
+            rope_scale: 1.0,
+            n_experts: None,
+            n_active_experts: None,
+            use_shared_expert: false,
+            expert_dim: None,
+            deltanet_ratio: None,
+            layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false,
+            gated_attention: false,
+            loop_config: None,
         }
     }
 
     /// ~25B param MoE config
     pub fn moe_25b() -> Self {
         Self {
-            dim: 4096, n_layers: 32, n_heads: 32, n_kv_heads: 8,
-            deltanet_v_heads: None, deltanet_qk_heads: None,
-            ffn_mult: 2.667, vocab_size: 128256, max_seq_len: 8192,
-            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0, rope_scale: 1.0,
-            n_experts: Some(8), n_active_experts: Some(2),
-            use_shared_expert: false, expert_dim: None,
-            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false, loop_config: None,
+            dim: 4096,
+            n_layers: 32,
+            n_heads: 32,
+            n_kv_heads: 8,
+            deltanet_v_heads: None,
+            deltanet_qk_heads: None,
+            ffn_mult: 2.667,
+            vocab_size: 128256,
+            max_seq_len: 8192,
+            group_size: 128,
+            mhc_n_streams: 4,
+            rope_theta: 500000.0,
+            rope_scale: 1.0,
+            n_experts: Some(8),
+            n_active_experts: Some(2),
+            use_shared_expert: false,
+            expert_dim: None,
+            deltanet_ratio: None,
+            layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false,
+            gated_attention: false,
+            loop_config: None,
         }
     }
 
     /// ~80B param MoE config
     pub fn moe_80b() -> Self {
         Self {
-            dim: 8192, n_layers: 64, n_heads: 64, n_kv_heads: 8,
-            deltanet_v_heads: None, deltanet_qk_heads: None,
-            ffn_mult: 2.667, vocab_size: 128256, max_seq_len: 8192,
-            group_size: 128, mhc_n_streams: 4, rope_theta: 500000.0, rope_scale: 1.0,
-            n_experts: Some(16), n_active_experts: Some(2),
-            use_shared_expert: false, expert_dim: None,
-            deltanet_ratio: None, layer_sequence: LayerSequence::Interleaved,
-            weight_tied: false, gated_attention: false, loop_config: None,
+            dim: 8192,
+            n_layers: 64,
+            n_heads: 64,
+            n_kv_heads: 8,
+            deltanet_v_heads: None,
+            deltanet_qk_heads: None,
+            ffn_mult: 2.667,
+            vocab_size: 128256,
+            max_seq_len: 8192,
+            group_size: 128,
+            mhc_n_streams: 4,
+            rope_theta: 500000.0,
+            rope_scale: 1.0,
+            n_experts: Some(16),
+            n_active_experts: Some(2),
+            use_shared_expert: false,
+            expert_dim: None,
+            deltanet_ratio: None,
+            layer_sequence: LayerSequence::Interleaved,
+            weight_tied: false,
+            gated_attention: false,
+            loop_config: None,
         }
     }
 
@@ -260,8 +371,8 @@ impl ModelConfig {
             // DeltaNet: 32 V heads, 16 QK heads, head_dim=128 (2048/16)
             deltanet_v_heads: Some(32),
             deltanet_qk_heads: Some(16),
-            ffn_mult: 0.0, // Unused - we specify expert_dim directly
-            vocab_size: 151936, // Qwen3 tokenizer vocab size
+            ffn_mult: 0.0,       // Unused - we specify expert_dim directly
+            vocab_size: 151936,  // Qwen3 tokenizer vocab size
             max_seq_len: 262144, // 256k context
             group_size: 128,
             mhc_n_streams: 4,
@@ -314,12 +425,7 @@ impl ModelConfig {
 
     /// Create a minimal test config with defaults for backward compatibility.
     /// All new fields default to simple/disabled values.
-    pub fn test_config(
-        dim: usize,
-        n_layers: usize,
-        n_heads: usize,
-        vocab_size: usize,
-    ) -> Self {
+    pub fn test_config(dim: usize, n_layers: usize, n_heads: usize, vocab_size: usize) -> Self {
         Self {
             dim,
             n_layers,
@@ -445,7 +551,11 @@ mod tests {
 
     #[test]
     fn test_ffn_dim_aligned() {
-        for config in [ModelConfig::d20(), ModelConfig::nano_560m(), ModelConfig::nano_7b()] {
+        for config in [
+            ModelConfig::d20(),
+            ModelConfig::nano_560m(),
+            ModelConfig::nano_7b(),
+        ] {
             assert!(
                 config.ffn_dim() % config.group_size == 0,
                 "ffn_dim {} not aligned to group_size {}",

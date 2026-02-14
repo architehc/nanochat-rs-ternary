@@ -7,8 +7,8 @@
 //! - Layer-wise breakdown
 //! - GEMV kernel performance
 
-use std::time::{Duration, Instant};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 /// Benchmark results for model inference.
 #[derive(Debug, Clone)]
@@ -130,7 +130,10 @@ impl BenchmarkResults {
 
         // Hardware
         println!("Hardware:");
-        println!("  CPU: {} ({} cores)", self.hardware.cpu_model, self.hardware.cpu_cores);
+        println!(
+            "  CPU: {} ({} cores)",
+            self.hardware.cpu_model, self.hardware.cpu_cores
+        );
         if let Some(gpu) = &self.hardware.gpu_model {
             println!("  GPU: {}", gpu);
             if let Some(mem) = self.hardware.gpu_memory_gb {
@@ -142,7 +145,10 @@ impl BenchmarkResults {
 
         // Memory usage
         println!("Memory Usage:");
-        println!("  Model weights: {}", format_bytes(self.memory.model_weights));
+        println!(
+            "  Model weights: {}",
+            format_bytes(self.memory.model_weights)
+        );
         println!("  Activations: {}", format_bytes(self.memory.activations));
         println!("  KV cache: {}", format_bytes(self.memory.kv_cache));
         println!("  Peak usage: {}", format_bytes(self.memory.peak_memory));
@@ -155,7 +161,10 @@ impl BenchmarkResults {
         println!("Prefill (Prompt Processing):");
         println!("  Batch size: {}", self.prefill.batch_size);
         println!("  Prompt length: {} tokens", self.prefill.seq_len);
-        println!("  Throughput: {:.1} tokens/sec", self.prefill.tokens_per_sec);
+        println!(
+            "  Throughput: {:.1} tokens/sec",
+            self.prefill.tokens_per_sec
+        );
         println!("  Latency: {:.2} ms/token", self.prefill.ms_per_token);
         println!("  Total time: {:.2}s", self.prefill.total_time);
         if let Some(util) = self.prefill.gpu_util {
@@ -181,7 +190,8 @@ impl BenchmarkResults {
             let mut timings: Vec<_> = self.layer_timings.values().collect();
             timings.sort_by(|a, b| b.time_ms.partial_cmp(&a.time_ms).unwrap());
             for (i, timing) in timings.iter().take(10).enumerate() {
-                println!("  {}. {} ({}) - {:.2}ms ({:.1}%)",
+                println!(
+                    "  {}. {} ({}) - {:.2}ms ({:.1}%)",
                     i + 1,
                     timing.layer_name,
                     timing.layer_type,
@@ -300,7 +310,8 @@ pub fn get_hardware_info() -> HardwareInfo {
     let cpu_model = fs::read_to_string("/proc/cpuinfo")
         .ok()
         .and_then(|content| {
-            content.lines()
+            content
+                .lines()
                 .find(|line| line.starts_with("model name"))
                 .and_then(|line| line.split(':').nth(1))
                 .map(|s| s.trim().to_string())
@@ -313,7 +324,8 @@ pub fn get_hardware_info() -> HardwareInfo {
     let system_memory_gb = fs::read_to_string("/proc/meminfo")
         .ok()
         .and_then(|content| {
-            content.lines()
+            content
+                .lines()
                 .find(|line| line.starts_with("MemTotal"))
                 .and_then(|line| line.split_whitespace().nth(1))
                 .and_then(|s| s.parse::<f64>().ok())

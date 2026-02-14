@@ -279,7 +279,8 @@ impl Attention {
             }
 
             // Output projection for this token
-            self.wo.forward(&attn_out, &mut out_batch[out_base..out_base + dim]);
+            self.wo
+                .forward(&attn_out, &mut out_batch[out_base..out_base + dim]);
         }
     }
 }
@@ -334,10 +335,7 @@ mod tests {
         rope.apply(&mut data, 1, 4, 0);
         // At position 0, rotation is identity
         for i in 0..4 {
-            assert!(
-                (data[i] - orig[i]).abs() < 1e-5,
-                "pos 0 should be identity"
-            );
+            assert!((data[i] - orig[i]).abs() < 1e-5, "pos 0 should be identity");
         }
     }
 
@@ -386,9 +384,17 @@ mod tests {
         }
 
         // Batched forward
-        let mut cache_batch = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
+        let mut cache_batch =
+            KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
         let mut out_batch = vec![0.0f32; seq_len * dim];
-        attn.forward_batch(&x_batch, seq_len, &mut cache_batch, &rope, 0, &mut out_batch);
+        attn.forward_batch(
+            &x_batch,
+            seq_len,
+            &mut cache_batch,
+            &rope,
+            0,
+            &mut out_batch,
+        );
 
         // Compare: each token's output should match
         for t in 0..seq_len {
@@ -398,7 +404,8 @@ mod tests {
             assert!(
                 max_diff < 1e-5,
                 "token {}: batched vs sequential max_diff={} (should be < 1e-5)",
-                t, max_diff
+                t,
+                max_diff
             );
         }
 
@@ -418,7 +425,10 @@ mod tests {
 
         // Single token at position 0
         attn.forward(&x, &mut cache, &rope, 0, &mut out);
-        assert!(out.iter().all(|v| v.is_finite()), "non-finite attention output");
+        assert!(
+            out.iter().all(|v| v.is_finite()),
+            "non-finite attention output"
+        );
         assert!(out.iter().any(|&v| v != 0.0), "all-zero attention output");
     }
 }

@@ -9,9 +9,9 @@
 //! Usage:
 //!   cargo run --example train_rl -- --checkpoint checkpoints/rust-6hour/step_2000 --iterations 100
 
-use nanochat_rl::{RLConfig, RLTrainer};
 use anyhow::Result;
 use clap::Parser;
+use nanochat_rl::{RLConfig, RLTrainer};
 
 #[derive(Parser, Debug)]
 #[command(name = "train_rl")]

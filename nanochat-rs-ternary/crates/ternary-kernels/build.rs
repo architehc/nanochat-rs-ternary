@@ -49,11 +49,14 @@ fn main() {
     // Compile CUDA kernel to object file
     let status = Command::new(&nvcc)
         .args([
-            "-c", "csrc/ternary_dp4a.cu",
-            "-o", &obj_path,
+            "-c",
+            "csrc/ternary_dp4a.cu",
+            "-o",
+            &obj_path,
             "-O3",
             "--gpu-architecture=sm_89",
-            "-Xcompiler", "-fPIC",
+            "-Xcompiler",
+            "-fPIC",
             "-DNDEBUG",
         ])
         .status()

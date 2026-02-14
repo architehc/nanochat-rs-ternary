@@ -7,7 +7,9 @@ use rand::SeedableRng;
 /// A dataset returns (input_ids, target_ids) pairs.
 pub trait Dataset {
     fn len(&self) -> usize;
-    fn is_empty(&self) -> bool { self.len() == 0 }
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     fn get_item(&self, idx: usize) -> (Vec<u32>, Vec<u32>);
 }
 
@@ -32,12 +34,16 @@ impl SyntheticDataset {
                 1 => {
                     // Sequential (modular)
                     let start = i as u32 % vocab_size;
-                    (0..=seq_len as u32).map(|j| (start + j) % vocab_size).collect()
+                    (0..=seq_len as u32)
+                        .map(|j| (start + j) % vocab_size)
+                        .collect()
                 }
                 _ => {
                     // Random
                     use rand::Rng;
-                    (0..=seq_len).map(|_| rng.gen_range(0..vocab_size)).collect()
+                    (0..=seq_len)
+                        .map(|_| rng.gen_range(0..vocab_size))
+                        .collect()
                 }
             };
             data.push(seq);
@@ -70,13 +76,18 @@ pub struct TokenFileDataset {
 impl TokenFileDataset {
     pub fn new(tokens: Vec<u32>, seq_len: usize) -> Self {
         let n_chunks = tokens.len().saturating_sub(1) / seq_len;
-        Self { tokens, seq_len, n_chunks }
+        Self {
+            tokens,
+            seq_len,
+            n_chunks,
+        }
     }
 
     /// Load from a binary file of little-endian u32 values.
     pub fn from_binary_file(path: &std::path::Path, seq_len: usize) -> std::io::Result<Self> {
         let data = std::fs::read(path)?;
-        let tokens: Vec<u32> = data.chunks_exact(4)
+        let tokens: Vec<u32> = data
+            .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         Ok(Self::new(tokens, seq_len))
@@ -107,13 +118,25 @@ pub struct DataLoader<'a> {
 }
 
 impl<'a> DataLoader<'a> {
-    pub fn new(dataset: &'a dyn Dataset, batch_size: usize, shuffle: bool, seed: u64, device: &Device) -> Self {
+    pub fn new(
+        dataset: &'a dyn Dataset,
+        batch_size: usize,
+        shuffle: bool,
+        seed: u64,
+        device: &Device,
+    ) -> Self {
         let mut indices: Vec<usize> = (0..dataset.len()).collect();
         if shuffle {
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
             indices.shuffle(&mut rng);
         }
-        Self { dataset, batch_size, indices, pos: 0, device: device.clone() }
+        Self {
+            dataset,
+            batch_size,
+            indices,
+            pos: 0,
+            device: device.clone(),
+        }
     }
 
     pub fn reset(&mut self, shuffle: bool, seed: u64) {

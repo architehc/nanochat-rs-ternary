@@ -19,10 +19,7 @@ pub fn verify_doubly_stochastic(mat: &[[f32; 4]; 4], tol: f32) -> Result<(), Str
     for (i, row) in mat.iter().enumerate() {
         for (j, &val) in row.iter().enumerate() {
             if val < -tol {
-                return Err(format!(
-                    "Negative entry: mat[{}][{}] = {}",
-                    i, j, val
-                ));
+                return Err(format!("Negative entry: mat[{}][{}] = {}", i, j, val));
             }
         }
     }
@@ -51,10 +48,7 @@ pub fn verify_doubly_stochastic_2x2(mat: &[[f32; 2]; 2], tol: f32) -> Result<(),
     for (i, row) in mat.iter().enumerate() {
         for (j, &val) in row.iter().enumerate() {
             if val < -tol {
-                return Err(format!(
-                    "Negative entry: mat[{}][{}] = {}",
-                    i, j, val
-                ));
+                return Err(format!("Negative entry: mat[{}][{}] = {}", i, j, val));
             }
         }
     }
@@ -189,7 +183,11 @@ mod tests {
         ];
         let matrices = vec![identity; 100];
         let gain = composite_amax_gain(&matrices);
-        assert!((gain - 1.0).abs() < 1e-5, "Identity gain should be 1.0, got {}", gain);
+        assert!(
+            (gain - 1.0).abs() < 1e-5,
+            "Identity gain should be 1.0, got {}",
+            gain
+        );
     }
 
     #[test]

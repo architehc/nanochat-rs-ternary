@@ -4,8 +4,8 @@
 //! more capable model (Qwen3 Coder) to evaluate generated code.
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 
 /// Qwen3 evaluation result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,11 +140,7 @@ Respond with ONLY the JSON, no additional text."#,
                 .unwrap_or(content)
                 .trim()
         } else if content.contains("```") {
-            content
-                .split("```")
-                .nth(1)
-                .unwrap_or(content)
-                .trim()
+            content.split("```").nth(1).unwrap_or(content).trim()
         } else {
             content.trim()
         };
@@ -154,7 +150,10 @@ Respond with ONLY the JSON, no additional text."#,
     }
 
     /// Evaluate multiple code samples in parallel
-    pub async fn evaluate_batch(&self, samples: &[(String, String)]) -> Result<Vec<QwenEvaluation>> {
+    pub async fn evaluate_batch(
+        &self,
+        samples: &[(String, String)],
+    ) -> Result<Vec<QwenEvaluation>> {
         let mut tasks = Vec::new();
 
         for (code, context) in samples {
@@ -245,6 +244,9 @@ mod tests {
             Some("test_key".to_string()),
         );
 
-        assert_eq!(client.endpoint, "https://api.example.com/v1/chat/completions");
+        assert_eq!(
+            client.endpoint,
+            "https://api.example.com/v1/chat/completions"
+        );
     }
 }

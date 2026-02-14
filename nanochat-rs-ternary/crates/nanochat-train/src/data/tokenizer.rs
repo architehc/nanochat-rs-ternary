@@ -27,14 +27,17 @@ impl NanochatTokenizer {
 
     /// Encode text to token IDs.
     pub fn encode(&self, text: &str) -> Result<Vec<u32>, Box<dyn std::error::Error + Send + Sync>> {
-        let encoding = self.inner.encode(text, false)
+        let encoding = self
+            .inner
+            .encode(text, false)
             .map_err(|e| format!("Encoding error: {}", e))?;
         Ok(encoding.get_ids().to_vec())
     }
 
     /// Decode token IDs to text.
     pub fn decode(&self, ids: &[u32]) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        self.inner.decode(ids, true)
+        self.inner
+            .decode(ids, true)
             .map_err(|e| format!("Decoding error: {}", e).into())
     }
 }
@@ -50,7 +53,10 @@ pub fn prepare_data(
     use tokenizers::models::bpe::{BpeTrainer, BPE};
     use tokenizers::AddedToken;
 
-    println!("Training BPE tokenizer on {:?} (target vocab_size={})", text_path, vocab_size);
+    println!(
+        "Training BPE tokenizer on {:?} (target vocab_size={})",
+        text_path, vocab_size
+    );
 
     // Create byte-level BPE tokenizer
     let mut tokenizer = tokenizers::Tokenizer::new(BPE::default());
@@ -61,9 +67,7 @@ pub fn prepare_data(
             true,  // use_regex
         ),
     ));
-    tokenizer.with_decoder(Some(
-        tokenizers::decoders::byte_level::ByteLevel::default(),
-    ));
+    tokenizer.with_decoder(Some(tokenizers::decoders::byte_level::ByteLevel::default()));
 
     // Configure trainer
     let special_tokens = vec![
@@ -83,18 +87,21 @@ pub fn prepare_data(
     let file = std::fs::File::open(text_path)?;
     let reader = BufReader::new(file);
     let lines = reader.lines().map(|l| l.unwrap_or_default());
-    tokenizer.train(&mut trainer, lines)
+    tokenizer
+        .train(&mut trainer, lines)
         .map_err(|e| format!("Training failed: {}", e))?;
 
     // Save tokenizer.json
     std::fs::create_dir_all(output_dir)?;
     let tok_path = output_dir.join("tokenizer.json");
-    tokenizer.save(&tok_path, false)
+    tokenizer
+        .save(&tok_path, false)
         .map_err(|e| format!("Failed to save tokenizer: {}", e))?;
 
     // Encode all text to token IDs
     let text = std::fs::read_to_string(text_path)?;
-    let encoding = tokenizer.encode(text.as_str(), false)
+    let encoding = tokenizer
+        .encode(text.as_str(), false)
         .map_err(|e| format!("Encoding failed: {}", e))?;
     let ids = encoding.get_ids();
 
@@ -109,7 +116,10 @@ pub fn prepare_data(
     println!("Tokenizer trained successfully:");
     println!("  Vocab size: {}", final_vocab);
     println!("  Total tokens: {}", total_tokens);
-    println!("  Compression: {:.1}x (bytes/token)", text.len() as f64 / total_tokens as f64);
+    println!(
+        "  Compression: {:.1}x (bytes/token)",
+        text.len() as f64 / total_tokens as f64
+    );
     println!("  Saved: {:?}", tok_path);
     println!("  Saved: {:?}", bin_path);
 
@@ -161,7 +171,8 @@ mod tests {
 
         // Verify tokens.bin matches encoding
         let bin = std::fs::read(out_dir.join("tokens.bin")).unwrap();
-        let loaded_tokens: Vec<u32> = bin.chunks_exact(4)
+        let loaded_tokens: Vec<u32> = bin
+            .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         assert_eq!(loaded_tokens.len(), total_tokens);

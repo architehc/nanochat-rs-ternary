@@ -69,7 +69,9 @@ impl MoeExperts {
     /// Create MoE with random weights (for testing).
     pub fn new_random(config: &ModelConfig) -> Self {
         let n_experts = config.n_experts.expect("n_experts must be set for MoE");
-        let n_active = config.n_active_experts.expect("n_active_experts must be set for MoE");
+        let n_active = config
+            .n_active_experts
+            .expect("n_active_experts must be set for MoE");
 
         // Router: maps dim -> n_experts
         let router_weights: Vec<f32> = (0..n_experts * config.dim)
@@ -78,13 +80,18 @@ impl MoeExperts {
                 (v % 200) as f32 / 100.0 - 1.0
             })
             .collect();
-        let router = BitLinear::from_float(&router_weights, n_experts, config.dim, config.group_size);
+        let router =
+            BitLinear::from_float(&router_weights, n_experts, config.dim, config.group_size);
 
         let experts: Vec<FeedForward> = (0..n_experts)
             .map(|_| FeedForward::new_random(config))
             .collect();
 
-        Self { router, experts, n_active }
+        Self {
+            router,
+            experts,
+            n_active,
+        }
     }
 
     /// Forward: route token to top-k experts, weighted sum of outputs.
@@ -176,7 +183,10 @@ pub fn softmax_selected(logits: &[f32], selected: &[usize]) -> Vec<f32> {
         .map(|&i| logits[i])
         .fold(f32::NEG_INFINITY, f32::max);
 
-    let exps: Vec<f32> = selected.iter().map(|&i| (logits[i] - max_val).exp()).collect();
+    let exps: Vec<f32> = selected
+        .iter()
+        .map(|&i| (logits[i] - max_val).exp())
+        .collect();
     let sum: f32 = exps.iter().sum();
 
     if sum > 0.0 {
@@ -281,9 +291,15 @@ mod tests {
             sum
         );
         // All weights should be positive
-        assert!(weights.iter().all(|&w| w > 0.0), "all weights must be positive");
+        assert!(
+            weights.iter().all(|&w| w > 0.0),
+            "all weights must be positive"
+        );
         // Weight for expert 4 (logit=4.0) should be larger than expert 2 (logit=3.0)
-        assert!(weights[1] > weights[0], "expert 4 should have higher weight than expert 2");
+        assert!(
+            weights[1] > weights[0],
+            "expert 4 should have higher weight than expert 2"
+        );
     }
 
     #[test]
@@ -298,14 +314,20 @@ mod tests {
         let x_dense = vec![0.1f32; dense_config.dim];
         let mut out_dense = vec![0.0f32; dense_config.dim];
         dense_layer.forward(&x_dense, &mut out_dense);
-        assert!(out_dense.iter().all(|v| v.is_finite()), "non-finite dense output");
+        assert!(
+            out_dense.iter().all(|v| v.is_finite()),
+            "non-finite dense output"
+        );
 
         // MoE variant
         let moe_layer = FfnLayer::Moe(Box::new(MoeExperts::new_random(&moe_config)));
         let x_moe = vec![0.1f32; moe_config.dim];
         let mut out_moe = vec![0.0f32; moe_config.dim];
         moe_layer.forward(&x_moe, &mut out_moe);
-        assert!(out_moe.iter().all(|v| v.is_finite()), "non-finite MoE output");
+        assert!(
+            out_moe.iter().all(|v| v.is_finite()),
+            "non-finite MoE output"
+        );
     }
 
     #[test]

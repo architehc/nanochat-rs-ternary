@@ -62,10 +62,18 @@ pub struct Muon {
 
 impl Muon {
     pub fn new(vars: Vec<Var>, lr: f64, beta: f64, ns_steps: usize, wd: f64) -> Result<Self> {
-        let momentum_buffers = vars.iter()
+        let momentum_buffers = vars
+            .iter()
             .map(|v| Tensor::zeros_like(v.as_tensor()))
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self { vars, momentum_buffers, lr, beta, ns_steps, weight_decay: wd })
+        Ok(Self {
+            vars,
+            momentum_buffers,
+            lr,
+            beta,
+            ns_steps,
+            weight_decay: wd,
+        })
     }
 
     pub fn step(&mut self, grads: &GradStore, clip_scale: f64) -> Result<()> {
@@ -139,7 +147,10 @@ mod tests {
         let product = orth.t()?.matmul(&orth)?;
         let n = product.dim(0)?;
         let identity = Tensor::eye(n, DType::F32, &device)?;
-        let diff = (&product - &identity)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let diff = (&product - &identity)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
         // Relaxed tolerance — NS with 5 steps is approximate
         assert!(diff < 0.5, "orth^T @ orth should be ~I, max diff: {}", diff);
         Ok(())
@@ -150,7 +161,14 @@ mod tests {
         let device = Device::Cpu;
         let varmap = VarMap::new();
         let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
-        let w = vb.get_with_hints((16, 8), "w", candle_nn::Init::Randn { mean: 0.0, stdev: 1.0 })?;
+        let w = vb.get_with_hints(
+            (16, 8),
+            "w",
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: 1.0,
+            },
+        )?;
 
         let orig = w.to_vec2::<f32>()?;
 
@@ -165,7 +183,10 @@ mod tests {
         muon.step(&grads, 1.0)?;
 
         let updated = w.to_vec2::<f32>()?;
-        let changed = orig.iter().flatten().zip(updated.iter().flatten())
+        let changed = orig
+            .iter()
+            .flatten()
+            .zip(updated.iter().flatten())
             .any(|(a, b)| (a - b).abs() > 1e-10);
         assert!(changed, "Parameters should have changed after Muon step");
         Ok(())
@@ -176,7 +197,14 @@ mod tests {
         let device = Device::Cpu;
         let varmap = VarMap::new();
         let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
-        let w = vb.get_with_hints((8, 4), "w", candle_nn::Init::Randn { mean: 0.0, stdev: 1.0 })?;
+        let w = vb.get_with_hints(
+            (8, 4),
+            "w",
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: 1.0,
+            },
+        )?;
 
         let vars = varmap.all_vars();
         let mut muon = Muon::new(vars, 0.01, 0.95, 3, 0.0)?;
@@ -191,7 +219,11 @@ mod tests {
         }
 
         // Momentum buffer should be non-zero
-        let buf_norm = muon.momentum_buffers[0].sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
+        let buf_norm = muon.momentum_buffers[0]
+            .sqr()?
+            .sum_all()?
+            .sqrt()?
+            .to_scalar::<f32>()?;
         assert!(buf_norm > 0.0, "Momentum buffer should be non-zero");
         Ok(())
     }
@@ -216,7 +248,10 @@ mod tests {
         muon.step(&grads, 1.0)?;
 
         let updated = w.to_vec1::<f32>()?;
-        let changed = orig.iter().zip(updated.iter()).any(|(a, b)| (a - b).abs() > 1e-10);
+        let changed = orig
+            .iter()
+            .zip(updated.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-10);
         assert!(changed, "1D param should still update");
         Ok(())
     }

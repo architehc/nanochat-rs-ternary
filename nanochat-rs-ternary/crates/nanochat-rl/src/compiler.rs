@@ -85,8 +85,7 @@ impl CompilerFeedback {
     pub fn compile(&self, code: &str) -> Result<CompileResult> {
         // Write code to temporary file
         let code_path = self.temp_dir.path().join("generated.rs");
-        fs::write(&code_path, code)
-            .context("Failed to write code to temp file")?;
+        fs::write(&code_path, code).context("Failed to write code to temp file")?;
 
         // Run rustc with JSON output for structured error messages
         let output = Command::new(&self.rustc_path)
@@ -119,7 +118,10 @@ impl CompilerFeedback {
     }
 
     /// Parse rustc JSON output into structured messages
-    fn parse_compiler_output(&self, output: &str) -> Result<(Vec<CompilerMessage>, Vec<CompilerMessage>)> {
+    fn parse_compiler_output(
+        &self,
+        output: &str,
+    ) -> Result<(Vec<CompilerMessage>, Vec<CompilerMessage>)> {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
 
@@ -132,13 +134,15 @@ impl CompilerFeedback {
             // Parse JSON message
             if let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) {
                 if let Some(level) = msg.get("level").and_then(|v| v.as_str()) {
-                    let message = msg.get("message")
+                    let message = msg
+                        .get("message")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
 
                     // Extract span information
-                    let span = msg.get("spans")
+                    let span = msg
+                        .get("spans")
                         .and_then(|v| v.as_array())
                         .and_then(|arr| arr.first())
                         .and_then(|span| {

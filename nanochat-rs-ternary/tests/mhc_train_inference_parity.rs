@@ -3,11 +3,11 @@
 //! This is critical for exported model correctness - if train and inference diverge,
 //! exported checkpoints will behave differently at inference time.
 
+use anyhow::Result;
+use candle_core::{DType, Device, Tensor};
+use candle_nn::{VarBuilder, VarMap};
 use mhc_lite::MhcLiteN2;
 use nanochat_train::mhc::MhcLiteN2Train;
-use candle_core::{Tensor, Device, DType};
-use candle_nn::{VarMap, VarBuilder};
-use anyhow::Result;
 
 #[test]
 fn test_mhc_apply_parity() -> Result<()> {
@@ -73,18 +73,28 @@ fn test_mhc_apply_parity() -> Result<()> {
     let result_inf = mhc_inf.apply(&x_exp_inf_flat, &layer_out_inf_flat, dim);
 
     // Compare results
-    assert_eq!(result_train_flat.len(), result_inf.len(),
-               "Output lengths must match");
+    assert_eq!(
+        result_train_flat.len(),
+        result_inf.len(),
+        "Output lengths must match"
+    );
 
-    let max_diff = result_train_flat.iter()
+    let max_diff = result_train_flat
+        .iter()
         .zip(result_inf.iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, f32::max);
 
-    println!("Max difference between train and inference: {:.10}", max_diff);
+    println!(
+        "Max difference between train and inference: {:.10}",
+        max_diff
+    );
 
-    assert!(max_diff < 1e-5,
-            "Train and inference outputs differ by {:.10} (threshold: 1e-5)", max_diff);
+    assert!(
+        max_diff < 1e-5,
+        "Train and inference outputs differ by {:.10} (threshold: 1e-5)",
+        max_diff
+    );
 
     Ok(())
 }
@@ -100,9 +110,23 @@ fn test_mhc_with_different_params() -> Result<()> {
 
     // Manually create with custom init
     let alpha_logit = vb.get_with_hints(1, "alpha_logit", candle_nn::Init::Const(1.5))?;
-    let pre_logits = vb.get_with_hints(2, "pre_logits", candle_nn::Init::Randn { mean: 0.0, stdev: 0.5 })?;
+    let pre_logits = vb.get_with_hints(
+        2,
+        "pre_logits",
+        candle_nn::Init::Randn {
+            mean: 0.0,
+            stdev: 0.5,
+        },
+    )?;
     let pre_bias = vb.get_with_hints(2, "pre_bias", candle_nn::Init::Const(0.5))?;
-    let post_logits = vb.get_with_hints(2, "post_logits", candle_nn::Init::Randn { mean: 0.0, stdev: 0.3 })?;
+    let post_logits = vb.get_with_hints(
+        2,
+        "post_logits",
+        candle_nn::Init::Randn {
+            mean: 0.0,
+            stdev: 0.3,
+        },
+    )?;
     let post_bias = vb.get_with_hints(2, "post_bias", candle_nn::Init::Const(0.5))?;
 
     let mhc_train = MhcLiteN2Train {
@@ -140,15 +164,19 @@ fn test_mhc_with_different_params() -> Result<()> {
 
     let result_inf = mhc_inf.apply(&x_exp_data, &layer_out_data, dim);
 
-    let max_diff = result_train_flat.iter()
+    let max_diff = result_train_flat
+        .iter()
         .zip(result_inf.iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, f32::max);
 
     println!("Max diff with custom params: {:.10}", max_diff);
 
-    assert!(max_diff < 1e-5,
-            "Parity broken with custom params: max_diff={:.10}", max_diff);
+    assert!(
+        max_diff < 1e-5,
+        "Parity broken with custom params: max_diff={:.10}",
+        max_diff
+    );
 
     Ok(())
 }

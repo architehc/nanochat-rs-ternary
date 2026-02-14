@@ -1,13 +1,10 @@
 //! Test if model uses previous context or just copies current token
 
-use nanochat_train::{
-    checkpoint::load_checkpoint,
-    model::NanochatTrainModel,
-};
-use candle_core::{Device, Tensor, DType};
-use candle_nn::VarBuilder;
-use tokenizers::Tokenizer;
 use anyhow::Result;
+use candle_core::{DType, Device, Tensor};
+use candle_nn::VarBuilder;
+use nanochat_train::{checkpoint::load_checkpoint, model::NanochatTrainModel};
+use tokenizers::Tokenizer;
 
 fn main() -> Result<()> {
     println!("═══════════════════════════════════════════════════════════");
@@ -37,7 +34,8 @@ fn main() -> Result<()> {
     println!("If it just copies the current '{{' token, all predictions will be identical.\n");
 
     for (prompt, desc) in test_cases {
-        let encoding = tokenizer.encode(prompt, false)
+        let encoding = tokenizer
+            .encode(prompt, false)
             .map_err(|e| anyhow::anyhow!("Encode error: {}", e))?;
         let token_ids: Vec<u32> = encoding.get_ids().to_vec();
 
@@ -49,7 +47,8 @@ fn main() -> Result<()> {
         let logits_vec = last_logits.to_vec1::<f32>()?;
 
         // Top 3 predictions
-        let mut indexed: Vec<(usize, f32)> = logits_vec.iter()
+        let mut indexed: Vec<(usize, f32)> = logits_vec
+            .iter()
             .enumerate()
             .map(|(i, &v)| (i, v))
             .collect();
@@ -57,10 +56,16 @@ fn main() -> Result<()> {
 
         println!("{}: \"{}\"", desc, prompt);
         for (i, &(tok_id, logit)) in indexed.iter().take(3).enumerate() {
-            let tok_str = tokenizer.id_to_token(tok_id as u32)
+            let tok_str = tokenizer
+                .id_to_token(tok_id as u32)
                 .unwrap_or_else(|| format!("{}", tok_id));
-            println!("  {}. Token {} (\"{}\"): logit = {:.2}",
-                     i + 1, tok_id, tok_str, logit);
+            println!(
+                "  {}. Token {} (\"{}\"): logit = {:.2}",
+                i + 1,
+                tok_id,
+                tok_str,
+                logit
+            );
         }
         println!();
     }

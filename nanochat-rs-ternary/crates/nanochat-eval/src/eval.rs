@@ -3,9 +3,9 @@
 use crate::datasets::CodeProblem;
 use crate::executor::{CodeExecutor, ExecutionResult};
 use crate::metrics::{EvalMetrics, PassAtK, ProblemResult};
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use indicatif::{ProgressBar, ProgressStyle};
 
 /// Configuration for code generation evaluation.
 #[derive(Debug, Clone)]
@@ -84,8 +84,12 @@ impl Evaluator {
             problems
         };
 
-        println!("Evaluating {} on {} ({} problems)",
-            self.config.model_name, dataset_name, problems.len());
+        println!(
+            "Evaluating {} on {} ({} problems)",
+            self.config.model_name,
+            dataset_name,
+            problems.len()
+        );
         println!("Generating {} samples per problem", self.config.num_samples);
         println!();
 
@@ -116,7 +120,11 @@ impl Evaluator {
             let mut error_types = Vec::new();
 
             for solution in &solutions {
-                match self.executor.execute(solution, &problem.test, &problem.entry_point).await {
+                match self
+                    .executor
+                    .execute(solution, &problem.test, &problem.entry_point)
+                    .await
+                {
                     Ok(result) => {
                         if result.passed {
                             num_passed += 1;
@@ -128,7 +136,9 @@ impl Evaluator {
                         exec_times.push(result.time_ms as f64);
                     }
                     Err(e) => {
-                        *error_counts.entry("ExecutionError".to_string()).or_insert(0) += 1;
+                        *error_counts
+                            .entry("ExecutionError".to_string())
+                            .or_insert(0) += 1;
                         error_types.push(format!("ExecutionError: {}", e));
                     }
                 }
@@ -232,7 +242,11 @@ impl Evaluator {
             prompt: prompt.to_string(),
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
-            stop: vec!["\nclass ".to_string(), "\ndef ".to_string(), "\n#".to_string()],
+            stop: vec![
+                "\nclass ".to_string(),
+                "\ndef ".to_string(),
+                "\n#".to_string(),
+            ],
         };
 
         let response = self
@@ -283,8 +297,10 @@ impl EvalReport {
         println!("  Model Comparison");
         println!("═══════════════════════════════════════════════════════════");
         println!();
-        println!("{:<30} {:>10} {:>10} {:>10}",
-            "Model", "pass@1", "pass@10", "Solved");
+        println!(
+            "{:<30} {:>10} {:>10} {:>10}",
+            "Model", "pass@1", "pass@10", "Solved"
+        );
         println!("{}", "-".repeat(64));
 
         for metrics in &self.reports {

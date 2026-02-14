@@ -77,7 +77,9 @@ async fn non_stream_completion(
 
     let (generated_text, prompt_tokens, completion_tokens) =
         tokio::task::spawn_blocking(move || {
-            let prompt_ids = state.tokenizer.encode(prompt.as_str(), false)
+            let prompt_ids = state
+                .tokenizer
+                .encode(prompt.as_str(), false)
                 .map(|e| e.get_ids().to_vec())
                 .unwrap_or_default();
             let prompt_len = prompt_ids.len();
@@ -88,7 +90,10 @@ async fn non_stream_completion(
             let output_ids = engine.generate(&token_ids, &params);
             let output_len = output_ids.len();
 
-            let text = state.tokenizer.decode(&output_ids, true).unwrap_or_default();
+            let text = state
+                .tokenizer
+                .decode(&output_ids, true)
+                .unwrap_or_default();
 
             (text, prompt_len, output_len)
         })
@@ -131,7 +136,9 @@ async fn stream_completion(
     let req_id = request_id.clone();
     let model = model_name.clone();
     tokio::task::spawn_blocking(move || {
-        let prompt_ids = state.tokenizer.encode(prompt.as_str(), false)
+        let prompt_ids = state
+            .tokenizer
+            .encode(prompt.as_str(), false)
             .map(|e| e.get_ids().to_vec())
             .unwrap_or_default();
         let vs = state.vocab_size;
@@ -163,7 +170,10 @@ async fn stream_completion(
         let mut engine = state.engine.lock().unwrap();
 
         engine.generate_streaming(&token_ids, &params, |tok| {
-            let text = state.tokenizer.decode(&[tok.token_id], true).unwrap_or_default();
+            let text = state
+                .tokenizer
+                .decode(&[tok.token_id], true)
+                .unwrap_or_default();
 
             let chunk = ChatCompletionChunk {
                 id: req_id.clone(),
@@ -357,9 +367,8 @@ mod tests {
         let mut vocab = serde_json::Map::new();
         let mut n = 256u32;
         for b in 0u32..256 {
-            let is_direct = (33..=126).contains(&b)
-                || (161..=172).contains(&b)
-                || (174..=255).contains(&b);
+            let is_direct =
+                (33..=126).contains(&b) || (161..=172).contains(&b) || (174..=255).contains(&b);
             let ch = if is_direct {
                 char::from_u32(b).unwrap()
             } else {
@@ -449,9 +458,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), 10000)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 10000).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["data"][0]["id"], "nanochat-test");
     }
@@ -525,10 +532,7 @@ mod tests {
         let text = String::from_utf8(body.to_vec()).unwrap();
 
         // SSE format: lines starting with "data: "
-        let data_lines: Vec<&str> = text
-            .lines()
-            .filter(|l| l.starts_with("data: "))
-            .collect();
+        let data_lines: Vec<&str> = text.lines().filter(|l| l.starts_with("data: ")).collect();
         assert!(
             !data_lines.is_empty(),
             "Expected SSE data lines, got none. Full body:\n{text}"
@@ -640,7 +644,9 @@ mod tests {
             .oneshot(
                 Request::post("/v1/chat/completions")
                     .header("content-type", "text/plain")
-                    .body(Body::from("{\"messages\": [{\"role\": \"user\", \"content\": \"Hi\"}]}"))
+                    .body(Body::from(
+                        "{\"messages\": [{\"role\": \"user\", \"content\": \"Hi\"}]}",
+                    ))
                     .unwrap(),
             )
             .await

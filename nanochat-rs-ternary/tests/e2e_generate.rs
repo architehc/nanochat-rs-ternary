@@ -72,7 +72,10 @@ fn e2e_autoregressive_consistency() {
         assert!(
             diff < 1e-3,
             "logit[{}]: prefill={}, ar={}, diff={}",
-            i, logits_prefill[i], logits_ar[i], diff
+            i,
+            logits_prefill[i],
+            logits_ar[i],
+            diff
         );
     }
 }
@@ -81,7 +84,9 @@ fn e2e_autoregressive_consistency() {
 fn e2e_mhc_always_doubly_stochastic_in_model() {
     let config = make_test_config();
     let model = NanochatModel::new_random(config);
-    model.verify_mhc().expect("mHC verification failed on fresh model");
+    model
+        .verify_mhc()
+        .expect("mHC verification failed on fresh model");
 }
 
 #[test]
@@ -159,7 +164,10 @@ fn e2e_generate_deterministic() {
     let output_a = engine_a.generate(&[1, 10], &params);
     let output_b = engine_b.generate(&[1, 10], &params);
 
-    assert_eq!(output_a, output_b, "deterministic generation should be reproducible");
+    assert_eq!(
+        output_a, output_b,
+        "deterministic generation should be reproducible"
+    );
 }
 
 #[test]
@@ -169,7 +177,10 @@ fn e2e_generate_empty_prompt() {
 
     let params = SamplingParams::default();
     let output = engine.generate(&[], &params);
-    assert!(output.is_empty(), "empty prompt should produce empty output");
+    assert!(
+        output.is_empty(),
+        "empty prompt should produce empty output"
+    );
 }
 
 #[test]
@@ -220,7 +231,9 @@ fn e2e_reset_caches_allows_reuse() {
         assert!(
             (logits1[i] - logits2[i]).abs() < 1e-5,
             "logit[{}] differs after reset: {} vs {}",
-            i, logits1[i], logits2[i]
+            i,
+            logits1[i],
+            logits2[i]
         );
     }
 }

@@ -12,19 +12,16 @@
 //!     --n-samples 100 \
 //!     --output benchmark_results.json
 
-use nanochat_train::{
-    checkpoint::load_checkpoint,
-    model::NanochatTrainModel,
-};
-use nanochat_rl::CompilerFeedback;
+use anyhow::Result;
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
-use tokenizers::Tokenizer;
 use clap::Parser;
-use serde::{Serialize, Deserialize};
-use std::time::Instant;
+use nanochat_rl::CompilerFeedback;
+use nanochat_train::{checkpoint::load_checkpoint, model::NanochatTrainModel};
+use serde::{Deserialize, Serialize};
 use std::fs;
-use anyhow::Result;
+use std::time::Instant;
+use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
 #[command(name = "benchmark_model")]
@@ -95,31 +92,25 @@ fn get_test_prompts() -> Vec<String> {
         "fn factorial(n: u64) -> u64 {".to_string(),
         "fn is_palindrome(s: &str) -> bool {".to_string(),
         "fn reverse_string(s: String) -> String {".to_string(),
-
         // Data structures
         "struct Point { x: f64, y: f64 }".to_string(),
         "enum Color { Red, Green, Blue }".to_string(),
         "impl Point {".to_string(),
-
         // Collections
         "fn find_duplicates(arr: &[i32]) -> Vec<i32> {".to_string(),
         "fn merge_sorted(a: Vec<i32>, b: Vec<i32>) -> Vec<i32> {".to_string(),
-
         // Error handling
         "fn read_file(path: &str) -> Result<String, std::io::Error> {".to_string(),
         "fn parse_int(s: &str) -> Option<i32> {".to_string(),
-
         // Iterators
         "fn sum_squares(nums: &[i32]) -> i32 {".to_string(),
         "fn filter_even(nums: Vec<i32>) -> Vec<i32> {".to_string(),
-
         // Async
-        "async fn fetch_data(url: &str) -> Result<String, Box<dyn std::error::Error>> {".to_string(),
-
+        "async fn fetch_data(url: &str) -> Result<String, Box<dyn std::error::Error>> {"
+            .to_string(),
         // Traits
         "trait Parser {".to_string(),
         "impl ToString for Point {".to_string(),
-
         // Macros
         "macro_rules! vec_of_strings {".to_string(),
     ]
@@ -134,7 +125,8 @@ fn generate_sample(
     temperature: f32,
     device: &Device,
 ) -> Result<(String, usize)> {
-    let encoding = tokenizer.encode(prompt, false)
+    let encoding = tokenizer
+        .encode(prompt, false)
         .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?;
     let mut token_ids: Vec<u32> = encoding.get_ids().to_vec();
     let initial_len = token_ids.len();
@@ -158,7 +150,8 @@ fn generate_sample(
         token_ids.push(next_token as u32);
     }
 
-    let output = tokenizer.decode(&token_ids, true)
+    let output = tokenizer
+        .decode(&token_ids, true)
         .map_err(|e| anyhow::anyhow!("Decode error: {}", e))?;
     let tokens_generated = token_ids.len() - initial_len;
     Ok((output, tokens_generated))
@@ -206,12 +199,16 @@ fn count_functions(code: &str) -> usize {
             match item {
                 syn::Item::Fn(_) => count += 1,
                 syn::Item::Impl(impl_item) => {
-                    count += impl_item.items.iter()
+                    count += impl_item
+                        .items
+                        .iter()
                         .filter(|item| matches!(item, syn::ImplItem::Fn(_)))
                         .count();
                 }
                 syn::Item::Trait(trait_item) => {
-                    count += trait_item.items.iter()
+                    count += trait_item
+                        .items
+                        .iter()
                         .filter(|item| matches!(item, syn::TraitItem::Fn(_)))
                         .count();
                 }
@@ -244,7 +241,9 @@ fn main() -> Result<()> {
 
     // Setup device
     let device = if args.device.starts_with("cuda") {
-        let gpu_id = args.device.strip_prefix("cuda:")
+        let gpu_id = args
+            .device
+            .strip_prefix("cuda:")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
         Device::new_cuda(gpu_id).unwrap_or(Device::Cpu)
@@ -300,9 +299,12 @@ fn main() -> Result<()> {
     let mut all_compile_errors = Vec::new();
 
     for (prompt_idx, prompt) in prompts.iter().enumerate() {
-        println!("Prompt {}/{}: {}",
-                 prompt_idx + 1, prompts.len(),
-                 prompt.chars().take(50).collect::<String>());
+        println!(
+            "Prompt {}/{}: {}",
+            prompt_idx + 1,
+            prompts.len(),
+            prompt.chars().take(50).collect::<String>()
+        );
 
         let mut compile_success = 0;
         let mut prompt_lines = 0.0;
@@ -319,7 +321,7 @@ fn main() -> Result<()> {
                 prompt,
                 args.max_tokens,
                 args.temperature,
-                &device
+                &device,
             )?;
 
             let gen_time = gen_start.elapsed().as_millis() as f64;
@@ -380,21 +382,42 @@ fn main() -> Result<()> {
 
     let success_rate = total_compile_success as f64 / total_samples as f64 * 100.0;
     println!("Compilation:");
-    println!("  Success: {}/{} ({:.1}%)", total_compile_success, total_samples, success_rate);
+    println!(
+        "  Success: {}/{} ({:.1}%)",
+        total_compile_success, total_samples, success_rate
+    );
     println!("  Failures: {}", total_samples - total_compile_success);
     println!();
 
     println!("Code Quality:");
-    println!("  Avg lines per sample: {:.1}", total_lines / total_samples as f64);
-    println!("  Avg functions per sample: {:.1}", total_functions / total_samples as f64);
-    println!("  Avg complexity per sample: {:.1}", total_complexity / total_samples as f64);
+    println!(
+        "  Avg lines per sample: {:.1}",
+        total_lines / total_samples as f64
+    );
+    println!(
+        "  Avg functions per sample: {:.1}",
+        total_functions / total_samples as f64
+    );
+    println!(
+        "  Avg complexity per sample: {:.1}",
+        total_complexity / total_samples as f64
+    );
     println!();
 
     println!("Performance:");
     println!("  Total time: {:.1}s", elapsed.as_secs_f64());
-    println!("  Avg generation time: {:.0}ms", total_gen_time / total_samples as f64);
-    println!("  Samples per second: {:.2}", total_samples as f64 / elapsed.as_secs_f64());
-    println!("  Tokens per second: {:.1}", total_tokens_generated as f64 / (total_gen_time / 1000.0));
+    println!(
+        "  Avg generation time: {:.0}ms",
+        total_gen_time / total_samples as f64
+    );
+    println!(
+        "  Samples per second: {:.2}",
+        total_samples as f64 / elapsed.as_secs_f64()
+    );
+    println!(
+        "  Tokens per second: {:.1}",
+        total_tokens_generated as f64 / (total_gen_time / 1000.0)
+    );
     println!();
 
     // Save results

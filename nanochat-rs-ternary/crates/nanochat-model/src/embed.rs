@@ -25,7 +25,9 @@ impl Embedding {
         // Simple LCG PRNG for deterministic init
         let mut state = seed;
         for w in weight.iter_mut() {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             // Map to roughly [-0.02, 0.02]
             *w = ((state >> 33) as f32 / u32::MAX as f32 - 0.5) * 0.04;
         }
@@ -92,10 +94,10 @@ mod tests {
     fn test_embedding_sequence() {
         let mut emb = Embedding::new(4, 2);
         emb.weight = vec![
-            0.0, 1.0,  // token 0
-            2.0, 3.0,  // token 1
-            4.0, 5.0,  // token 2
-            6.0, 7.0,  // token 3
+            0.0, 1.0, // token 0
+            2.0, 3.0, // token 1
+            4.0, 5.0, // token 2
+            6.0, 7.0, // token 3
         ];
 
         let tokens = [3, 1, 0];

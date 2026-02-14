@@ -58,8 +58,14 @@ fn to_c_struct(pw: &PlanarWeights) -> PlanarWeightsC {
 pub fn gemv(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
     assert_eq!(x.len(), pw.cols, "x.len() != cols");
     assert_eq!(y.len(), pw.rows, "y.len() != rows");
-    assert!((pw.data.as_ptr() as usize).is_multiple_of(128), "data not 128B aligned");
-    assert!((pw.scales_rm.as_ptr() as usize).is_multiple_of(128), "scales not 128B aligned");
+    assert!(
+        (pw.data.as_ptr() as usize).is_multiple_of(128),
+        "data not 128B aligned"
+    );
+    assert!(
+        (pw.scales_rm.as_ptr() as usize).is_multiple_of(128),
+        "scales not 128B aligned"
+    );
 
     let c_pw = to_c_struct(pw);
     unsafe {
@@ -116,29 +122,31 @@ pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]
     let kp = pw.cols / 4; // packed bytes per row (row-major)
     let gprow = pw.cols / pw.group_size; // scale groups per row (row-major)
 
-    y.par_chunks_mut(ROWS_PER_CHUNK).enumerate().for_each(|(chunk_idx, y_chunk)| {
-        let row_start = chunk_idx * ROWS_PER_CHUNK;
-        let chunk_rows = y_chunk.len();
+    y.par_chunks_mut(ROWS_PER_CHUNK)
+        .enumerate()
+        .for_each(|(chunk_idx, y_chunk)| {
+            let row_start = chunk_idx * ROWS_PER_CHUNK;
+            let chunk_rows = y_chunk.len();
 
-        // Construct sub-PlanarWeightsC pointing into the parent's arrays.
-        // Column-major and group-major arrays use rows_padded as stride,
-        // so we offset by row_start within each column/group.
-        // Row-major arrays are contiguous per row, so we offset by row_start * items_per_row.
-        let sub_pw = PlanarWeightsC {
-            data: unsafe { pw.data.as_ptr().add(row_start * kp) },
-            data_colmaj: unsafe { pw.data_colmaj.as_ptr().add(row_start) },
-            scales_rm: unsafe { pw.scales_rm.as_ptr().add(row_start * gprow) },
-            scales_gm: unsafe { pw.scales_gm.as_ptr().add(row_start) },
-            rows: chunk_rows as i32,
-            cols: pw.cols as i32,
-            group_size: pw.group_size as i32,
-            rows_padded: pw.rows_padded as i32, // keep original — it's the column stride
-        };
+            // Construct sub-PlanarWeightsC pointing into the parent's arrays.
+            // Column-major and group-major arrays use rows_padded as stride,
+            // so we offset by row_start within each column/group.
+            // Row-major arrays are contiguous per row, so we offset by row_start * items_per_row.
+            let sub_pw = PlanarWeightsC {
+                data: unsafe { pw.data.as_ptr().add(row_start * kp) },
+                data_colmaj: unsafe { pw.data_colmaj.as_ptr().add(row_start) },
+                scales_rm: unsafe { pw.scales_rm.as_ptr().add(row_start * gprow) },
+                scales_gm: unsafe { pw.scales_gm.as_ptr().add(row_start) },
+                rows: chunk_rows as i32,
+                cols: pw.cols as i32,
+                group_size: pw.group_size as i32,
+                rows_padded: pw.rows_padded as i32, // keep original — it's the column stride
+            };
 
-        unsafe {
-            ternary_gemv(&sub_pw, x.as_ptr(), act_scale, y_chunk.as_mut_ptr());
-        }
-    });
+            unsafe {
+                ternary_gemv(&sub_pw, x.as_ptr(), act_scale, y_chunk.as_mut_ptr());
+            }
+        });
 }
 
 #[cfg(test)]
@@ -226,7 +234,9 @@ mod tests {
             assert!(
                 max_diff < 1e-6,
                 "[{}x{}] parallel vs single-thread SIMD max diff: {}",
-                m, k, max_diff
+                m,
+                k,
+                max_diff
             );
 
             // Also verify both are close to scalar reference
@@ -242,7 +252,9 @@ mod tests {
             assert!(
                 max_diff_vs_scalar < 1e-4,
                 "[{}x{}] parallel SIMD vs scalar max diff: {}",
-                m, k, max_diff_vs_scalar
+                m,
+                k,
+                max_diff_vs_scalar
             );
         }
     }
@@ -269,7 +281,14 @@ mod tests {
     #[test]
     fn test_shape_torture() {
         // Non-aligned M values
-        for &(m, k) in &[(1, 128), (17, 128), (33, 256), (63, 384), (65, 256), (127, 640)] {
+        for &(m, k) in &[
+            (1, 128),
+            (17, 128),
+            (33, 256),
+            (63, 384),
+            (65, 256),
+            (127, 640),
+        ] {
             let (pw, x) = make_test_weights(m, k);
             let mut y_ref = vec![0.0f32; m];
             let mut y_dispatch = vec![0.0f32; m];

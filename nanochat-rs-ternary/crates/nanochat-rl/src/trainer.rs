@@ -7,11 +7,11 @@
 //! - Optional Qwen3 evaluation
 //! - GRPO policy updates
 
-use crate::compiler::CompilerFeedback;
 use crate::ast_analysis::analyze_ast;
+use crate::compiler::CompilerFeedback;
+use crate::grpo::{GrpoBatch, GrpoStats, GrpoTrainer};
+use crate::qwen::{qwen_to_reward, QwenClient};
 use crate::reward::compute_reward;
-use crate::grpo::{GrpoTrainer, GrpoBatch, GrpoStats};
-use crate::qwen::{QwenClient, qwen_to_reward};
 use crate::RLConfig;
 
 use anyhow::{Context, Result};
@@ -30,14 +30,14 @@ pub struct RLTrainer {
 impl RLTrainer {
     /// Create a new RL trainer
     pub fn new(config: RLConfig) -> Result<Self> {
-        let compiler = CompilerFeedback::new()
-            .context("Failed to create compiler feedback")?;
+        let compiler = CompilerFeedback::new().context("Failed to create compiler feedback")?;
 
         let grpo = GrpoTrainer::new(config.grpo.clone());
 
-        let qwen = config.qwen_endpoint.as_ref().map(|endpoint| {
-            QwenClient::new(endpoint.clone(), None)
-        });
+        let qwen = config
+            .qwen_endpoint
+            .as_ref()
+            .map(|endpoint| QwenClient::new(endpoint.clone(), None));
 
         Ok(Self {
             config,
@@ -60,7 +60,13 @@ impl RLTrainer {
         println!("  N iterations:     {}", self.config.n_iterations);
         println!("  Batch size:       {}", self.config.batch_size);
         println!("  Device:           {}", self.config.device);
-        println!("  Qwen3 endpoint:   {}", self.config.qwen_endpoint.as_ref().unwrap_or(&"None".to_string()));
+        println!(
+            "  Qwen3 endpoint:   {}",
+            self.config
+                .qwen_endpoint
+                .as_ref()
+                .unwrap_or(&"None".to_string())
+        );
         println!();
 
         // TODO: Load model from checkpoint
@@ -96,11 +102,8 @@ impl RLTrainer {
                     let parse_success = ast_metrics.parseable;
 
                     // Compute base reward
-                    let mut reward = compute_reward(
-                        &compile_result,
-                        &ast_metrics,
-                        &self.config.reward,
-                    );
+                    let mut reward =
+                        compute_reward(&compile_result, &ast_metrics, &self.config.reward);
 
                     // Optional: Add Qwen3 evaluation
                     if let Some(qwen) = &self.qwen {
@@ -108,9 +111,14 @@ impl RLTrainer {
                             Ok(eval) => {
                                 let qwen_reward = qwen_to_reward(&eval, 2.0);
                                 reward += qwen_reward;
-                                println!("    Qwen3: {:.1}/10 (reward: {:.2})",
-                                         (eval.quality_score + eval.correctness_score + eval.idiomaticity_score) / 3.0,
-                                         qwen_reward);
+                                println!(
+                                    "    Qwen3: {:.1}/10 (reward: {:.2})",
+                                    (eval.quality_score
+                                        + eval.correctness_score
+                                        + eval.idiomaticity_score)
+                                        / 3.0,
+                                    qwen_reward
+                                );
                             }
                             Err(e) => {
                                 eprintln!("    Qwen3 evaluation failed: {}", e);
@@ -118,15 +126,23 @@ impl RLTrainer {
                         }
                     }
 
-                    println!("    Compile: {} | Parse: {} | Reward: {:.2}",
-                             if compile_success { "✓" } else { "✗" },
-                             if parse_success { "✓" } else { "✗" },
-                             reward);
+                    println!(
+                        "    Compile: {} | Parse: {} | Reward: {:.2}",
+                        if compile_success { "✓" } else { "✗" },
+                        if parse_success { "✓" } else { "✗" },
+                        reward
+                    );
 
                     // Metadata for stats
                     let mut metadata = HashMap::new();
-                    metadata.insert("compile_success".to_string(), if compile_success { 1.0 } else { 0.0 });
-                    metadata.insert("parse_success".to_string(), if parse_success { 1.0 } else { 0.0 });
+                    metadata.insert(
+                        "compile_success".to_string(),
+                        if compile_success { 1.0 } else { 0.0 },
+                    );
+                    metadata.insert(
+                        "parse_success".to_string(),
+                        if parse_success { 1.0 } else { 0.0 },
+                    );
 
                     // TODO: Get actual log_prob from model
                     let log_prob = -5.0; // Placeholder
@@ -144,8 +160,14 @@ impl RLTrainer {
             println!("\nIteration {} Statistics:", iter + 1);
             println!("  Avg Reward:         {:.2}", stats.avg_reward);
             println!("  Reward Std:         {:.2}", stats.reward_std);
-            println!("  Compile Success:    {:.1}%", stats.compile_success_rate * 100.0);
-            println!("  Parse Success:      {:.1}%", stats.parse_success_rate * 100.0);
+            println!(
+                "  Compile Success:    {:.1}%",
+                stats.compile_success_rate * 100.0
+            );
+            println!(
+                "  Parse Success:      {:.1}%",
+                stats.parse_success_rate * 100.0
+            );
 
             // 5. Update policy (TODO: implement actual gradient update)
             // let loss = self.grpo.compute_loss(...);
@@ -201,7 +223,8 @@ pub fn factorial(n: u64) -> u64 {
         n * factorial(n - 1)
     }
 }
-"#.to_string())
+"#
+            .to_string())
         } else if prompt.contains("point") {
             Ok(r#"
 pub struct Point {
@@ -220,7 +243,8 @@ impl Point {
         (dx * dx + dy * dy).sqrt()
     }
 }
-"#.to_string())
+"#
+            .to_string())
         } else if prompt.contains("filter") {
             Ok(r#"
 pub fn filter_even(nums: Vec<i32>) -> Vec<i32> {
@@ -228,7 +252,8 @@ pub fn filter_even(nums: Vec<i32>) -> Vec<i32> {
         .filter(|x| x % 2 == 0)
         .collect()
 }
-"#.to_string())
+"#
+            .to_string())
         } else if prompt.contains("file") {
             Ok(r#"
 use std::fs;
@@ -237,13 +262,15 @@ use std::io::Result;
 pub fn read_file_contents(path: &str) -> Result<String> {
     fs::read_to_string(path)
 }
-"#.to_string())
+"#
+            .to_string())
         } else {
             Ok(r#"
 pub fn example() {
     println!("Hello, world!");
 }
-"#.to_string())
+"#
+            .to_string())
         }
     }
 

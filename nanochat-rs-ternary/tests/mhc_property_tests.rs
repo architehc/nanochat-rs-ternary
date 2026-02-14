@@ -5,8 +5,8 @@
 //! The composite gain of any sequence of such matrices is bounded by 1.0.
 
 use mhc_lite::{
-    verify_doubly_stochastic, verify_doubly_stochastic_2x2, composite_amax_gain,
-    MhcLiteN2, MhcLiteN4,
+    composite_amax_gain, verify_doubly_stochastic, verify_doubly_stochastic_2x2, MhcLiteN2,
+    MhcLiteN4,
 };
 
 // ───────────────────── N=2 Property Tests ─────────────────────
@@ -22,13 +22,7 @@ fn n2_identity_is_doubly_stochastic() {
 fn n2_1000_random_logits_all_doubly_stochastic() {
     for seed in 0..1000 {
         let alpha_logit = ((seed as f32) * 0.731).sin() * 10.0;
-        let mhc = MhcLiteN2::from_weights(
-            alpha_logit,
-            [0.0; 2],
-            [0.5; 2],
-            [0.0; 2],
-            [0.5; 2],
-        );
+        let mhc = MhcLiteN2::from_weights(alpha_logit, [0.0; 2], [0.5; 2], [0.0; 2], [0.5; 2]);
         let h = mhc.h_res();
         verify_doubly_stochastic_2x2(&h, 1e-6)
             .unwrap_or_else(|e| panic!("N2 seed {}: {}", seed, e));
@@ -96,7 +90,9 @@ fn n2_expand_collapse_preserves_data() {
         assert!(
             (x[i] - collapsed[i]).abs() < 1e-6,
             "expand/collapse mismatch at {}: {} vs {}",
-            i, x[i], collapsed[i]
+            i,
+            x[i],
+            collapsed[i]
         );
     }
 }
@@ -116,8 +112,20 @@ fn n2_h_pre_h_post_are_nonnegative() {
         let h_post = mhc.h_post();
 
         for i in 0..2 {
-            assert!(h_pre[i] >= 0.0, "h_pre[{}] = {} negative at seed {}", i, h_pre[i], seed);
-            assert!(h_post[i] >= 0.0, "h_post[{}] = {} negative at seed {}", i, h_post[i], seed);
+            assert!(
+                h_pre[i] >= 0.0,
+                "h_pre[{}] = {} negative at seed {}",
+                i,
+                h_pre[i],
+                seed
+            );
+            assert!(
+                h_post[i] >= 0.0,
+                "h_post[{}] = {} negative at seed {}",
+                i,
+                h_post[i],
+                seed
+            );
         }
     }
 }
@@ -138,16 +146,9 @@ fn n4_1000_random_logits_all_doubly_stochastic() {
         for i in 0..24 {
             logits[i] = ((seed * 24 + i) as f32 * 0.7).sin() * 5.0;
         }
-        let mhc = MhcLiteN4::from_weights(
-            logits,
-            [0.0; 4],
-            [0.5; 4],
-            [0.0; 4],
-            [0.5; 4],
-        );
+        let mhc = MhcLiteN4::from_weights(logits, [0.0; 4], [0.5; 4], [0.0; 4], [0.5; 4]);
         let h = mhc.h_res();
-        verify_doubly_stochastic(&h, 1e-5)
-            .unwrap_or_else(|e| panic!("N4 seed {}: {}", seed, e));
+        verify_doubly_stochastic(&h, 1e-5).unwrap_or_else(|e| panic!("N4 seed {}: {}", seed, e));
     }
 }
 
@@ -224,7 +225,9 @@ fn n4_expand_collapse_preserves_data() {
         assert!(
             (x[i] - collapsed[i]).abs() < 1e-6,
             "expand/collapse mismatch at {}: {} vs {}",
-            i, x[i], collapsed[i]
+            i,
+            x[i],
+            collapsed[i]
         );
     }
 }
@@ -236,18 +239,33 @@ fn n4_h_pre_h_post_are_nonnegative() {
         for i in 0..24 {
             logits[i] = ((seed * 24 + i) as f32 * 0.37).sin() * 10.0;
         }
-        let pre_logits: [f32; 4] = std::array::from_fn(|i| ((seed * 4 + i) as f32 * 1.7).sin() * 5.0);
+        let pre_logits: [f32; 4] =
+            std::array::from_fn(|i| ((seed * 4 + i) as f32 * 1.7).sin() * 5.0);
         let pre_bias: [f32; 4] = std::array::from_fn(|i| ((seed * 4 + i) as f32 * 2.3).cos() * 3.0);
-        let post_logits: [f32; 4] = std::array::from_fn(|i| ((seed * 4 + i) as f32 * 0.9).sin() * 7.0);
-        let post_bias: [f32; 4] = std::array::from_fn(|i| ((seed * 4 + i) as f32 * 3.1).cos() * 4.0);
+        let post_logits: [f32; 4] =
+            std::array::from_fn(|i| ((seed * 4 + i) as f32 * 0.9).sin() * 7.0);
+        let post_bias: [f32; 4] =
+            std::array::from_fn(|i| ((seed * 4 + i) as f32 * 3.1).cos() * 4.0);
 
         let mhc = MhcLiteN4::from_weights(logits, pre_logits, pre_bias, post_logits, post_bias);
         let h_pre = mhc.h_pre();
         let h_post = mhc.h_post();
 
         for i in 0..4 {
-            assert!(h_pre[i] >= 0.0, "h_pre[{}] = {} negative at seed {}", i, h_pre[i], seed);
-            assert!(h_post[i] >= 0.0, "h_post[{}] = {} negative at seed {}", i, h_post[i], seed);
+            assert!(
+                h_pre[i] >= 0.0,
+                "h_pre[{}] = {} negative at seed {}",
+                i,
+                h_pre[i],
+                seed
+            );
+            assert!(
+                h_post[i] >= 0.0,
+                "h_post[{}] = {} negative at seed {}",
+                i,
+                h_post[i],
+                seed
+            );
         }
     }
 }

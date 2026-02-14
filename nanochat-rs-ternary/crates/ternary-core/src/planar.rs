@@ -50,7 +50,11 @@ pub fn numa_max_node_id() -> usize {
     {
         if numa_is_available() {
             let max = unsafe { numa_max_node() };
-            if max >= 0 { max as usize } else { 0 }
+            if max >= 0 {
+                max as usize
+            } else {
+                0
+            }
         } else {
             0
         }
@@ -96,7 +100,12 @@ impl<T: Copy + Default> AlignedVec<T> {
     /// Allocate a zeroed, 128-byte aligned vector of `len` elements.
     pub fn new_zeroed(len: usize) -> Self {
         if len == 0 {
-            return Self { ptr: NonNull::dangling(), len: 0, cap: 0, alloc_source: AllocSource::Standard };
+            return Self {
+                ptr: NonNull::dangling(),
+                len: 0,
+                cap: 0,
+                alloc_source: AllocSource::Standard,
+            };
         }
 
         let size = std::mem::size_of::<T>() * len;
@@ -342,8 +351,14 @@ impl PlanarWeights {
     pub fn from_row_major(weights: &[f32], rows: usize, cols: usize, group_size: usize) -> Self {
         assert_eq!(weights.len(), rows * cols);
         assert!(cols.is_multiple_of(4), "cols must be divisible by 4");
-        assert!(cols.is_multiple_of(group_size), "cols must be divisible by group_size");
-        assert!(group_size.is_multiple_of(4), "group_size must be divisible by 4");
+        assert!(
+            cols.is_multiple_of(group_size),
+            "cols must be divisible by group_size"
+        );
+        assert!(
+            group_size.is_multiple_of(4),
+            "group_size must be divisible by 4"
+        );
 
         let pm = pack_matrix(weights, rows, cols, group_size);
         Self::from_packed_matrix(&pm)
@@ -598,7 +613,9 @@ mod tests {
         let mut v: AlignedVec<f32> = AlignedVec::new_zeroed(4);
         let ptr = v.as_mut_ptr();
         assert_eq!(ptr as usize % 128, 0);
-        unsafe { *ptr = 42.0; }
+        unsafe {
+            *ptr = 42.0;
+        }
         assert_eq!(v[0], 42.0);
     }
 
@@ -669,10 +686,7 @@ mod tests {
         // Informational test: reports whether NUMA is available on this system
         let available = numa_is_available();
         let max_node = numa_max_node_id();
-        println!(
-            "NUMA available: {}, max node: {}",
-            available, max_node
-        );
+        println!("NUMA available: {}, max node: {}", available, max_node);
         // This test always passes — it just reports NUMA status
         if available {
             assert!(max_node < 256, "unreasonable max_node value: {}", max_node);

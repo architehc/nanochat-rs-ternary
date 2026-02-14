@@ -1,7 +1,7 @@
+pub mod code_patterns;
 pub mod dataset;
 pub mod tokenizer;
-pub mod code_patterns;
 
-pub use dataset::{Dataset, SyntheticDataset, TokenFileDataset, DataLoader};
-pub use tokenizer::{NanochatTokenizer, prepare_data};
 pub use code_patterns::CodePatternsDataset;
+pub use dataset::{DataLoader, Dataset, SyntheticDataset, TokenFileDataset};
+pub use tokenizer::{prepare_data, NanochatTokenizer};

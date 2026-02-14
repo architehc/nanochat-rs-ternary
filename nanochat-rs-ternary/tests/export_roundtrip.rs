@@ -88,11 +88,8 @@ fn run_roundtrip(cfg: &TrainConfig) {
     .unwrap();
 
     // Load via inference model
-    let mut inf_model = NanochatModel::from_gguf(
-        gguf_path.to_str().unwrap(),
-        mhc_path.to_str().unwrap(),
-    )
-    .unwrap();
+    let mut inf_model =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap()).unwrap();
 
     // Verify config roundtrip
     assert_eq!(inf_model.config.dim, cfg.dim);
@@ -178,10 +175,7 @@ fn run_roundtrip(cfg: &TrainConfig) {
         0.0 // Degenerate case: constant logits
     };
 
-    println!(
-        "  Pearson correlation={:.4} (range: -1 to +1)",
-        pearson
-    );
+    println!("  Pearson correlation={:.4} (range: -1 to +1)", pearson);
 
     // With RANDOM weights, expect weak but not systematically negative correlation.
     // Strong negative correlation (< -0.5) would indicate a systematic bug like
@@ -232,11 +226,8 @@ fn test_export_load_config_fields() {
     )
     .unwrap();
 
-    let inf_model = NanochatModel::from_gguf(
-        gguf_path.to_str().unwrap(),
-        mhc_path.to_str().unwrap(),
-    )
-    .unwrap();
+    let inf_model =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap()).unwrap();
 
     assert_eq!(inf_model.config.dim, cfg.dim);
     assert_eq!(inf_model.config.n_layers, cfg.n_layers);

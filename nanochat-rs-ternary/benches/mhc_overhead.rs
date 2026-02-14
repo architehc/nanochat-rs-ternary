@@ -9,7 +9,10 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
-use mhc_lite::{MhcLiteN2, MhcLiteN4, verify_doubly_stochastic, verify_doubly_stochastic_2x2, composite_amax_gain};
+use mhc_lite::{
+    composite_amax_gain, verify_doubly_stochastic, verify_doubly_stochastic_2x2, MhcLiteN2,
+    MhcLiteN4,
+};
 use ternary_core::planar::PlanarWeights;
 use ternary_kernels::cpu;
 
@@ -31,13 +34,7 @@ fn gen_activations(cols: usize) -> Vec<i8> {
 fn bench_mhc_n2_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("mhc_n2");
 
-    let mhc = MhcLiteN2::from_weights(
-        2.5,
-        [0.3, -0.7],
-        [0.5, 0.5],
-        [-0.2, 0.8],
-        [0.5, 0.5],
-    );
+    let mhc = MhcLiteN2::from_weights(2.5, [0.3, -0.7], [0.5, 0.5], [-0.2, 0.8], [0.5, 0.5]);
     let dim = 4096;
     let x_single: Vec<f32> = (0..dim).map(|i| (i as f32) * 0.001).collect();
     let x_expanded = MhcLiteN2::expand_input(&x_single, dim);

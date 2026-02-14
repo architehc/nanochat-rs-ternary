@@ -1,8 +1,8 @@
 //! Transformer block with mHC wiring for training.
 
-use candle_core::{Result, Tensor};
 #[cfg(test)]
 use candle_core::DType;
+use candle_core::{Result, Tensor};
 use candle_nn::VarBuilder;
 
 use crate::attention::AttentionTrain;
@@ -31,7 +31,10 @@ impl TransformerBlockTrain {
             norm_attn: RMSNormTrain::new(config.dim, vb.pp("norm_attn"))?,
             norm_ffn: RMSNormTrain::new(config.dim, vb.pp("norm_ffn"))?,
             attention: AttentionTrain::new(
-                config.dim, config.n_heads, config.n_kv_heads, config.group_size,
+                config.dim,
+                config.n_heads,
+                config.n_kv_heads,
+                config.group_size,
                 vb.pp("attn"),
             )?,
             ffn: FeedForwardTrain::new(config.dim, ffn_dim, config.group_size, vb.pp("ffn"))?,
@@ -77,9 +80,9 @@ impl TransformerBlockTrain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attention::precompute_rope_freqs;
     use candle_core::Device;
     use candle_nn::VarMap;
-    use crate::attention::precompute_rope_freqs;
 
     fn test_config() -> TrainConfig {
         TrainConfig {
@@ -149,7 +152,9 @@ mod tests {
         let grads = loss.backward()?;
 
         // mHC params should have gradients
-        let g = grads.get(&block.mhc_attn.pre_logits).expect("mHC attn pre_logits gradient");
+        let g = grads
+            .get(&block.mhc_attn.pre_logits)
+            .expect("mHC attn pre_logits gradient");
         let gn = g.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
         assert!(gn > 0.0, "mHC gradient should be non-zero");
         Ok(())

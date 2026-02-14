@@ -14,8 +14,8 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use ternary_core::pack::quantize_row_q1_58;
 use ternary_core::gguf::{GgufFileWriter, GgufMetadata, GgufTensorInfo, GgufType, GgufValue};
+use ternary_core::pack::quantize_row_q1_58;
 
 #[derive(Parser, Debug)]
 #[command(name = "qwen3-converter")]
@@ -98,9 +98,27 @@ fn main() -> Result<()> {
 
     if args.verbose {
         println!("Model config:");
-        println!("  - dim: {}", config.get("hidden_size").and_then(|v| v.as_u64()).unwrap_or(0));
-        println!("  - n_layers: {}", config.get("num_hidden_layers").and_then(|v| v.as_u64()).unwrap_or(0));
-        println!("  - vocab_size: {}", config.get("vocab_size").and_then(|v| v.as_u64()).unwrap_or(0));
+        println!(
+            "  - dim: {}",
+            config
+                .get("hidden_size")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+        );
+        println!(
+            "  - n_layers: {}",
+            config
+                .get("num_hidden_layers")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+        );
+        println!(
+            "  - vocab_size: {}",
+            config
+                .get("vocab_size")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+        );
         println!();
     }
 
@@ -150,8 +168,7 @@ fn load_checkpoint(path: &Path, verbose: bool) -> Result<Vec<TensorMeta>> {
     file.read_to_end(&mut buffer)
         .context("Failed to read safetensors file")?;
 
-    let safetensors = SafeTensors::deserialize(&buffer)
-        .context("Failed to parse safetensors")?;
+    let safetensors = SafeTensors::deserialize(&buffer).context("Failed to parse safetensors")?;
 
     let mut tensors = Vec::new();
 
@@ -174,17 +191,21 @@ fn load_checkpoint(path: &Path, verbose: bool) -> Result<Vec<TensorMeta>> {
 /// Classify tensor for selective quantization based on name
 fn classify_tensor(name: &str, keep_attn_fp8: bool) -> TensorClass {
     // MoE expert weights - always ternarize (biggest memory win)
-    if name.contains(".experts.") && (name.ends_with(".w_gate.weight")
-        || name.ends_with(".w_up.weight")
-        || name.ends_with(".w_down.weight")) {
+    if name.contains(".experts.")
+        && (name.ends_with(".w_gate.weight")
+            || name.ends_with(".w_up.weight")
+            || name.ends_with(".w_down.weight"))
+    {
         return TensorClass::Ternary;
     }
 
     // If keep_attn_fp8 is false, ternarize attention projections too
-    if !keep_attn_fp8 && (name.ends_with(".wq.weight")
-        || name.ends_with(".wk.weight")
-        || name.ends_with(".wv.weight")
-        || name.ends_with(".wo.weight")) {
+    if !keep_attn_fp8
+        && (name.ends_with(".wq.weight")
+            || name.ends_with(".wk.weight")
+            || name.ends_with(".wv.weight")
+            || name.ends_with(".wo.weight"))
+    {
         return TensorClass::Ternary;
     }
 
@@ -200,7 +221,8 @@ fn classify_tensor(name: &str, keep_attn_fp8: bool) -> TensorClass {
 /// Extract model config from config.json
 fn extract_model_config(checkpoint_dir: &Path) -> Result<serde_json::Value> {
     let config_path = if checkpoint_dir.is_file() {
-        checkpoint_dir.parent()
+        checkpoint_dir
+            .parent()
             .ok_or_else(|| anyhow::anyhow!("Invalid checkpoint path"))?
             .join("config.json")
     } else {
@@ -211,8 +233,8 @@ fn extract_model_config(checkpoint_dir: &Path) -> Result<serde_json::Value> {
         .with_context(|| format!("Failed to open config.json at {}", config_path.display()))?;
 
     let reader = BufReader::new(file);
-    let config: serde_json::Value = serde_json::from_reader(reader)
-        .context("Failed to parse config.json")?;
+    let config: serde_json::Value =
+        serde_json::from_reader(reader).context("Failed to parse config.json")?;
 
     Ok(config)
 }
@@ -255,7 +277,10 @@ fn convert_tensors(
                     "BF16" => GgufType::BF16,
                     _ => {
                         if verbose {
-                            println!("Warning: Unknown dtype {} for {}, treating as F32", tensor.dtype, tensor.name);
+                            println!(
+                                "Warning: Unknown dtype {} for {}, treating as F32",
+                                tensor.dtype, tensor.name
+                            );
                         }
                         GgufType::F32
                     }
@@ -281,7 +306,11 @@ fn ternarize_tensor(tensor: &TensorMeta, group_size: usize) -> Result<ConvertedT
 
     // For 2D weight matrices: [out_features, in_features]
     if tensor.shape.len() != 2 {
-        anyhow::bail!("Can only ternarize 2D tensors, got shape {:?} for {}", tensor.shape, tensor.name);
+        anyhow::bail!(
+            "Can only ternarize 2D tensors, got shape {:?} for {}",
+            tensor.shape,
+            tensor.name
+        );
     }
 
     let rows = tensor.shape[0];
@@ -304,7 +333,8 @@ fn parse_tensor_data(tensor: &TensorMeta) -> Result<Vec<f32>> {
     match tensor.dtype.as_str() {
         "F32" => {
             // Already F32, just reinterpret bytes
-            let floats: Vec<f32> = tensor.data
+            let floats: Vec<f32> = tensor
+                .data
                 .chunks_exact(4)
                 .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                 .collect();
@@ -313,7 +343,8 @@ fn parse_tensor_data(tensor: &TensorMeta) -> Result<Vec<f32>> {
         "F16" => {
             // Convert FP16 to F32
             use half::f16;
-            let floats: Vec<f32> = tensor.data
+            let floats: Vec<f32> = tensor
+                .data
                 .chunks_exact(2)
                 .map(|chunk| {
                     let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
@@ -325,7 +356,8 @@ fn parse_tensor_data(tensor: &TensorMeta) -> Result<Vec<f32>> {
         "BF16" => {
             // Convert BF16 to F32
             use half::bf16;
-            let floats: Vec<f32> = tensor.data
+            let floats: Vec<f32> = tensor
+                .data
                 .chunks_exact(2)
                 .map(|chunk| {
                     let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
@@ -357,31 +389,55 @@ fn export_gguf(
         metadata.insert("nanochat.dim".to_string(), GgufValue::U32(dim as u32));
     }
     if let Some(n_layers) = config.get("num_hidden_layers").and_then(|v| v.as_u64()) {
-        metadata.insert("nanochat.n_layers".to_string(), GgufValue::U32(n_layers as u32));
+        metadata.insert(
+            "nanochat.n_layers".to_string(),
+            GgufValue::U32(n_layers as u32),
+        );
     }
     if let Some(n_heads) = config.get("num_attention_heads").and_then(|v| v.as_u64()) {
-        metadata.insert("nanochat.n_heads".to_string(), GgufValue::U32(n_heads as u32));
+        metadata.insert(
+            "nanochat.n_heads".to_string(),
+            GgufValue::U32(n_heads as u32),
+        );
     }
     if let Some(n_kv_heads) = config.get("num_key_value_heads").and_then(|v| v.as_u64()) {
-        metadata.insert("nanochat.n_kv_heads".to_string(), GgufValue::U32(n_kv_heads as u32));
+        metadata.insert(
+            "nanochat.n_kv_heads".to_string(),
+            GgufValue::U32(n_kv_heads as u32),
+        );
     }
     if let Some(vocab_size) = config.get("vocab_size").and_then(|v| v.as_u64()) {
-        metadata.insert("nanochat.vocab_size".to_string(), GgufValue::U32(vocab_size as u32));
+        metadata.insert(
+            "nanochat.vocab_size".to_string(),
+            GgufValue::U32(vocab_size as u32),
+        );
     }
 
     // Optional Qwen3-specific fields
     metadata.insert("nanochat.group_size".to_string(), GgufValue::U32(128));
     metadata.insert("nanochat.mhc_n_streams".to_string(), GgufValue::U32(4));
-    metadata.insert("nanochat.gated_attention".to_string(), GgufValue::Bool(true));
+    metadata.insert(
+        "nanochat.gated_attention".to_string(),
+        GgufValue::Bool(true),
+    );
 
     // MoE config
     if let Some(n_experts) = config.get("num_experts").and_then(|v| v.as_u64()) {
-        metadata.insert("nanochat.n_experts".to_string(), GgufValue::U32(n_experts as u32));
+        metadata.insert(
+            "nanochat.n_experts".to_string(),
+            GgufValue::U32(n_experts as u32),
+        );
     }
     if let Some(n_active) = config.get("num_experts_per_tok").and_then(|v| v.as_u64()) {
-        metadata.insert("nanochat.n_active_experts".to_string(), GgufValue::U32(n_active as u32));
+        metadata.insert(
+            "nanochat.n_active_experts".to_string(),
+            GgufValue::U32(n_active as u32),
+        );
     }
-    metadata.insert("nanochat.use_shared_expert".to_string(), GgufValue::Bool(true));
+    metadata.insert(
+        "nanochat.use_shared_expert".to_string(),
+        GgufValue::Bool(true),
+    );
 
     // Build tensor list
     let tensor_infos: Vec<GgufTensorInfo> = tensors

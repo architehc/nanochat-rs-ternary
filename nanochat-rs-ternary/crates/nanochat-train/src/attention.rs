@@ -1,8 +1,8 @@
 //! Multi-head attention with RoPE for training.
 
-use candle_core::{Result, Tensor, D};
 #[cfg(test)]
 use candle_core::DType;
+use candle_core::{Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 use crate::layers::BitLinearSTE;
@@ -73,13 +73,27 @@ pub struct AttentionTrain {
 }
 
 impl AttentionTrain {
-    pub fn new(dim: usize, n_heads: usize, n_kv_heads: usize, group_size: usize, vb: VarBuilder) -> Result<Self> {
+    pub fn new(
+        dim: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
+        group_size: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let head_dim = dim / n_heads;
         let wq = BitLinearSTE::new(dim, n_heads * head_dim, group_size, vb.pp("wq"))?;
         let wk = BitLinearSTE::new(dim, n_kv_heads * head_dim, group_size, vb.pp("wk"))?;
         let wv = BitLinearSTE::new(dim, n_kv_heads * head_dim, group_size, vb.pp("wv"))?;
         let wo = BitLinearSTE::new(n_heads * head_dim, dim, group_size, vb.pp("wo"))?;
-        Ok(Self { wq, wk, wv, wo, n_heads, n_kv_heads, head_dim })
+        Ok(Self {
+            wq,
+            wk,
+            wv,
+            wo,
+            n_heads,
+            n_kv_heads,
+            head_dim,
+        })
     }
 
     /// Forward pass: x [batch, seq_len, dim] -> [batch, seq_len, dim]
@@ -92,9 +106,15 @@ impl AttentionTrain {
         let v = self.wv.forward(x)?; // [batch, seq, n_kv_heads*head_dim]
 
         // Reshape to [batch, n_heads, seq, head_dim]
-        let q = q.reshape((batch, seq_len, self.n_heads, self.head_dim))?.transpose(1, 2)?;
-        let k = k.reshape((batch, seq_len, self.n_kv_heads, self.head_dim))?.transpose(1, 2)?;
-        let v = v.reshape((batch, seq_len, self.n_kv_heads, self.head_dim))?.transpose(1, 2)?;
+        let q = q
+            .reshape((batch, seq_len, self.n_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let k = k
+            .reshape((batch, seq_len, self.n_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let v = v
+            .reshape((batch, seq_len, self.n_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
 
         // Apply RoPE
         let (q, k) = apply_rotary_emb(&q, &k, cos, sin)?;
@@ -122,13 +142,21 @@ impl AttentionTrain {
         let attn_out = attn_weights.matmul(&v)?; // [batch, n_heads, seq, head_dim]
 
         // Reshape and project output
-        let attn_out = attn_out.transpose(1, 2)?.reshape((batch, seq_len, self.n_heads * self.head_dim))?;
+        let attn_out =
+            attn_out
+                .transpose(1, 2)?
+                .reshape((batch, seq_len, self.n_heads * self.head_dim))?;
         self.wo.forward(&attn_out)
     }
 
     /// Collect weight tensors for param groups.
     pub fn linear_params(&self) -> Vec<&Tensor> {
-        vec![self.wq.weight(), self.wk.weight(), self.wv.weight(), self.wo.weight()]
+        vec![
+            self.wq.weight(),
+            self.wk.weight(),
+            self.wv.weight(),
+            self.wo.weight(),
+        ]
     }
 }
 
@@ -192,8 +220,12 @@ mod tests {
         // RoPE should approximately preserve L2 norm
         let orig_norm = q.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
         let rot_norm = q_rot.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
-        assert!((orig_norm - rot_norm).abs() / orig_norm < 0.01,
-            "RoPE should preserve norm: {} vs {}", orig_norm, rot_norm);
+        assert!(
+            (orig_norm - rot_norm).abs() / orig_norm < 0.01,
+            "RoPE should preserve norm: {} vs {}",
+            orig_norm,
+            rot_norm
+        );
         Ok(())
     }
 
@@ -213,7 +245,9 @@ mod tests {
         let loss = y.sum_all()?;
         let grads = loss.backward()?;
 
-        let grad = grads.get(attn.wq.weight()).expect("wq should have gradient");
+        let grad = grads
+            .get(attn.wq.weight())
+            .expect("wq should have gradient");
         let gn = grad.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
         assert!(gn > 0.0, "wq gradient should be non-zero");
         Ok(())

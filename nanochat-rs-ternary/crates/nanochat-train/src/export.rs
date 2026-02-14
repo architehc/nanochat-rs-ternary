@@ -10,46 +10,85 @@ use crate::model::NanochatTrainModel;
 /// Extracts ternary weights from BitLinearSTE layers, packs them using
 /// ternary-core, and writes to a GGUF file. Embeddings are stored as FP16,
 /// norms as FP32.
-pub fn export_gguf(
-    model: &NanochatTrainModel,
-    config: &TrainConfig,
-    path: &str,
-) -> Result<()> {
-    use ternary_core::gguf::{GgufWriter, GgufValue};
+pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str) -> Result<()> {
+    use ternary_core::gguf::{GgufValue, GgufWriter};
     use ternary_core::planar::PlanarWeights;
 
     let mut writer = GgufWriter::new();
 
     // Metadata
-    writer.add_metadata("general.architecture", GgufValue::String("nanochat-ternary".to_string()));
+    writer.add_metadata(
+        "general.architecture",
+        GgufValue::String("nanochat-ternary".to_string()),
+    );
     writer.add_metadata("nanochat.dim", GgufValue::U32(config.dim as u32));
     writer.add_metadata("nanochat.n_layers", GgufValue::U32(config.n_layers as u32));
     writer.add_metadata("nanochat.n_heads", GgufValue::U32(config.n_heads as u32));
-    writer.add_metadata("nanochat.n_kv_heads", GgufValue::U32(config.n_kv_heads as u32));
-    writer.add_metadata("nanochat.vocab_size", GgufValue::U32(config.vocab_size as u32));
-    writer.add_metadata("nanochat.max_seq_len", GgufValue::U32(config.max_seq_len as u32));
-    writer.add_metadata("nanochat.group_size", GgufValue::U32(config.group_size as u32));
-    writer.add_metadata("nanochat.mhc_n_streams", GgufValue::U32(config.mhc_n_streams as u32));
-    writer.add_metadata("nanochat.weight_tied", GgufValue::U32(config.weight_tied as u32));
+    writer.add_metadata(
+        "nanochat.n_kv_heads",
+        GgufValue::U32(config.n_kv_heads as u32),
+    );
+    writer.add_metadata(
+        "nanochat.vocab_size",
+        GgufValue::U32(config.vocab_size as u32),
+    );
+    writer.add_metadata(
+        "nanochat.max_seq_len",
+        GgufValue::U32(config.max_seq_len as u32),
+    );
+    writer.add_metadata(
+        "nanochat.group_size",
+        GgufValue::U32(config.group_size as u32),
+    );
+    writer.add_metadata(
+        "nanochat.mhc_n_streams",
+        GgufValue::U32(config.mhc_n_streams as u32),
+    );
+    writer.add_metadata(
+        "nanochat.weight_tied",
+        GgufValue::U32(config.weight_tied as u32),
+    );
     writer.add_metadata("nanochat.rope_theta", GgufValue::F32(config.rope_theta));
     writer.add_metadata("nanochat.ffn_mult", GgufValue::F32(config.ffn_mult));
 
     // LoopLM metadata (if present)
     if let Some(ref loop_cfg) = config.loop_config {
-        writer.add_metadata("nanochat.loop.local_before", GgufValue::U32(loop_cfg.local_before as u32));
-        writer.add_metadata("nanochat.loop.local_after", GgufValue::U32(loop_cfg.local_after as u32));
-        writer.add_metadata("nanochat.loop.loop_count", GgufValue::U32(loop_cfg.loop_count as u32));
+        writer.add_metadata(
+            "nanochat.loop.local_before",
+            GgufValue::U32(loop_cfg.local_before as u32),
+        );
+        writer.add_metadata(
+            "nanochat.loop.local_after",
+            GgufValue::U32(loop_cfg.local_after as u32),
+        );
+        writer.add_metadata(
+            "nanochat.loop.loop_count",
+            GgufValue::U32(loop_cfg.loop_count as u32),
+        );
 
         // Adaptive loop config (optional)
         if let Some(ref adaptive) = loop_cfg.adaptive_loop {
-            writer.add_metadata("nanochat.loop.adaptive.min_loops", GgufValue::U32(adaptive.min_loops as u32));
-            writer.add_metadata("nanochat.loop.adaptive.max_loops", GgufValue::U32(adaptive.max_loops as u32));
-            writer.add_metadata("nanochat.loop.adaptive.perplexity_threshold", GgufValue::F32(adaptive.perplexity_threshold));
+            writer.add_metadata(
+                "nanochat.loop.adaptive.min_loops",
+                GgufValue::U32(adaptive.min_loops as u32),
+            );
+            writer.add_metadata(
+                "nanochat.loop.adaptive.max_loops",
+                GgufValue::U32(adaptive.max_loops as u32),
+            );
+            writer.add_metadata(
+                "nanochat.loop.adaptive.perplexity_threshold",
+                GgufValue::F32(adaptive.perplexity_threshold),
+            );
         }
     }
 
     // Token embedding (FP32 -> stored as f32 in GGUF)
-    let embed_data = model.tok_embed.embeddings().flatten_all()?.to_vec1::<f32>()?;
+    let embed_data = model
+        .tok_embed
+        .embeddings()
+        .flatten_all()?
+        .to_vec1::<f32>()?;
     writer.add_f32_tensor(
         "tok_embed.weight",
         &[config.vocab_size as u64, config.dim as u64],
@@ -57,8 +96,10 @@ pub fn export_gguf(
     );
 
     // Helper to export a single block's weights
-    let export_block = |writer: &mut GgufWriter, prefix: &str, block: &crate::block::TransformerBlockTrain| -> Result<()> {
-
+    let export_block = |writer: &mut GgufWriter,
+                        prefix: &str,
+                        block: &crate::block::TransformerBlockTrain|
+     -> Result<()> {
         // Attention ternary weights
         for (name, layer) in [
             ("attention.wq", &block.attention.wq),
@@ -72,10 +113,7 @@ pub fn export_gguf(
             let cols = layer.in_features;
 
             let pw = PlanarWeights::from_row_major(&w_flat, rows, cols, config.group_size);
-            writer.add_ternary_tensor(
-                &format!("{}.{}.weight", prefix, name),
-                &pw,
-            );
+            writer.add_ternary_tensor(&format!("{}.{}.weight", prefix, name), &pw);
         }
 
         // FFN ternary weights
@@ -90,10 +128,7 @@ pub fn export_gguf(
             let cols = layer.in_features;
 
             let pw = PlanarWeights::from_row_major(&w_flat, rows, cols, config.group_size);
-            writer.add_ternary_tensor(
-                &format!("{}.{}.weight", prefix, name),
-                &pw,
-            );
+            writer.add_ternary_tensor(&format!("{}.{}.weight", prefix, name), &pw);
         }
 
         // Norm weights (FP32)
@@ -141,10 +176,7 @@ pub fn export_gguf(
             }
 
             // Global gates
-            for (name, layer) in [
-                ("g_qk", &loop_block.g_qk),
-                ("g_ffn", &loop_block.g_ffn),
-            ] {
+            for (name, layer) in [("g_qk", &loop_block.g_qk), ("g_ffn", &loop_block.g_ffn)] {
                 let (w_ternary, _scales) = layer.get_ternary_weights()?;
                 let w_flat = w_ternary.flatten_all()?.to_vec1::<f32>()?;
                 let rows = layer.out_features;
@@ -170,11 +202,27 @@ pub fn export_gguf(
             }
 
             // Norms
-            let norm_attn = loop_block.norm_attn.weight().flatten_all()?.to_vec1::<f32>()?;
-            writer.add_f32_tensor(&format!("{}.norm_attn.weight", prefix), &[config.dim as u64], &norm_attn);
+            let norm_attn = loop_block
+                .norm_attn
+                .weight()
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            writer.add_f32_tensor(
+                &format!("{}.norm_attn.weight", prefix),
+                &[config.dim as u64],
+                &norm_attn,
+            );
 
-            let norm_ffn = loop_block.norm_ffn.weight().flatten_all()?.to_vec1::<f32>()?;
-            writer.add_f32_tensor(&format!("{}.norm_ffn.weight", prefix), &[config.dim as u64], &norm_ffn);
+            let norm_ffn = loop_block
+                .norm_ffn
+                .weight()
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            writer.add_f32_tensor(
+                &format!("{}.norm_ffn.weight", prefix),
+                &[config.dim as u64],
+                &norm_ffn,
+            );
         }
 
         for (i, block) in model.local_blocks_after.iter().enumerate() {
@@ -201,18 +249,15 @@ pub fn export_gguf(
         );
     }
 
-    writer.write(path)
+    writer
+        .write(path)
         .map_err(|e| candle_core::Error::Msg(format!("GGUF write error: {}", e)))?;
 
     Ok(())
 }
 
 /// Export mHC parameters to binary file.
-pub fn export_mhc(
-    model: &NanochatTrainModel,
-    config: &TrainConfig,
-    path: &str,
-) -> Result<()> {
+pub fn export_mhc(model: &NanochatTrainModel, config: &TrainConfig, path: &str) -> Result<()> {
     use mhc_lite::io::{save_mhc_file, MhcLayerParams};
 
     let mut layers = Vec::new();
@@ -271,7 +316,7 @@ pub fn export_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{Device, DType};
+    use candle_core::{DType, Device};
     use candle_nn::VarMap;
 
     fn tiny_config() -> TrainConfig {
@@ -350,7 +395,12 @@ mod tests {
         let gguf_path = dir.path().join("test.gguf");
         let mhc_path = dir.path().join("test.mhc");
 
-        export_model(&model, &cfg, gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap())?;
+        export_model(
+            &model,
+            &cfg,
+            gguf_path.to_str().unwrap(),
+            mhc_path.to_str().unwrap(),
+        )?;
 
         assert!(gguf_path.exists());
         assert!(mhc_path.exists());

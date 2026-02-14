@@ -1,8 +1,8 @@
 //! Differentiable mHC-lite module for training (Candle).
 
-use candle_core::{Result, Tensor};
 #[cfg(test)]
 use candle_core::DType;
+use candle_core::{Result, Tensor};
 use candle_nn::VarBuilder;
 
 /// Sigmoid helper that uses custom CUDA kernel when available.
@@ -39,14 +39,19 @@ impl MhcLiteN2Train {
         let pre_bias = vb.get_with_hints(2, "pre_bias", candle_nn::Init::Const(0.5))?;
         let post_logits = vb.get_with_hints(2, "post_logits", candle_nn::Init::Const(0.0))?;
         let post_bias = vb.get_with_hints(2, "post_bias", candle_nn::Init::Const(0.5))?;
-        Ok(Self { alpha_logit, pre_logits, pre_bias, post_logits, post_bias })
+        Ok(Self {
+            alpha_logit,
+            pre_logits,
+            pre_bias,
+            post_logits,
+            post_bias,
+        })
     }
 
     /// Compute 2x2 doubly stochastic residual matrix.
     pub fn h_res(&self) -> Result<(f32, f32)> {
         // alpha = sigmoid(alpha_logit)
-        let alpha = sigmoid(&self.alpha_logit)?
-            .to_vec1::<f32>()?[0];
+        let alpha = sigmoid(&self.alpha_logit)?.to_vec1::<f32>()?[0];
         Ok((alpha, 1.0 - alpha))
     }
 
@@ -117,17 +122,23 @@ impl MhcLiteN2Train {
         let one_minus_alpha = (1.0 - &alpha_t)?;
 
         // H_res: [[alpha, 1-alpha], [1-alpha, alpha]]
-        let out_s0 = (s0_with_residual.broadcast_mul(alpha)? +
-                      s1_with_residual.broadcast_mul(&one_minus_alpha)?)?;
-        let out_s1 = (s0_with_residual.broadcast_mul(&one_minus_alpha)? +
-                      s1_with_residual.broadcast_mul(alpha)?)?;
+        let out_s0 = (s0_with_residual.broadcast_mul(alpha)?
+            + s1_with_residual.broadcast_mul(&one_minus_alpha)?)?;
+        let out_s1 = (s0_with_residual.broadcast_mul(&one_minus_alpha)?
+            + s1_with_residual.broadcast_mul(alpha)?)?;
 
         Tensor::cat(&[&out_s0, &out_s1], last)
     }
 
     /// Collect all parameters for optimizer.
     pub fn params(&self) -> Vec<&Tensor> {
-        vec![&self.alpha_logit, &self.pre_logits, &self.pre_bias, &self.post_logits, &self.post_bias]
+        vec![
+            &self.alpha_logit,
+            &self.pre_logits,
+            &self.pre_bias,
+            &self.post_logits,
+            &self.post_bias,
+        ]
     }
 
     /// Export to inference-format values.
@@ -162,8 +173,15 @@ mod tests {
 
         let (alpha, one_m_alpha) = mhc.h_res()?;
         // FIXED: With alpha_logit=0.0, sigmoid(0.0)=0.5 -> balanced mixing
-        assert!((alpha - 0.5).abs() < 1e-5, "Alpha should be 0.5, got {}", alpha);
-        assert!((alpha + one_m_alpha - 1.0).abs() < 1e-6, "Should sum to 1.0");
+        assert!(
+            (alpha - 0.5).abs() < 1e-5,
+            "Alpha should be 0.5, got {}",
+            alpha
+        );
+        assert!(
+            (alpha + one_m_alpha - 1.0).abs() < 1e-6,
+            "Should sum to 1.0"
+        );
         Ok(())
     }
 
@@ -178,7 +196,11 @@ mod tests {
 
         // Since expand duplicates, collapse (average) should recover original
         let diff = (&x - &x_col)?.abs()?.max_all()?.to_scalar::<f32>()?;
-        assert!(diff < 1e-6, "Collapse should recover original, diff={}", diff);
+        assert!(
+            diff < 1e-6,
+            "Collapse should recover original, diff={}",
+            diff
+        );
         Ok(())
     }
 
@@ -212,7 +234,9 @@ mod tests {
         let grads = loss.backward()?;
 
         // Gradient should flow to alpha_logit
-        let g = grads.get(&mhc.pre_logits).expect("Gradient should exist for pre_logits");
+        let g = grads
+            .get(&mhc.pre_logits)
+            .expect("Gradient should exist for pre_logits");
         let gn = g.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
         assert!(gn > 0.0, "Gradient should be non-zero");
         Ok(())
@@ -227,7 +251,11 @@ mod tests {
 
         let inf = mhc.to_inference_values()?;
         // FIXED: Alpha logit should be 0.0 for balanced mixing
-        assert!((inf.alpha_logit - 0.0).abs() < 1e-5, "Alpha logit should be 0.0, got {}", inf.alpha_logit);
+        assert!(
+            (inf.alpha_logit - 0.0).abs() < 1e-5,
+            "Alpha logit should be 0.0, got {}",
+            inf.alpha_logit
+        );
         assert_eq!(inf.pre_bias, [0.5, 0.5]);
         Ok(())
     }

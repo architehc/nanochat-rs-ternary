@@ -119,10 +119,7 @@ impl MBPPDataset {
             // Convert MBPP format to CodeProblem format
             let task_id = format!("MBPP/{}", raw["task_id"].as_u64().unwrap_or(i as u64));
 
-            let prompt = raw["text"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
+            let prompt = raw["text"].as_str().unwrap_or("").to_string();
 
             // Extract function name from code
             let code = raw["code"].as_str().unwrap_or("");
@@ -194,10 +191,7 @@ mod tests {
             extract_function_name("def _private_func():"),
             Some("_private_func".to_string())
         );
-        assert_eq!(
-            extract_function_name("class Foo:"),
-            None
-        );
+        assert_eq!(extract_function_name("class Foo:"), None);
     }
 
     #[test]

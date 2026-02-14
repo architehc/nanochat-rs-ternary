@@ -115,10 +115,10 @@ impl GrpoTrainer {
     /// - relative_rewards: normalized rewards (zero mean, unit variance per group)
     pub fn compute_loss(
         &self,
-        log_probs: &[f64],      // Log probabilities of generated sequences
-        relative_rewards: &[f64], // Relative rewards (normalized)
+        log_probs: &[f64],             // Log probabilities of generated sequences
+        relative_rewards: &[f64],      // Relative rewards (normalized)
         ref_log_probs: Option<&[f64]>, // Reference policy log probs (for KL penalty)
-        entropy: &[f64],        // Entropy of policy distribution
+        entropy: &[f64],               // Entropy of policy distribution
     ) -> f64 {
         assert_eq!(log_probs.len(), relative_rewards.len());
 
@@ -237,15 +237,12 @@ impl GrpoBatch {
 
             // Compute mean and std
             let mean = rewards.iter().sum::<f64>() / rewards.len() as f64;
-            let variance = rewards.iter()
-                .map(|r| (r - mean).powi(2))
-                .sum::<f64>() / rewards.len() as f64;
+            let variance =
+                rewards.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / rewards.len() as f64;
             let std = variance.sqrt().max(1e-6); // Avoid division by zero
 
             // Normalize
-            self.relative_rewards[i] = rewards.iter()
-                .map(|r| (r - mean) / std)
-                .collect();
+            self.relative_rewards[i] = rewards.iter().map(|r| (r - mean) / std).collect();
         }
     }
 
@@ -293,7 +290,7 @@ impl GrpoBatch {
             avg_reward,
             avg_relative_reward: total_relative / n,
             reward_std,
-            policy_loss: 0.0,  // Will be filled during optimization
+            policy_loss: 0.0, // Will be filled during optimization
             value_loss: 0.0,
             entropy: 0.0,
             kl_div: 0.0,
@@ -324,10 +321,12 @@ mod tests {
         assert!(mean.abs() < 1e-6, "Mean should be near zero: {}", mean);
 
         // Check that highest reward maps to highest relative reward
-        let max_idx = batch.rewards[0].iter()
+        let max_idx = batch.rewards[0]
+            .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-            .unwrap().0;
+            .unwrap()
+            .0;
         assert!(batch.relative_rewards[0][max_idx] > 0.0);
     }
 

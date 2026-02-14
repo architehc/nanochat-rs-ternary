@@ -1,8 +1,8 @@
 //! SwiGLU Feed-Forward Network for training.
 
-use candle_core::{Result, Tensor};
 #[cfg(test)]
 use candle_core::DType;
+use candle_core::{Result, Tensor};
 use candle_nn::VarBuilder;
 
 use crate::layers::BitLinearSTE;
@@ -19,7 +19,11 @@ impl FeedForwardTrain {
         let w_gate = BitLinearSTE::new(dim, ffn_dim, group_size, vb.pp("w_gate"))?;
         let w_up = BitLinearSTE::new(dim, ffn_dim, group_size, vb.pp("w_up"))?;
         let w_down = BitLinearSTE::new(ffn_dim, dim, group_size, vb.pp("w_down"))?;
-        Ok(Self { w_gate, w_up, w_down })
+        Ok(Self {
+            w_gate,
+            w_up,
+            w_down,
+        })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -30,7 +34,11 @@ impl FeedForwardTrain {
     }
 
     pub fn linear_params(&self) -> Vec<&Tensor> {
-        vec![self.w_gate.weight(), self.w_up.weight(), self.w_down.weight()]
+        vec![
+            self.w_gate.weight(),
+            self.w_up.weight(),
+            self.w_down.weight(),
+        ]
     }
 }
 
@@ -65,8 +73,14 @@ mod tests {
         let loss = y.sum_all()?;
         let grads = loss.backward()?;
 
-        for (name, w) in [("gate", ffn.w_gate.weight()), ("up", ffn.w_up.weight()), ("down", ffn.w_down.weight())] {
-            let grad = grads.get(w).unwrap_or_else(|| panic!("{} should have gradient", name));
+        for (name, w) in [
+            ("gate", ffn.w_gate.weight()),
+            ("up", ffn.w_up.weight()),
+            ("down", ffn.w_down.weight()),
+        ] {
+            let grad = grads
+                .get(w)
+                .unwrap_or_else(|| panic!("{} should have gradient", name));
             let gn = grad.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
             assert!(gn > 0.0, "{} gradient should be non-zero", name);
         }

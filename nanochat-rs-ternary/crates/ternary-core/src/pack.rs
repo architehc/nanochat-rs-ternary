@@ -65,7 +65,12 @@ pub fn quantize_one(w: f32, inv: f32) -> i8 {
 /// Pack 4 quantized i8 trits into one byte.
 #[inline]
 pub fn pack_4(t0: i8, t1: i8, t2: i8, t3: i8) -> u8 {
-    pack_4_trits(encode_trit(t0), encode_trit(t1), encode_trit(t2), encode_trit(t3))
+    pack_4_trits(
+        encode_trit(t0),
+        encode_trit(t1),
+        encode_trit(t2),
+        encode_trit(t3),
+    )
 }
 
 /// Unpack one byte into 4 decoded trit values.
@@ -176,8 +181,7 @@ pub fn pack_matrix(weights: &[f32], rows: usize, cols: usize, group_size: usize)
 
             // Copy packed bytes into the output
             let byte_offset = r * bytes_per_row + g * bytes_per_group;
-            packed[byte_offset..byte_offset + bytes_per_group]
-                .copy_from_slice(&group_packed);
+            packed[byte_offset..byte_offset + bytes_per_group].copy_from_slice(&group_packed);
 
             scales[r * groups_per_row + g] = scale;
         }
@@ -235,14 +239,22 @@ pub fn quantize_row_q1_58(
     cols: usize,
     group_size: usize,
 ) -> Result<Vec<u8>, String> {
-    if cols % group_size != 0 {
-        return Err(format!("cols {} must be divisible by group_size {}", cols, group_size));
+    if !cols.is_multiple_of(group_size) {
+        return Err(format!(
+            "cols {} must be divisible by group_size {}",
+            cols, group_size
+        ));
     }
-    if cols % 4 != 0 {
+    if !cols.is_multiple_of(4) {
         return Err(format!("cols {} must be divisible by 4", cols));
     }
     if weights.len() != rows * cols {
-        return Err(format!("weights.len() {} != rows {} * cols {}", weights.len(), rows, cols));
+        return Err(format!(
+            "weights.len() {} != rows {} * cols {}",
+            weights.len(),
+            rows,
+            cols
+        ));
     }
 
     let bytes_per_row = cols / 4;
@@ -288,9 +300,9 @@ mod tests {
     fn test_quantize_one() {
         // val * inv > 0.5 => +1
         assert_eq!(quantize_one(1.0, 1.0), 1); // 1.0 > 0.5
-        // val * inv < -0.5 => -1
+                                               // val * inv < -0.5 => -1
         assert_eq!(quantize_one(-1.0, 1.0), -1); // -1.0 < -0.5
-        // val * inv in [-0.5, 0.5] => 0
+                                                 // val * inv in [-0.5, 0.5] => 0
         assert_eq!(quantize_one(0.0, 1.0), 0);
         assert_eq!(quantize_one(0.3, 1.0), 0); // 0.3 < 0.5
         assert_eq!(quantize_one(-0.3, 1.0), 0);
@@ -384,8 +396,8 @@ mod tests {
         // Create a group of 128 floats with known ternary values
         let scale = 1.5;
         let mut weights = vec![0.0f32; 128];
-        for i in 0..128 {
-            weights[i] = match i % 3 {
+        for (i, weight) in weights.iter_mut().enumerate() {
+            *weight = match i % 3 {
                 0 => scale,
                 1 => -scale,
                 _ => 0.0,
@@ -397,15 +409,15 @@ mod tests {
 
         // Unpack and check signs match
         let unpacked = unpack_group(&packed, _recovered_scale);
-        for i in 0..128 {
+        for (i, &val) in unpacked.iter().enumerate() {
             let expected_sign = match i % 3 {
                 0 => 1,
                 1 => -1,
                 _ => 0,
             };
-            let actual_sign = if unpacked[i] > 1e-10 {
+            let actual_sign = if val > 1e-10 {
                 1
-            } else if unpacked[i] < -1e-10 {
+            } else if val < -1e-10 {
                 -1
             } else {
                 0
@@ -439,8 +451,8 @@ mod tests {
         let scale = 0.7;
 
         let mut weights = vec![0.0f32; rows * cols];
-        for i in 0..weights.len() {
-            weights[i] = match i % 5 {
+        for (i, weight) in weights.iter_mut().enumerate() {
+            *weight = match i % 5 {
                 0 => scale,
                 1 => -scale,
                 2 => 0.0,
@@ -504,9 +516,21 @@ mod tests {
             for c in 0..cols {
                 let val = unpacked[r * cols + c];
                 if c < 128 {
-                    assert!(val > 0.0, "row {} col {} should be positive, got {}", r, c, val);
+                    assert!(
+                        val > 0.0,
+                        "row {} col {} should be positive, got {}",
+                        r,
+                        c,
+                        val
+                    );
                 } else {
-                    assert!(val < 0.0, "row {} col {} should be negative, got {}", r, c, val);
+                    assert!(
+                        val < 0.0,
+                        "row {} col {} should be negative, got {}",
+                        r,
+                        c,
+                        val
+                    );
                 }
             }
         }

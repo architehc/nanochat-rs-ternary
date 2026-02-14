@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::config::TrainConfig;
-use crate::data::{Dataset, DataLoader};
+use crate::data::{DataLoader, Dataset};
 use crate::model::NanochatTrainModel;
 
 /// Sensitivity metric for a single layer.
@@ -82,7 +82,11 @@ pub enum LayerType {
 impl LayerType {
     /// Classify layer by name.
     pub fn from_name(name: &str) -> Self {
-        if name.contains(".wq.") || name.contains(".wk.") || name.contains(".wv.") || name.contains(".wo.") {
+        if name.contains(".wq.")
+            || name.contains(".wk.")
+            || name.contains(".wv.")
+            || name.contains(".wo.")
+        {
             Self::AttentionProjection
         } else if name.contains(".w_gate.") && !name.contains("expert") {
             Self::FfnGate
@@ -169,12 +173,16 @@ impl SensitivityReport {
 
     /// Compute memory savings from ternarizing recommended layers.
     pub fn compute_savings(&self, max_sensitivity: f64) -> (usize, f64) {
-        let total_bytes: usize = self.layers.iter()
+        let total_bytes: usize = self
+            .layers
+            .iter()
             .filter(|l| l.sensitivity <= max_sensitivity)
             .map(|l| l.memory_savings)
             .sum();
 
-        let total_params: usize = self.layers.iter()
+        let total_params: usize = self
+            .layers
+            .iter()
             .filter(|l| l.sensitivity <= max_sensitivity)
             .map(|l| l.num_params)
             .sum();
@@ -220,7 +228,11 @@ impl SensitivityReport {
 
         println!("Recommendations:");
         println!("─────────────────────────────────────────────────────────");
-        println!("  Ternarize: {} layers ({:.1}% of params)", ternarize.len(), savings_pct);
+        println!(
+            "  Ternarize: {} layers ({:.1}% of params)",
+            ternarize.len(),
+            savings_pct
+        );
         println!("  Keep FP8: {} layers", keep_fp8.len());
         println!("  Memory savings: {}", format_bytes(savings_bytes));
         println!();
@@ -230,7 +242,8 @@ impl SensitivityReport {
         println!("Top 10 Most Sensitive Layers:");
         println!("─────────────────────────────────────────────────────────");
         for (i, layer) in sorted.iter().take(10).enumerate() {
-            println!("  {}. {} ({}) - {:.2}% sensitivity",
+            println!(
+                "  {}. {} ({}) - {:.2}% sensitivity",
                 i + 1,
                 layer.layer_name,
                 layer.layer_type.description(),
@@ -245,7 +258,8 @@ impl SensitivityReport {
         let mut sorted_asc = self.layers.clone();
         sorted_asc.sort_by(|a, b| a.sensitivity.partial_cmp(&b.sensitivity).unwrap());
         for (i, layer) in sorted_asc.iter().take(10).enumerate() {
-            println!("  {}. {} ({}) - {:.2}% sensitivity",
+            println!(
+                "  {}. {} ({}) - {:.2}% sensitivity",
                 i + 1,
                 layer.layer_name,
                 layer.layer_type.description(),
@@ -316,7 +330,11 @@ impl SensitivityAnalyzer {
             n_batches += 1;
         }
 
-        Ok(if n_batches > 0 { total_loss / n_batches as f64 } else { 0.0 })
+        Ok(if n_batches > 0 {
+            total_loss / n_batches as f64
+        } else {
+            0.0
+        })
     }
 
     /// Analyze sensitivity of all quantizable layers.
@@ -327,7 +345,11 @@ impl SensitivityAnalyzer {
     ///
     /// # Returns
     /// Sensitivity report with per-layer measurements
-    pub fn analyze(&mut self, dataset: &dyn Dataset, max_batches: usize) -> Result<SensitivityReport> {
+    pub fn analyze(
+        &mut self,
+        dataset: &dyn Dataset,
+        max_batches: usize,
+    ) -> Result<SensitivityReport> {
         println!("Running sensitivity analysis...");
         println!("  Evaluating baseline model...");
 
@@ -346,7 +368,12 @@ impl SensitivityAnalyzer {
         let total_layers = quantizable_layers.len();
 
         for (idx, (layer_name, var)) in quantizable_layers.iter().enumerate() {
-            print!("  [{}/{}] Analyzing {} ... ", idx + 1, total_layers, layer_name);
+            print!(
+                "  [{}/{}] Analyzing {} ... ",
+                idx + 1,
+                total_layers,
+                layer_name
+            );
             std::io::Write::flush(&mut std::io::stdout()).unwrap();
 
             let start = Instant::now();
@@ -379,7 +406,11 @@ impl SensitivityAnalyzer {
                 memory_savings,
             });
 
-            println!("sensitivity={:.2}% ({:.2}s)", sensitivity * 100.0, start.elapsed().as_secs_f64());
+            println!(
+                "sensitivity={:.2}% ({:.2}s)",
+                sensitivity * 100.0,
+                start.elapsed().as_secs_f64()
+            );
         }
 
         println!();
@@ -426,7 +457,7 @@ impl SensitivityAnalyzer {
         let scale = abs_tensor.mean_all()?.to_scalar::<f32>()? as f64;
 
         if scale == 0.0 {
-            return Ok(tensor.zeros_like()?);
+            return tensor.zeros_like();
         }
 
         // Quantize: round(x / scale) → {-1, 0, 1}
@@ -441,31 +472,47 @@ impl SensitivityAnalyzer {
     }
 
     /// Compute aggregate statistics by layer type.
-    fn compute_type_statistics(&self, layers: &[LayerSensitivity]) -> HashMap<LayerType, TypeStatistics> {
+    fn compute_type_statistics(
+        &self,
+        layers: &[LayerSensitivity],
+    ) -> HashMap<LayerType, TypeStatistics> {
         let mut stats_map: HashMap<LayerType, Vec<&LayerSensitivity>> = HashMap::new();
 
         for layer in layers {
             stats_map.entry(layer.layer_type).or_default().push(layer);
         }
 
-        stats_map.into_iter().map(|(layer_type, layers)| {
-            let count = layers.len();
-            let avg_sensitivity = layers.iter().map(|l| l.sensitivity).sum::<f64>() / count as f64;
-            let max_sensitivity = layers.iter().map(|l| l.sensitivity).fold(f64::MIN, f64::max);
-            let min_sensitivity = layers.iter().map(|l| l.sensitivity).fold(f64::MAX, f64::min);
-            let total_params = layers.iter().map(|l| l.num_params).sum();
-            let total_memory_savings = layers.iter().map(|l| l.memory_savings).sum();
+        stats_map
+            .into_iter()
+            .map(|(layer_type, layers)| {
+                let count = layers.len();
+                let avg_sensitivity =
+                    layers.iter().map(|l| l.sensitivity).sum::<f64>() / count as f64;
+                let max_sensitivity = layers
+                    .iter()
+                    .map(|l| l.sensitivity)
+                    .fold(f64::MIN, f64::max);
+                let min_sensitivity = layers
+                    .iter()
+                    .map(|l| l.sensitivity)
+                    .fold(f64::MAX, f64::min);
+                let total_params = layers.iter().map(|l| l.num_params).sum();
+                let total_memory_savings = layers.iter().map(|l| l.memory_savings).sum();
 
-            (layer_type, TypeStatistics {
-                layer_type,
-                count,
-                avg_sensitivity,
-                max_sensitivity,
-                min_sensitivity,
-                total_params,
-                total_memory_savings,
+                (
+                    layer_type,
+                    TypeStatistics {
+                        layer_type,
+                        count,
+                        avg_sensitivity,
+                        max_sensitivity,
+                        min_sensitivity,
+                        total_params,
+                        total_memory_savings,
+                    },
+                )
             })
-        }).collect()
+            .collect()
     }
 }
 
@@ -501,11 +548,26 @@ mod tests {
 
     #[test]
     fn test_layer_type_classification() {
-        assert_eq!(LayerType::from_name("blocks.0.wq.weight"), LayerType::AttentionProjection);
-        assert_eq!(LayerType::from_name("blocks.0.wk.weight"), LayerType::AttentionProjection);
-        assert_eq!(LayerType::from_name("blocks.0.w_gate.weight"), LayerType::FfnGate);
-        assert_eq!(LayerType::from_name("blocks.0.experts.0.w_up.weight"), LayerType::MoeExpert);
-        assert_eq!(LayerType::from_name("tok_embed.weight"), LayerType::Embedding);
+        assert_eq!(
+            LayerType::from_name("blocks.0.wq.weight"),
+            LayerType::AttentionProjection
+        );
+        assert_eq!(
+            LayerType::from_name("blocks.0.wk.weight"),
+            LayerType::AttentionProjection
+        );
+        assert_eq!(
+            LayerType::from_name("blocks.0.w_gate.weight"),
+            LayerType::FfnGate
+        );
+        assert_eq!(
+            LayerType::from_name("blocks.0.experts.0.w_up.weight"),
+            LayerType::MoeExpert
+        );
+        assert_eq!(
+            LayerType::from_name("tok_embed.weight"),
+            LayerType::Embedding
+        );
     }
 
     #[test]

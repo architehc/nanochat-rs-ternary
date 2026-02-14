@@ -12,8 +12,8 @@ use ternary_kernels::cpu;
 #[derive(Debug, Clone)]
 pub struct BitLinear {
     pub pw: PlanarWeights,
-    pub rows: usize,  // output dim
-    pub cols: usize,  // input dim
+    pub rows: usize, // output dim
+    pub cols: usize, // input dim
 }
 
 impl BitLinear {
@@ -167,7 +167,10 @@ mod tests {
                 assert!(
                     (batch_out[r] - out_single[r]).abs() < 1e-6,
                     "token {}, row {}: batch={} vs single={}",
-                    t, r, batch_out[r], out_single[r]
+                    t,
+                    r,
+                    batch_out[r],
+                    out_single[r]
                 );
             }
         }
@@ -188,9 +191,7 @@ mod tests {
         let bl = BitLinear::from_float(&weights, rows, cols, gs);
 
         // Input
-        let x: Vec<f32> = (0..cols)
-            .map(|i| (i as f32 / cols as f32) - 0.5)
-            .collect();
+        let x: Vec<f32> = (0..cols).map(|i| (i as f32 / cols as f32) - 0.5).collect();
 
         // Forward via BitLinear
         let mut out_bl = vec![0.0f32; rows];

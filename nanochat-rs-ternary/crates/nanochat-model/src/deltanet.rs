@@ -79,12 +79,7 @@ impl DeltaNetAttention {
             wk: BitLinear::from_float(&random_weights(dim, dim, 21), dim, dim, gs),
             wv: BitLinear::from_float(&random_weights(dim, dim, 22), dim, dim, gs),
             wo: BitLinear::from_float(&random_weights(dim, dim, 23), dim, dim, gs),
-            w_beta: BitLinear::from_float(
-                &random_weights(n_heads, dim, 24),
-                n_heads,
-                dim,
-                gs,
-            ),
+            w_beta: BitLinear::from_float(&random_weights(n_heads, dim, 24), n_heads, dim, gs),
             n_heads,
             head_dim: hd,
         }
@@ -150,8 +145,7 @@ impl DeltaNetAttention {
             for i in 0..hd {
                 let diff_i = v[h_offset + i] - sk[i];
                 for j in 0..hd {
-                    state.s[s_offset + i * hd + j] +=
-                        beta * diff_i * k_norm[h_offset + j];
+                    state.s[s_offset + i * hd + j] += beta * diff_i * k_norm[h_offset + j];
                 }
             }
 
@@ -210,7 +204,10 @@ mod tests {
     fn test_deltanet_state_init_zero() {
         let state = DeltaNetState::new(4, 32);
         assert_eq!(state.s.len(), 4 * 32 * 32);
-        assert!(state.s.iter().all(|&v| v == 0.0), "state should be all zeros");
+        assert!(
+            state.s.iter().all(|&v| v == 0.0),
+            "state should be all zeros"
+        );
     }
 
     #[test]
@@ -224,7 +221,10 @@ mod tests {
 
         attn.forward(&x, &mut state, &mut out);
 
-        assert!(out.iter().all(|v| v.is_finite()), "non-finite DeltaNet output");
+        assert!(
+            out.iter().all(|v| v.is_finite()),
+            "non-finite DeltaNet output"
+        );
         // After one token, state should be non-zero (beta > 0, so update happens)
         assert!(
             state.s.iter().any(|&v| v != 0.0),
@@ -282,7 +282,10 @@ mod tests {
 
         // Reset
         state.reset();
-        assert!(state.s.iter().all(|&v| v == 0.0), "state should be zero after reset");
+        assert!(
+            state.s.iter().all(|&v| v == 0.0),
+            "state should be zero after reset"
+        );
     }
 
     #[test]
@@ -297,7 +300,11 @@ mod tests {
         let mut v = vec![3.0, 4.0];
         l2_normalize(&mut v);
         let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 1e-5, "L2 norm should be 1.0, got {}", norm);
+        assert!(
+            (norm - 1.0).abs() < 1e-5,
+            "L2 norm should be 1.0, got {}",
+            norm
+        );
         assert!((v[0] - 0.6).abs() < 1e-5);
         assert!((v[1] - 0.8).abs() < 1e-5);
     }

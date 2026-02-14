@@ -3,8 +3,8 @@
 //! Combines compiler feedback and AST analysis into a single reward signal
 //! that guides policy optimization toward generating correct, idiomatic Rust code.
 
-use crate::compiler::CompileResult;
 use crate::ast_analysis::AstMetrics;
+use crate::compiler::CompileResult;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for reward function
@@ -50,18 +50,18 @@ pub struct RewardConfig {
 impl Default for RewardConfig {
     fn default() -> Self {
         Self {
-            w_compile_success: 10.0,   // Compilation is critical
-            w_no_errors: 5.0,           // Error-free code is important
-            w_no_warnings: 1.0,         // Warnings matter but less
-            w_parseable: 8.0,           // Must be valid syntax
-            w_structure: 2.0,           // Reasonable structure
-            w_quality: 3.0,             // Quality patterns
-            w_idioms: 2.0,              // Idiomatic Rust
-            w_complexity: -0.5,         // Penalize high complexity
-            panic_penalty: -2.0,        // Discourage panics
-            unsafe_penalty: -1.0,       // Discourage unsafe (but not forbidden)
-            doc_bonus: 1.0,             // Encourage docs
-            max_complexity: 10.0,       // Reasonable complexity limit
+            w_compile_success: 10.0, // Compilation is critical
+            w_no_errors: 5.0,        // Error-free code is important
+            w_no_warnings: 1.0,      // Warnings matter but less
+            w_parseable: 8.0,        // Must be valid syntax
+            w_structure: 2.0,        // Reasonable structure
+            w_quality: 3.0,          // Quality patterns
+            w_idioms: 2.0,           // Idiomatic Rust
+            w_complexity: -0.5,      // Penalize high complexity
+            panic_penalty: -2.0,     // Discourage panics
+            unsafe_penalty: -1.0,    // Discourage unsafe (but not forbidden)
+            doc_bonus: 1.0,          // Encourage docs
+            max_complexity: 10.0,    // Reasonable complexity limit
         }
     }
 }
@@ -125,7 +125,10 @@ pub fn compute_reward(
     reward
 }
 
-fn evaluate_structure(structure: &crate::ast_analysis::StructureMetrics, config: &RewardConfig) -> f64 {
+fn evaluate_structure(
+    structure: &crate::ast_analysis::StructureMetrics,
+    config: &RewardConfig,
+) -> f64 {
     let mut score = 0.0;
 
     // Reward for having functions (core building blocks)
@@ -208,7 +211,10 @@ fn evaluate_idioms(idioms: &crate::ast_analysis::IdiomMetrics, config: &RewardCo
     score * config.w_idioms
 }
 
-fn evaluate_complexity(complexity: &crate::ast_analysis::ComplexityMetrics, config: &RewardConfig) -> f64 {
+fn evaluate_complexity(
+    complexity: &crate::ast_analysis::ComplexityMetrics,
+    config: &RewardConfig,
+) -> f64 {
     let mut score = 0.0;
 
     // Penalize high cyclomatic complexity
@@ -245,22 +251,18 @@ pub fn compute_relative_rewards(samples: &[CodeSample]) -> Vec<f64> {
     let mean = rewards.iter().sum::<f64>() / rewards.len() as f64;
 
     // Compute std dev
-    let variance = rewards.iter()
-        .map(|r| (r - mean).powi(2))
-        .sum::<f64>() / rewards.len() as f64;
+    let variance = rewards.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / rewards.len() as f64;
     let std_dev = variance.sqrt().max(1e-6); // Avoid division by zero
 
     // Normalize: (reward - mean) / std_dev
-    rewards.iter()
-        .map(|r| (r - mean) / std_dev)
-        .collect()
+    rewards.iter().map(|r| (r - mean) / std_dev).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::CompileResult;
     use crate::ast_analysis::*;
+    use crate::compiler::CompileResult;
 
     #[test]
     fn test_reward_successful_compile() {
@@ -296,7 +298,11 @@ mod tests {
         let reward = compute_reward(&compile_result, &ast_metrics, &config);
 
         // Should be positive for successful, quality code
-        assert!(reward > 10.0, "Reward for good code should be positive: {}", reward);
+        assert!(
+            reward > 10.0,
+            "Reward for good code should be positive: {}",
+            reward
+        );
     }
 
     #[test]
@@ -324,7 +330,11 @@ mod tests {
         let reward = compute_reward(&compile_result, &ast_metrics, &config);
 
         // Should be negative for failed compilation
-        assert!(reward < 0.0, "Reward for broken code should be negative: {}", reward);
+        assert!(
+            reward < 0.0,
+            "Reward for broken code should be negative: {}",
+            reward
+        );
     }
 
     #[test]

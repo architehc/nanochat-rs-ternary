@@ -1,8 +1,8 @@
 //! Full training model: embedding -> blocks -> LM head.
 
-use candle_core::{Result, Tensor};
 #[cfg(test)]
 use candle_core::DType;
+use candle_core::{Result, Tensor};
 use candle_nn::{self, Module, VarBuilder};
 
 use crate::attention::precompute_rope_freqs;
@@ -70,7 +70,10 @@ impl NanochatTrainModel {
             let w = vb.get_with_hints(
                 (config.vocab_size, config.dim),
                 "lm_head.weight",
-                candle_nn::Init::Randn { mean: 0.0, stdev: 0.02 },
+                candle_nn::Init::Randn {
+                    mean: 0.0,
+                    stdev: 0.02,
+                },
             )?;
             Some(w)
         } else {
@@ -78,9 +81,8 @@ impl NanochatTrainModel {
         };
 
         let head_dim = config.dim / config.n_heads;
-        let (freqs_cos, freqs_sin) = precompute_rope_freqs(
-            head_dim, config.max_seq_len, config.rope_theta, vb.device(),
-        )?;
+        let (freqs_cos, freqs_sin) =
+            precompute_rope_freqs(head_dim, config.max_seq_len, config.rope_theta, vb.device())?;
 
         Ok(Self {
             config: config.clone(),
@@ -214,15 +216,18 @@ impl NanochatTrainModel {
             linear.push(w.clone());
         }
 
-        ParamGroups { linear, mhc, norm, embed }
+        ParamGroups {
+            linear,
+            mhc,
+            norm,
+            embed,
+        }
     }
 
     /// Count total parameters.
     pub fn param_count(&self) -> usize {
         let groups = self.param_groups();
-        let count = |tensors: &[Tensor]| -> usize {
-            tensors.iter().map(|t| t.elem_count()).sum()
-        };
+        let count = |tensors: &[Tensor]| -> usize { tensors.iter().map(|t| t.elem_count()).sum() };
         count(&groups.linear) + count(&groups.mhc) + count(&groups.norm) + count(&groups.embed)
     }
 }
@@ -230,9 +235,9 @@ impl NanochatTrainModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::TrainConfig;
     use candle_core::{Device, D};
     use candle_nn::VarMap;
-    use crate::config::TrainConfig;
 
     fn tiny_config() -> TrainConfig {
         TrainConfig {
@@ -350,7 +355,11 @@ mod tests {
         let count = model.param_count();
         // Should be > 0 and reasonable for tiny config
         assert!(count > 10_000, "Too few params: {}", count);
-        assert!(count < 1_000_000, "Too many params for tiny config: {}", count);
+        assert!(
+            count < 1_000_000,
+            "Too many params for tiny config: {}",
+            count
+        );
         Ok(())
     }
 
@@ -365,7 +374,11 @@ mod tests {
         let vb_std = VarBuilder::from_varmap(&varmap_std, DType::F32, &device);
         let model_std = NanochatTrainModel::new(&cfg_std, vb_std)?;
 
-        assert_eq!(model_std.blocks.len(), 6, "d20 should have 6 standard blocks");
+        assert_eq!(
+            model_std.blocks.len(),
+            6,
+            "d20 should have 6 standard blocks"
+        );
         assert_eq!(model_std.local_blocks_before.len(), 0);
         assert_eq!(model_std.local_blocks_after.len(), 0);
         assert!(model_std.shared_loop_block.is_none());
@@ -379,7 +392,11 @@ mod tests {
         let vb_loop = VarBuilder::from_varmap(&varmap_loop, DType::F32, &device);
         let model_loop = NanochatTrainModel::new(&cfg_loop, vb_loop)?;
 
-        assert_eq!(model_loop.blocks.len(), 0, "d20_loop should have 0 standard blocks");
+        assert_eq!(
+            model_loop.blocks.len(),
+            0,
+            "d20_loop should have 0 standard blocks"
+        );
         assert_eq!(model_loop.local_blocks_before.len(), loop_cfg.local_before);
         assert_eq!(model_loop.local_blocks_after.len(), loop_cfg.local_after);
         assert!(model_loop.shared_loop_block.is_some());

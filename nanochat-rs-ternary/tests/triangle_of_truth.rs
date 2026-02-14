@@ -171,7 +171,11 @@ fn triangle_scale_only() {
             assert!(
                 diff < 1e-4,
                 "scale={} row {}: scalar={}, ffi={}, diff={}",
-                act_scale, r, y_scalar[r], y_ffi[r], diff
+                act_scale,
+                r,
+                y_scalar[r],
+                y_ffi[r],
+                diff
             );
         }
     }
@@ -198,7 +202,9 @@ fn triangle_uniform_positive() {
         assert!(
             (y_scalar[r] - y_ffi[r]).abs() < 1e-5,
             "row {}: scalar={}, ffi={}",
-            r, y_scalar[r], y_ffi[r]
+            r,
+            y_scalar[r],
+            y_ffi[r]
         );
         // Output should be positive (sum of +1 * +1 * scale * act_scale)
         assert!(y_scalar[r] > 0.0, "row {} should be positive", r);

@@ -45,9 +45,14 @@ pub fn absmean_quantize(w: &Tensor, group_size: usize) -> Result<(Tensor, Tensor
 
     // Remove padding and reshape
     let w_ternary = if pad_len > 0 {
-        w_ternary.reshape((n_groups * group_size,))?.narrow(0, 0, numel)?.reshape(orig_shape)?
+        w_ternary
+            .reshape((n_groups * group_size,))?
+            .narrow(0, 0, numel)?
+            .reshape(orig_shape)?
     } else {
-        w_ternary.reshape((n_groups * group_size,))?.reshape(orig_shape)?
+        w_ternary
+            .reshape((n_groups * group_size,))?
+            .reshape(orig_shape)?
     };
 
     Ok((w_ternary, scales))
@@ -77,9 +82,14 @@ pub fn dequantize_ternary(
     let w_recon = w_grouped.broadcast_mul(&scales_expanded)?;
 
     if pad_len > 0 {
-        w_recon.reshape((n_groups * group_size,))?.narrow(0, 0, numel)?.reshape(orig_shape)
+        w_recon
+            .reshape((n_groups * group_size,))?
+            .narrow(0, 0, numel)?
+            .reshape(orig_shape)
     } else {
-        w_recon.reshape((n_groups * group_size,))?.reshape(orig_shape)
+        w_recon
+            .reshape((n_groups * group_size,))?
+            .reshape(orig_shape)
     }
 }
 
@@ -93,7 +103,10 @@ pub fn per_token_absmax_quantize(x: &Tensor) -> Result<(Tensor, Tensor)> {
     let absmax = x.abs()?.max_keepdim(last_dim)?.clamp(1e-8, f64::MAX)?;
     let scales = (&absmax / 127.0)?;
     let inv_scales = (127.0 / &absmax)?;
-    let x_q = x.broadcast_mul(&inv_scales)?.round()?.clamp(-127.0, 127.0)?;
+    let x_q = x
+        .broadcast_mul(&inv_scales)?
+        .round()?
+        .clamp(-127.0, 127.0)?;
     Ok((x_q, scales))
 }
 
@@ -121,7 +134,8 @@ mod tests {
         for &v in &w_flat {
             assert!(
                 (v - (-1.0)).abs() < 1e-6 || (v - 0.0).abs() < 1e-6 || (v - 1.0).abs() < 1e-6,
-                "Non-ternary value: {}", v
+                "Non-ternary value: {}",
+                v
             );
         }
 
@@ -162,7 +176,11 @@ mod tests {
 
         // Values should be in [-127, 127]
         let max_val = x_q.abs()?.max_all()?.to_scalar::<f32>()?;
-        assert!(max_val <= 127.0 + 1e-6, "Quantized value out of range: {}", max_val);
+        assert!(
+            max_val <= 127.0 + 1e-6,
+            "Quantized value out of range: {}",
+            max_val
+        );
 
         // Scales should be positive
         let s_flat = scales.flatten_all()?.to_vec1::<f32>()?;
@@ -191,7 +209,8 @@ mod tests {
         for &v in &w_flat {
             assert!(
                 (v - (-1.0)).abs() < 1e-6 || (v - 0.0).abs() < 1e-6 || (v - 1.0).abs() < 1e-6,
-                "Non-ternary value: {}", v
+                "Non-ternary value: {}",
+                v
             );
         }
 
@@ -208,7 +227,11 @@ mod tests {
         // Error should be bounded by quantization step size
         let diff = (&x - &x_deq)?.abs()?.max_all()?.to_scalar::<f32>()?;
         let max_scale = scales.max_all()?.to_scalar::<f32>()?;
-        assert!(diff < max_scale * 1.5, "Dequantization error too large: {}", diff);
+        assert!(
+            diff < max_scale * 1.5,
+            "Dequantization error too large: {}",
+            diff
+        );
 
         Ok(())
     }

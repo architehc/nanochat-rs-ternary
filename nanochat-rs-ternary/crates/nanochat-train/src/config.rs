@@ -306,8 +306,18 @@ mod tests {
     fn test_nano_1b_ffn_dim_aligned() {
         let cfg = TrainConfig::nano_1b();
         let ffn_dim = cfg.ffn_dim();
-        assert_eq!(ffn_dim % cfg.group_size, 0, "ffn_dim {} not aligned to {}", ffn_dim, cfg.group_size);
-        assert!(ffn_dim >= 5000 && ffn_dim <= 6000, "ffn_dim {} out of expected range", ffn_dim);
+        assert_eq!(
+            ffn_dim % cfg.group_size,
+            0,
+            "ffn_dim {} not aligned to {}",
+            ffn_dim,
+            cfg.group_size
+        );
+        assert!(
+            (5000..=6000).contains(&ffn_dim),
+            "ffn_dim {} out of expected range",
+            ffn_dim
+        );
     }
 
     #[test]

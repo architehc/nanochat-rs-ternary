@@ -110,7 +110,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dir_path = dir.path().to_str().unwrap();
 
-        save_checkpoint(&varmap, &cfg, 42, 3.14, dir_path).unwrap();
+        save_checkpoint(&varmap, &cfg, 42, std::f64::consts::PI, dir_path).unwrap();
 
         // Verify files exist
         assert!(std::path::Path::new(&format!("{}/model.safetensors", dir_path)).exists());
@@ -128,14 +128,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dir_path = dir.path().to_str().unwrap();
 
-        save_checkpoint(&varmap, &cfg, 42, 3.14, dir_path).unwrap();
+        save_checkpoint(&varmap, &cfg, 42, std::f64::consts::PI, dir_path).unwrap();
 
         // Load metadata
         let meta_json = std::fs::read_to_string(format!("{}/meta.json", dir_path)).unwrap();
         let meta: CheckpointMeta = serde_json::from_str(&meta_json).unwrap();
 
         assert_eq!(meta.step, 42);
-        assert!((meta.loss - 3.14).abs() < 1e-10);
+        assert!((meta.loss - std::f64::consts::PI).abs() < 1e-10);
         assert_eq!(meta.config.dim, 64);
         assert_eq!(meta.config.n_layers, 2);
     }

@@ -9,13 +9,13 @@
 
 use candle_core::{DType, Device, Result, Tensor, Var};
 use candle_nn::VarMap;
-use std::time::Instant;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use crate::config::TrainConfig;
-use crate::data::{Dataset, DataLoader};
+use crate::data::{DataLoader, Dataset};
 use crate::model::NanochatTrainModel;
-use crate::optim::{Muon, Lion, wsd_schedule};
+use crate::optim::{wsd_schedule, Lion, Muon};
 use crate::train::compute_grad_norm;
 
 /// Teacher model mode for distillation.
@@ -39,7 +39,7 @@ pub struct RemoteTeacherClient {
     api_key: Option<String>,
     client: reqwest::blocking::Client,
     /// Number of concurrent requests supported by endpoint
-    max_concurrent: usize,
+    _max_concurrent: usize,
 }
 
 impl RemoteTeacherClient {
@@ -50,7 +50,12 @@ impl RemoteTeacherClient {
     /// * `api_key` - Optional API key for authentication
     /// * `timeout_secs` - Request timeout in seconds
     /// * `max_concurrent` - Maximum concurrent requests (e.g., 8 for parallel batching)
-    pub fn new(endpoint: String, api_key: Option<String>, timeout_secs: u64, max_concurrent: usize) -> Result<Self> {
+    pub fn new(
+        endpoint: String,
+        api_key: Option<String>,
+        timeout_secs: u64,
+        max_concurrent: usize,
+    ) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(timeout_secs))
             .build()
@@ -60,7 +65,7 @@ impl RemoteTeacherClient {
             endpoint,
             api_key,
             client,
-            max_concurrent,
+            _max_concurrent: max_concurrent,
         })
     }
 
@@ -73,7 +78,8 @@ impl RemoteTeacherClient {
     /// Teacher logits [batch, seq_len, vocab_size]
     pub fn query_logits(&self, input_ids: &Tensor) -> Result<Tensor> {
         // Extract token IDs from tensor
-        let input_data = input_ids.to_vec2::<u32>()
+        let input_data = input_ids
+            .to_vec2::<u32>()
             .map_err(|e| candle_core::Error::Msg(format!("Failed to extract input_ids: {}", e)))?;
 
         // Build request payload
@@ -88,7 +94,8 @@ impl RemoteTeacherClient {
             req = req.header("Authorization", format!("Bearer {}", key));
         }
 
-        let response = req.send()
+        let response = req
+            .send()
             .map_err(|e| candle_core::Error::Msg(format!("HTTP request failed: {}", e)))?;
 
         if !response.status().is_success() {
@@ -99,11 +106,13 @@ impl RemoteTeacherClient {
         }
 
         // Parse response
-        let json: serde_json::Value = response.json()
+        let json: serde_json::Value = response
+            .json()
             .map_err(|e| candle_core::Error::Msg(format!("Failed to parse response: {}", e)))?;
 
         // Extract logits array
-        let logits_array = json.get("logits")
+        let logits_array = json
+            .get("logits")
             .and_then(|v| v.as_array())
             .ok_or_else(|| candle_core::Error::Msg("Missing 'logits' in response".to_string()))?;
 
@@ -113,11 +122,13 @@ impl RemoteTeacherClient {
             return Err(candle_core::Error::Msg("Empty logits response".to_string()));
         }
 
-        let seq_len = logits_array[0].as_array()
+        let seq_len = logits_array[0]
+            .as_array()
             .ok_or_else(|| candle_core::Error::Msg("Invalid logits shape".to_string()))?
             .len();
 
-        let vocab_size = logits_array[0][0].as_array()
+        let vocab_size = logits_array[0][0]
+            .as_array()
             .ok_or_else(|| candle_core::Error::Msg("Invalid logits shape".to_string()))?
             .len();
 
@@ -159,6 +170,7 @@ impl RemoteTeacherClient {
 }
 
 /// Helper: Convert rayon ParallelIterator results to Vec<Result<T>>
+#[allow(dead_code)]
 trait CollectResults<T, E> {
     fn collect_results(self) -> std::result::Result<Vec<T>, E>;
 }
@@ -265,10 +277,7 @@ impl DistillConfig {
     }
 
     /// Create config for local teacher checkpoint.
-    pub fn with_local_teacher(
-        train_config: TrainConfig,
-        checkpoint: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn with_local_teacher(train_config: TrainConfig, checkpoint: impl Into<PathBuf>) -> Self {
         Self {
             train_config,
             teacher_mode: TeacherMode::Local {
@@ -286,7 +295,7 @@ impl DistillConfig {
 
 /// Teacher inference backend.
 enum TeacherBackend {
-    Local(NanochatTrainModel),
+    Local(Box<NanochatTrainModel>),
     Remote(RemoteTeacherClient),
 }
 
@@ -321,15 +330,24 @@ impl DistillationTrainer {
         let teacher = match &config.teacher_mode {
             TeacherMode::Local { checkpoint } => {
                 let teacher_varmap = VarMap::new();
-                let teacher_vb = candle_nn::VarBuilder::from_varmap(&teacher_varmap, DType::F32, &device);
+                let teacher_vb =
+                    candle_nn::VarBuilder::from_varmap(&teacher_varmap, DType::F32, &device);
                 let teacher_model = NanochatTrainModel::new(&config.train_config, teacher_vb)?;
 
                 // TODO: Load teacher checkpoint
-                eprintln!("Warning: Teacher checkpoint loading not yet implemented: {}", checkpoint.display());
+                eprintln!(
+                    "Warning: Teacher checkpoint loading not yet implemented: {}",
+                    checkpoint.display()
+                );
 
-                TeacherBackend::Local(teacher_model)
+                TeacherBackend::Local(Box::new(teacher_model))
             }
-            TeacherMode::Remote { endpoint, api_key, timeout_secs, max_concurrent } => {
+            TeacherMode::Remote {
+                endpoint,
+                api_key,
+                timeout_secs,
+                max_concurrent,
+            } => {
                 let client = RemoteTeacherClient::new(
                     endpoint.clone(),
                     api_key.clone(),
@@ -403,7 +421,11 @@ impl DistillationTrainer {
     }
 
     /// Execute a single distillation training step.
-    pub fn train_step(&mut self, input_ids: &Tensor, target_ids: &Tensor) -> Result<DistillStepStats> {
+    pub fn train_step(
+        &mut self,
+        input_ids: &Tensor,
+        target_ids: &Tensor,
+    ) -> Result<DistillStepStats> {
         let step_start = Instant::now();
 
         // === Teacher forward (no grad) ===
@@ -431,11 +453,8 @@ impl DistillationTrainer {
         let ce_loss = candle_nn::loss::cross_entropy(&student_logits_flat, &targets_flat)?;
 
         // 2. KL divergence loss (teacher distillation)
-        let kl_loss = kl_divergence_loss(
-            &teacher_logits,
-            &student_logits,
-            self.config.temperature,
-        )?;
+        let kl_loss =
+            kl_divergence_loss(&teacher_logits, &student_logits, self.config.temperature)?;
 
         // 3. MoE-specific losses (if model has MoE)
         // TODO: Extract router outputs from student model
@@ -482,7 +501,11 @@ impl DistillationTrainer {
         let kl_val = kl_loss.to_scalar::<f32>()? as f64;
         let elapsed = step_start.elapsed().as_secs_f64();
         let n_tokens = (batch * seq_len) as f64;
-        let tokens_per_sec = if elapsed > 0.0 { n_tokens / elapsed } else { 0.0 };
+        let tokens_per_sec = if elapsed > 0.0 {
+            n_tokens / elapsed
+        } else {
+            0.0
+        };
 
         Ok(DistillStepStats {
             total_loss: loss_val,
@@ -524,7 +547,7 @@ impl DistillationTrainer {
             TeacherBackend::Local(_model) => {
                 // Local teacher: sequential (no parallelization benefit)
                 return Err(candle_core::Error::Msg(
-                    "Parallel training only supported with remote teacher".to_string()
+                    "Parallel training only supported with remote teacher".to_string(),
                 ));
             }
             TeacherBackend::Remote(client) => {
@@ -551,7 +574,11 @@ impl DistillationTrainer {
         let student_logits_flat = student_logits.reshape((batch * seq_len, vocab))?;
         let targets_flat = first_target.reshape(batch * seq_len)?;
         let ce_loss = candle_nn::loss::cross_entropy(&student_logits_flat, &targets_flat)?;
-        let kl_loss = kl_divergence_loss(first_teacher_logits, &student_logits, self.config.temperature)?;
+        let kl_loss = kl_divergence_loss(
+            first_teacher_logits,
+            &student_logits,
+            self.config.temperature,
+        )?;
 
         let load_balance_loss = Tensor::new(&[0.0f32], &self.device)?;
         let router_aux_loss = Tensor::new(&[0.0f32], &self.device)?;
@@ -583,7 +610,8 @@ impl DistillationTrainer {
             let student_logits_flat = student_logits.reshape((batch * seq_len, vocab))?;
             let targets_flat = target_ids.reshape(batch * seq_len)?;
             let ce_loss = candle_nn::loss::cross_entropy(&student_logits_flat, &targets_flat)?;
-            let kl_loss = kl_divergence_loss(teacher_logits, &student_logits, self.config.temperature)?;
+            let kl_loss =
+                kl_divergence_loss(teacher_logits, &student_logits, self.config.temperature)?;
 
             let load_balance_loss = Tensor::new(&[0.0f32], &self.device)?;
             let router_aux_loss = Tensor::new(&[0.0f32], &self.device)?;
@@ -598,7 +626,9 @@ impl DistillationTrainer {
             // Accumulate gradients (add to existing grads)
             let micro_grads = scaled_loss.backward()?;
             for var in self.student_varmap.all_vars() {
-                if let (Some(g1), Some(g2)) = (grads.get(var.as_tensor()), micro_grads.get(var.as_tensor())) {
+                if let (Some(g1), Some(g2)) =
+                    (grads.get(var.as_tensor()), micro_grads.get(var.as_tensor()))
+                {
                     let sum = (g1 + g2)?;
                     grads.insert(var.as_tensor(), sum);
                 }
@@ -635,7 +665,11 @@ impl DistillationTrainer {
         self.lion.set_lr(self.base_lr_lion * mult);
 
         let elapsed = step_start.elapsed().as_secs_f64();
-        let tokens_per_sec = if elapsed > 0.0 { total_tokens as f64 / elapsed } else { 0.0 };
+        let tokens_per_sec = if elapsed > 0.0 {
+            total_tokens as f64 / elapsed
+        } else {
+            0.0
+        };
 
         Ok(DistillStepStats {
             total_loss: accumulated_loss,
@@ -652,7 +686,11 @@ impl DistillationTrainer {
     /// Train for one epoch with distillation.
     ///
     /// Automatically uses parallel training if micro_batches > 1 and teacher is remote.
-    pub fn train_epoch(&mut self, dataset: &dyn Dataset, epoch: usize) -> Result<DistillEpochStats> {
+    pub fn train_epoch(
+        &mut self,
+        dataset: &dyn Dataset,
+        epoch: usize,
+    ) -> Result<DistillEpochStats> {
         let loader = DataLoader::new(
             dataset,
             self.config.train_config.batch_size,
@@ -666,7 +704,8 @@ impl DistillationTrainer {
         let mut total_kl = 0.0;
         let mut n_steps = 0;
 
-        let use_parallel = self.config.micro_batches > 1 && matches!(self.teacher, TeacherBackend::Remote(_));
+        let use_parallel =
+            self.config.micro_batches > 1 && matches!(self.teacher, TeacherBackend::Remote(_));
 
         if use_parallel {
             // Parallel mode: accumulate micro_batches, then train_step_parallel
@@ -812,10 +851,7 @@ fn kl_divergence_loss(
 ///
 /// # Returns
 /// Scalar load balance loss
-pub fn load_balance_loss(
-    router_logits: &Tensor,
-    expert_mask: &Tensor,
-) -> Result<Tensor> {
+pub fn load_balance_loss(router_logits: &Tensor, expert_mask: &Tensor) -> Result<Tensor> {
     // Compute fraction of tokens assigned to each expert
     let n_tokens = (expert_mask.dims()[0] * expert_mask.dims()[1]) as f64;
     let expert_counts = expert_mask.sum(candle_core::D::Minus2)?.sum(0)?; // [n_experts]
@@ -875,8 +911,16 @@ mod tests {
         println!("KL divergence value: {}", kl_val);
 
         // KL should be non-negative and finite
-        assert!(kl_val >= 0.0, "KL divergence should be non-negative, got {}", kl_val);
-        assert!(kl_val.is_finite(), "KL divergence should be finite, got {}", kl_val);
+        assert!(
+            kl_val >= 0.0,
+            "KL divergence should be non-negative, got {}",
+            kl_val
+        );
+        assert!(
+            kl_val.is_finite(),
+            "KL divergence should be finite, got {}",
+            kl_val
+        );
         // KL should be small since logits are similar (relaxed threshold)
         assert!(kl_val < 10.0, "KL divergence too large: {}", kl_val);
     }
@@ -896,10 +940,22 @@ mod tests {
         println!("Load balance loss value: {}", loss_val);
 
         // Loss should be finite and non-negative
-        assert!(loss_val.is_finite(), "Loss should be finite, got {}", loss_val);
-        assert!(loss_val >= 0.0, "Loss should be non-negative, got {}", loss_val);
+        assert!(
+            loss_val.is_finite(),
+            "Loss should be finite, got {}",
+            loss_val
+        );
+        assert!(
+            loss_val >= 0.0,
+            "Loss should be non-negative, got {}",
+            loss_val
+        );
         // For perfectly balanced (1/3 * 1/3 * 3 = 1/3), expect value around 1.0
         // Relax to check it's in reasonable range
-        assert!(loss_val > 0.0 && loss_val < 10.0, "Loss out of range: {}", loss_val);
+        assert!(
+            loss_val > 0.0 && loss_val < 10.0,
+            "Loss out of range: {}",
+            loss_val
+        );
     }
 }

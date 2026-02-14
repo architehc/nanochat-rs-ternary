@@ -1,7 +1,7 @@
 //! OpenAI-compatible API types for /v1/chat/completions.
 
-use serde::{Deserialize, Serialize};
 use crate::engine::SamplingParams;
+use serde::{Deserialize, Serialize};
 
 /// Chat message role.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -20,10 +20,18 @@ pub struct Lion {
 
 impl Lion {
     pub fn new(vars: Vec<Var>, lr: f64, beta1: f64, beta2: f64, wd: f64) -> Result<Self> {
-        let exp_avg = vars.iter()
+        let exp_avg = vars
+            .iter()
             .map(|v| Tensor::zeros_like(v.as_tensor()))
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self { vars, exp_avg, lr, beta1, beta2, weight_decay: wd })
+        Ok(Self {
+            vars,
+            exp_avg,
+            lr,
+            beta1,
+            beta2,
+            weight_decay: wd,
+        })
     }
 
     pub fn step(&mut self, grads: &GradStore, clip_scale: f64) -> Result<()> {
@@ -99,7 +107,10 @@ mod tests {
         lion.step(&grads, 1.0)?;
 
         let updated = w.to_vec1::<f32>()?;
-        let changed = orig.iter().zip(updated.iter()).any(|(a, b)| (a - b).abs() > 1e-10);
+        let changed = orig
+            .iter()
+            .zip(updated.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-10);
         assert!(changed, "Parameters should change after Lion step");
         Ok(())
     }

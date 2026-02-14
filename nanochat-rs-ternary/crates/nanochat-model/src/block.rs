@@ -107,18 +107,13 @@ impl TransformerBlock {
     /// Create the appropriate attention state for this block's attention type.
     pub fn create_attn_state(&self, config: &ModelConfig) -> AttentionState {
         match &self.attention {
-            AttentionLayer::Standard(_) => {
-                AttentionState::Kv(KvCache::new(
-                    config.max_seq_len,
-                    config.n_kv_heads,
-                    config.head_dim(),
-                ))
-            }
+            AttentionLayer::Standard(_) => AttentionState::Kv(KvCache::new(
+                config.max_seq_len,
+                config.n_kv_heads,
+                config.head_dim(),
+            )),
             AttentionLayer::DeltaNet(_) => {
-                AttentionState::Recurrent(DeltaNetState::new(
-                    config.n_heads,
-                    config.head_dim(),
-                ))
+                AttentionState::Recurrent(DeltaNetState::new(config.n_heads, config.head_dim()))
             }
         }
     }
@@ -215,13 +210,21 @@ impl TransformerBlock {
 
         // 2. RMSNorm batch
         let mut normed_batch = vec![0.0f32; seq_len * dim];
-        self.norm_attn.forward_batch(&attn_in_batch, seq_len, &mut normed_batch);
+        self.norm_attn
+            .forward_batch(&attn_in_batch, seq_len, &mut normed_batch);
 
         // 3. Attention (dispatch based on layer type)
         let mut attn_out_batch = vec![0.0f32; seq_len * dim];
         match (&self.attention, attn_state) {
             (AttentionLayer::Standard(attn), AttentionState::Kv(cache)) => {
-                attn.forward_batch(&normed_batch, seq_len, cache, rope, start_pos, &mut attn_out_batch);
+                attn.forward_batch(
+                    &normed_batch,
+                    seq_len,
+                    cache,
+                    rope,
+                    start_pos,
+                    &mut attn_out_batch,
+                );
             }
             (AttentionLayer::DeltaNet(attn), AttentionState::Recurrent(state)) => {
                 // DeltaNet processes tokens one at a time (recurrent)
@@ -252,11 +255,13 @@ impl TransformerBlock {
         }
 
         // 2. RMSNorm batch
-        self.norm_ffn.forward_batch(&ffn_in_batch, seq_len, &mut normed_batch);
+        self.norm_ffn
+            .forward_batch(&ffn_in_batch, seq_len, &mut normed_batch);
 
         // 3. FFN batch
         let mut ffn_out_batch = vec![0.0f32; seq_len * dim];
-        self.ffn.forward_batch(&normed_batch, seq_len, &mut ffn_out_batch);
+        self.ffn
+            .forward_batch(&normed_batch, seq_len, &mut ffn_out_batch);
 
         // 4. mHC residual update for each token
         for t in 0..seq_len {
@@ -288,10 +293,7 @@ mod tests {
             x_exp.iter().all(|v| v.is_finite()),
             "non-finite block output"
         );
-        assert!(
-            x_exp.iter().any(|&v| v != 0.0),
-            "all-zero block output"
-        );
+        assert!(x_exp.iter().any(|&v| v != 0.0), "all-zero block output");
     }
 
     #[test]
@@ -319,7 +321,11 @@ mod tests {
 
         block.forward(&mut x_exp, &mut state, &rope, 0);
 
-        assert_eq!(x_exp.len(), expanded_dim, "expanded shape changed after forward");
+        assert_eq!(
+            x_exp.len(),
+            expanded_dim,
+            "expanded shape changed after forward"
+        );
     }
 
     #[test]
@@ -334,7 +340,11 @@ mod tests {
         // Process 3 tokens
         for pos in 0..3 {
             block.forward(&mut x_exp, &mut state, &rope, pos);
-            assert!(x_exp.iter().all(|v| v.is_finite()), "non-finite at pos {}", pos);
+            assert!(
+                x_exp.iter().all(|v| v.is_finite()),
+                "non-finite at pos {}",
+                pos
+            );
         }
         match &state {
             AttentionState::Kv(cache) => assert_eq!(cache.len, 3),
@@ -352,7 +362,10 @@ mod tests {
         let mut state = block.create_attn_state(&config);
 
         // Verify the FFN is actually MoE
-        assert!(matches!(block.ffn, FfnLayer::Moe(_)), "expected MoE FFN layer");
+        assert!(
+            matches!(block.ffn, FfnLayer::Moe(_)),
+            "expected MoE FFN layer"
+        );
 
         let mut x_exp = vec![0.1f32; config.mhc_n_streams * config.dim];
         block.forward(&mut x_exp, &mut state, &rope, 0);
@@ -361,10 +374,7 @@ mod tests {
             x_exp.iter().all(|v| v.is_finite()),
             "non-finite MoE block output"
         );
-        assert!(
-            x_exp.iter().any(|&v| v != 0.0),
-            "all-zero MoE block output"
-        );
+        assert!(x_exp.iter().any(|&v| v != 0.0), "all-zero MoE block output");
     }
 
     #[test]
@@ -390,7 +400,10 @@ mod tests {
         // Verify state type is recurrent
         match &state {
             AttentionState::Recurrent(s) => {
-                assert!(s.s.iter().any(|&v| v != 0.0), "DeltaNet state should be non-zero");
+                assert!(
+                    s.s.iter().any(|&v| v != 0.0),
+                    "DeltaNet state should be non-zero"
+                );
             }
             AttentionState::Kv(_) => panic!("expected DeltaNet recurrent state"),
         }

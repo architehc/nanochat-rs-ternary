@@ -110,17 +110,17 @@ mod tests {
         // All weights are +1, quantized to +1
         // Each row: sum = 128 * 1 * 1 = 128, times scale * act_scale
         let gprow = cols / gs;
-        for r in 0..rows {
+        for (r, &y_val) in y.iter().enumerate() {
             let mut expected = 0.0f32;
             for g in 0..gprow {
                 expected += 128.0 * pw.scales_rm[r * gprow + g] * act_scale;
             }
             assert!(
-                (y[r] - expected).abs() < 1e-3,
+                (y_val - expected).abs() < 1e-3,
                 "row {}: expected {}, got {}",
                 r,
                 expected,
-                y[r]
+                y_val
             );
         }
     }
@@ -140,17 +140,17 @@ mod tests {
         gemv_scalar_ref(&pw, &x, act_scale, &mut y);
 
         let gprow = cols / gs;
-        for r in 0..rows {
+        for (r, &y_val) in y.iter().enumerate() {
             let mut expected = 0.0f32;
             for g in 0..gprow {
                 expected += -128.0 * pw.scales_rm[r * gprow + g] * act_scale;
             }
             assert!(
-                (y[r] - expected).abs() < 1e-3,
+                (y_val - expected).abs() < 1e-3,
                 "row {}: expected {}, got {}",
                 r,
                 expected,
-                y[r]
+                y_val
             );
         }
     }
@@ -172,13 +172,8 @@ mod tests {
         gemv_scalar_ref(&pw, &x, 0.5, &mut y);
 
         // +1 and -1 should cancel
-        for r in 0..rows {
-            assert!(
-                y[r].abs() < 1e-3,
-                "row {}: expected ~0, got {}",
-                r,
-                y[r]
-            );
+        for (r, &val) in y.iter().enumerate() {
+            assert!(val.abs() < 1e-3, "row {}: expected ~0, got {}", r, val);
         }
     }
 
@@ -202,8 +197,8 @@ mod tests {
             gemv_scalar_ref(&pw, &x, 1.0 / 127.0, &mut y);
 
             // Just verify finite output
-            for r in 0..m {
-                assert!(y[r].is_finite(), "[{}x{}] row {} not finite", m, k, r);
+            for (r, &val) in y.iter().enumerate() {
+                assert!(val.is_finite(), "[{}x{}] row {} not finite", m, k, r);
             }
         }
     }
@@ -233,8 +228,8 @@ mod tests {
         gemv_scalar_ref(&pw, &x, 1.0, &mut y);
 
         // 0b10 decodes to 0, so output should be 0 (ignoring scale)
-        for r in 0..rows {
-            assert_eq!(y[r], 0.0, "row {} should be 0 for all-invalid data", r);
+        for (r, &val) in y.iter().enumerate() {
+            assert_eq!(val, 0.0, "row {} should be 0 for all-invalid data", r);
         }
     }
 

@@ -2,7 +2,7 @@
 
 use std::io;
 
-use crate::attention::{Attention, RopeFreqs, KvCache};
+use crate::attention::{Attention, KvCache, RopeFreqs};
 use crate::bitlinear::BitLinear;
 use crate::block::{AttentionLayer, AttentionState, TransformerBlock};
 use crate::config::{LayerSequence, ModelConfig};
@@ -13,7 +13,6 @@ use crate::loop_block::SharedLoopBlock;
 use crate::norm::RMSNorm;
 use mhc_lite::MhcLiteN2;
 use ternary_core::gguf::{GgufFile, GgufValue};
-
 
 /// Full nanochat-rs ternary model.
 #[derive(Debug)]
@@ -45,64 +44,90 @@ impl NanochatModel {
         let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
 
         // Build architecture based on loop_config
-        let (blocks, attn_states, local_blocks_before, local_states_before,
-             shared_loop_block, loop_kv_cache, local_blocks_after, local_states_after) =
-            if let Some(loop_cfg) = &config.loop_config {
-                // LoopLM architecture: local_before + shared_loop + local_after
-                // Layer indices: [0..local_before) then shared_loop, then [local_before+1..local_before+1+local_after)
-                let before: Vec<_> = (0..loop_cfg.local_before)
-                    .map(|i| {
-                        if config.is_deltanet_layer(i) {
-                            TransformerBlock::new_random_deltanet(&config)
-                        } else {
-                            TransformerBlock::new_random(&config)
-                        }
-                    })
-                    .collect();
+        let (
+            blocks,
+            attn_states,
+            local_blocks_before,
+            local_states_before,
+            shared_loop_block,
+            loop_kv_cache,
+            local_blocks_after,
+            local_states_after,
+        ) = if let Some(loop_cfg) = &config.loop_config {
+            // LoopLM architecture: local_before + shared_loop + local_after
+            // Layer indices: [0..local_before) then shared_loop, then [local_before+1..local_before+1+local_after)
+            let before: Vec<_> = (0..loop_cfg.local_before)
+                .map(|i| {
+                    if config.is_deltanet_layer(i) {
+                        TransformerBlock::new_random_deltanet(&config)
+                    } else {
+                        TransformerBlock::new_random(&config)
+                    }
+                })
+                .collect();
 
-                let states_before: Vec<_> = before.iter()
-                    .map(|block| block.create_attn_state(&config))
-                    .collect();
+            let states_before: Vec<_> = before
+                .iter()
+                .map(|block| block.create_attn_state(&config))
+                .collect();
 
-                let shared = SharedLoopBlock::new_empty(&config);
-                let loop_cache = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
+            let shared = SharedLoopBlock::new_empty(&config);
+            let loop_cache = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
 
-                let after: Vec<_> = (0..loop_cfg.local_after)
-                    .map(|i| {
-                        let layer_idx = loop_cfg.local_before + 1 + i; // Skip shared loop index
-                        if config.is_deltanet_layer(layer_idx) {
-                            TransformerBlock::new_random_deltanet(&config)
-                        } else {
-                            TransformerBlock::new_random(&config)
-                        }
-                    })
-                    .collect();
+            let after: Vec<_> = (0..loop_cfg.local_after)
+                .map(|i| {
+                    let layer_idx = loop_cfg.local_before + 1 + i; // Skip shared loop index
+                    if config.is_deltanet_layer(layer_idx) {
+                        TransformerBlock::new_random_deltanet(&config)
+                    } else {
+                        TransformerBlock::new_random(&config)
+                    }
+                })
+                .collect();
 
-                let states_after: Vec<_> = after.iter()
-                    .map(|block| block.create_attn_state(&config))
-                    .collect();
+            let states_after: Vec<_> = after
+                .iter()
+                .map(|block| block.create_attn_state(&config))
+                .collect();
 
-                (Vec::new(), Vec::new(), before, states_before,
-                 Some(shared), Some(loop_cache), after, states_after)
-            } else {
-                // Standard architecture: n_layers blocks
-                let blocks: Vec<_> = (0..config.n_layers)
-                    .map(|i| {
-                        if config.is_deltanet_layer(i) {
-                            TransformerBlock::new_random_deltanet(&config)
-                        } else {
-                            TransformerBlock::new_random(&config)
-                        }
-                    })
-                    .collect();
+            (
+                Vec::new(),
+                Vec::new(),
+                before,
+                states_before,
+                Some(shared),
+                Some(loop_cache),
+                after,
+                states_after,
+            )
+        } else {
+            // Standard architecture: n_layers blocks
+            let blocks: Vec<_> = (0..config.n_layers)
+                .map(|i| {
+                    if config.is_deltanet_layer(i) {
+                        TransformerBlock::new_random_deltanet(&config)
+                    } else {
+                        TransformerBlock::new_random(&config)
+                    }
+                })
+                .collect();
 
-                let attn_states: Vec<_> = blocks.iter()
-                    .map(|block| block.create_attn_state(&config))
-                    .collect();
+            let attn_states: Vec<_> = blocks
+                .iter()
+                .map(|block| block.create_attn_state(&config))
+                .collect();
 
-                (blocks, attn_states, Vec::new(), Vec::new(),
-                 None, None, Vec::new(), Vec::new())
-            };
+            (
+                blocks,
+                attn_states,
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+            )
+        };
 
         // LM head: vocab_size x dim (None if weight_tied)
         let weight_tied = config.weight_tied;
@@ -115,7 +140,12 @@ impl NanochatModel {
                     v as f32 / 100.0 - 1.0
                 })
                 .collect();
-            Some(BitLinear::from_float(&lm_weights, config.vocab_size, config.dim, config.group_size))
+            Some(BitLinear::from_float(
+                &lm_weights,
+                config.vocab_size,
+                config.dim,
+                config.group_size,
+            ))
         };
 
         Self {
@@ -151,29 +181,44 @@ impl NanochatModel {
         let (_, mhc_layers) = mhc_lite::load_mhc_file(mhc_path)?;
 
         // Helper to load a single transformer block
-        let load_block = |prefix: &str, layer_idx: usize, use_deltanet: bool| -> io::Result<TransformerBlock> {
-
+        let load_block = |prefix: &str,
+                          layer_idx: usize,
+                          use_deltanet: bool|
+         -> io::Result<TransformerBlock> {
             // Attention weights
-            let wq = BitLinear::new(gguf.load_planar_weights(
-                &format!("{prefix}.attention.wq.weight"), group_size)?);
-            let wk = BitLinear::new(gguf.load_planar_weights(
-                &format!("{prefix}.attention.wk.weight"), group_size)?);
-            let wv = BitLinear::new(gguf.load_planar_weights(
-                &format!("{prefix}.attention.wv.weight"), group_size)?);
-            let wo = BitLinear::new(gguf.load_planar_weights(
-                &format!("{prefix}.attention.wo.weight"), group_size)?);
+            let wq = BitLinear::new(
+                gguf.load_planar_weights(&format!("{prefix}.attention.wq.weight"), group_size)?,
+            );
+            let wk = BitLinear::new(
+                gguf.load_planar_weights(&format!("{prefix}.attention.wk.weight"), group_size)?,
+            );
+            let wv = BitLinear::new(
+                gguf.load_planar_weights(&format!("{prefix}.attention.wv.weight"), group_size)?,
+            );
+            let wo = BitLinear::new(
+                gguf.load_planar_weights(&format!("{prefix}.attention.wo.weight"), group_size)?,
+            );
 
             let attention = if use_deltanet {
                 let w_beta = BitLinear::new(gguf.load_planar_weights(
-                    &format!("{prefix}.attention.w_beta.weight"), group_size)?);
+                    &format!("{prefix}.attention.w_beta.weight"),
+                    group_size,
+                )?);
                 AttentionLayer::DeltaNet(DeltaNetAttention {
-                    wq, wk, wv, wo, w_beta,
+                    wq,
+                    wk,
+                    wv,
+                    wo,
+                    w_beta,
                     n_heads: config.n_heads,
                     head_dim: config.head_dim(),
                 })
             } else {
                 AttentionLayer::Standard(Attention {
-                    wq, wk, wv, wo,
+                    wq,
+                    wk,
+                    wv,
+                    wo,
                     n_heads: config.n_heads,
                     n_kv_heads: config.n_kv_heads,
                     head_dim: config.head_dim(),
@@ -186,35 +231,53 @@ impl NanochatModel {
                 let n_active = config.n_active_experts.unwrap_or(2);
 
                 // Router weights
-                let router = BitLinear::new(gguf.load_planar_weights(
-                    &format!("{prefix}.ffn.router.weight"), group_size)?);
+                let router = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.ffn.router.weight"), group_size)?,
+                );
 
                 // Per-expert FFN weights
                 let mut experts = Vec::with_capacity(n_experts);
                 for e in 0..n_experts {
                     let w_gate = BitLinear::new(gguf.load_planar_weights(
-                        &format!("{prefix}.ffn.experts.{e}.w_gate.weight"), group_size)?);
+                        &format!("{prefix}.ffn.experts.{e}.w_gate.weight"),
+                        group_size,
+                    )?);
                     let w_up = BitLinear::new(gguf.load_planar_weights(
-                        &format!("{prefix}.ffn.experts.{e}.w_up.weight"), group_size)?);
+                        &format!("{prefix}.ffn.experts.{e}.w_up.weight"),
+                        group_size,
+                    )?);
                     let w_down = BitLinear::new(gguf.load_planar_weights(
-                        &format!("{prefix}.ffn.experts.{e}.w_down.weight"), group_size)?);
+                        &format!("{prefix}.ffn.experts.{e}.w_down.weight"),
+                        group_size,
+                    )?);
                     experts.push(FeedForward {
-                        w_gate, w_up, w_down,
+                        w_gate,
+                        w_up,
+                        w_down,
                         ffn_dim: config.ffn_dim(),
                     });
                 }
 
-                FfnLayer::Moe(Box::new(MoeExperts { router, experts, n_active }))
+                FfnLayer::Moe(Box::new(MoeExperts {
+                    router,
+                    experts,
+                    n_active,
+                }))
             } else {
-                let w_gate = BitLinear::new(gguf.load_planar_weights(
-                    &format!("{prefix}.ffn.w_gate.weight"), group_size)?);
-                let w_up = BitLinear::new(gguf.load_planar_weights(
-                    &format!("{prefix}.ffn.w_up.weight"), group_size)?);
-                let w_down = BitLinear::new(gguf.load_planar_weights(
-                    &format!("{prefix}.ffn.w_down.weight"), group_size)?);
+                let w_gate = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.ffn.w_gate.weight"), group_size)?,
+                );
+                let w_up = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.ffn.w_up.weight"), group_size)?,
+                );
+                let w_down = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.ffn.w_down.weight"), group_size)?,
+                );
 
                 FfnLayer::Dense(Box::new(FeedForward {
-                    w_gate, w_up, w_down,
+                    w_gate,
+                    w_up,
+                    w_down,
                     ffn_dim: config.ffn_dim(),
                 }))
             };
@@ -228,67 +291,104 @@ impl NanochatModel {
             let mhc_ffn = Self::extract_mhc_n2(&mhc_layers, layer_idx * 2 + 1)?;
 
             Ok(TransformerBlock {
-                mhc_attn, mhc_ffn,
-                norm_attn, norm_ffn,
-                attention, ffn,
+                mhc_attn,
+                mhc_ffn,
+                norm_attn,
+                norm_ffn,
+                attention,
+                ffn,
                 dim: config.dim,
             })
         };
 
         // Load blocks based on architecture
-        let (blocks, attn_states, local_blocks_before, local_states_before,
-             shared_loop_block, loop_kv_cache, local_blocks_after, local_states_after) =
-            if let Some(loop_cfg) = &config.loop_config {
-                // LoopLM architecture: load local_before + shared_loop + local_after
-                let mut mhc_idx = 0;
+        let (
+            blocks,
+            attn_states,
+            local_blocks_before,
+            local_states_before,
+            shared_loop_block,
+            loop_kv_cache,
+            local_blocks_after,
+            local_states_after,
+        ) = if let Some(loop_cfg) = &config.loop_config {
+            // LoopLM architecture: load local_before + shared_loop + local_after
+            let mut mhc_idx = 0;
 
-                // Load local_before blocks
-                let before: Vec<_> = (0..loop_cfg.local_before)
-                    .map(|i| {
-                        let result = load_block(&format!("local_before.{}", i), mhc_idx, config.is_deltanet_layer(i));
-                        mhc_idx += 1;
-                        result
-                    })
-                    .collect::<io::Result<Vec<_>>>()?;
+            // Load local_before blocks
+            let before: Vec<_> = (0..loop_cfg.local_before)
+                .map(|i| {
+                    let result = load_block(
+                        &format!("local_before.{}", i),
+                        mhc_idx,
+                        config.is_deltanet_layer(i),
+                    );
+                    mhc_idx += 1;
+                    result
+                })
+                .collect::<io::Result<Vec<_>>>()?;
 
-                let states_before: Vec<_> = before.iter()
-                    .map(|block| block.create_attn_state(&config))
-                    .collect();
+            let states_before: Vec<_> = before
+                .iter()
+                .map(|block| block.create_attn_state(&config))
+                .collect();
 
-                // Load shared loop block
-                let shared = Self::load_shared_loop_block(&gguf, &mhc_layers, mhc_idx, &config)?;
-                let loop_cache = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
-                mhc_idx += 1;
+            // Load shared loop block
+            let shared = Self::load_shared_loop_block(&gguf, &mhc_layers, mhc_idx, &config)?;
+            let loop_cache = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
+            mhc_idx += 1;
 
-                // Load local_after blocks
-                let after: Vec<_> = (0..loop_cfg.local_after)
-                    .map(|i| {
-                        let layer_num = loop_cfg.local_before + 1 + i;
-                        let result = load_block(&format!("local_after.{}", i), mhc_idx, config.is_deltanet_layer(layer_num));
-                        mhc_idx += 1;
-                        result
-                    })
-                    .collect::<io::Result<Vec<_>>>()?;
+            // Load local_after blocks
+            let after: Vec<_> = (0..loop_cfg.local_after)
+                .map(|i| {
+                    let layer_num = loop_cfg.local_before + 1 + i;
+                    let result = load_block(
+                        &format!("local_after.{}", i),
+                        mhc_idx,
+                        config.is_deltanet_layer(layer_num),
+                    );
+                    mhc_idx += 1;
+                    result
+                })
+                .collect::<io::Result<Vec<_>>>()?;
 
-                let states_after: Vec<_> = after.iter()
-                    .map(|block| block.create_attn_state(&config))
-                    .collect();
+            let states_after: Vec<_> = after
+                .iter()
+                .map(|block| block.create_attn_state(&config))
+                .collect();
 
-                (Vec::new(), Vec::new(), before, states_before,
-                 Some(shared), Some(loop_cache), after, states_after)
-            } else {
-                // Standard architecture: load n_layers blocks
-                let blocks: Vec<_> = (0..config.n_layers)
-                    .map(|i| load_block(&format!("blocks.{}", i), i, config.is_deltanet_layer(i)))
-                    .collect::<io::Result<Vec<_>>>()?;
+            (
+                Vec::new(),
+                Vec::new(),
+                before,
+                states_before,
+                Some(shared),
+                Some(loop_cache),
+                after,
+                states_after,
+            )
+        } else {
+            // Standard architecture: load n_layers blocks
+            let blocks: Vec<_> = (0..config.n_layers)
+                .map(|i| load_block(&format!("blocks.{}", i), i, config.is_deltanet_layer(i)))
+                .collect::<io::Result<Vec<_>>>()?;
 
-                let attn_states: Vec<_> = blocks.iter()
-                    .map(|block| block.create_attn_state(&config))
-                    .collect();
+            let attn_states: Vec<_> = blocks
+                .iter()
+                .map(|block| block.create_attn_state(&config))
+                .collect();
 
-                (blocks, attn_states, Vec::new(), Vec::new(),
-                 None, None, Vec::new(), Vec::new())
-            };
+            (
+                blocks,
+                attn_states,
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+            )
+        };
 
         // Final norm
         let norm_final = Self::load_norm(&gguf, "norm_final.weight")?;
@@ -299,7 +399,8 @@ impl NanochatModel {
             None
         } else {
             Some(BitLinear::new(
-                gguf.load_planar_weights("lm_head.weight", group_size)?))
+                gguf.load_planar_weights("lm_head.weight", group_size)?,
+            ))
         };
 
         // RoPE
@@ -334,28 +435,37 @@ impl NanochatModel {
         let prefix = "shared_loop";
 
         // Attention weights
-        let wq = BitLinear::new(gguf.load_planar_weights(
-            &format!("{}.attention.wq.weight", prefix), group_size)?);
-        let wk = BitLinear::new(gguf.load_planar_weights(
-            &format!("{}.attention.wk.weight", prefix), group_size)?);
-        let wv = BitLinear::new(gguf.load_planar_weights(
-            &format!("{}.attention.wv.weight", prefix), group_size)?);
-        let wo = BitLinear::new(gguf.load_planar_weights(
-            &format!("{}.attention.wo.weight", prefix), group_size)?);
+        let wq = BitLinear::new(
+            gguf.load_planar_weights(&format!("{}.attention.wq.weight", prefix), group_size)?,
+        );
+        let wk = BitLinear::new(
+            gguf.load_planar_weights(&format!("{}.attention.wk.weight", prefix), group_size)?,
+        );
+        let wv = BitLinear::new(
+            gguf.load_planar_weights(&format!("{}.attention.wv.weight", prefix), group_size)?,
+        );
+        let wo = BitLinear::new(
+            gguf.load_planar_weights(&format!("{}.attention.wo.weight", prefix), group_size)?,
+        );
 
         // Global gates
-        let g_qk = BitLinear::new(gguf.load_planar_weights(
-            &format!("{}.g_qk.weight", prefix), group_size)?);
-        let g_ffn = BitLinear::new(gguf.load_planar_weights(
-            &format!("{}.g_ffn.weight", prefix), group_size)?);
+        let g_qk = BitLinear::new(
+            gguf.load_planar_weights(&format!("{}.g_qk.weight", prefix), group_size)?,
+        );
+        let g_ffn = BitLinear::new(
+            gguf.load_planar_weights(&format!("{}.g_ffn.weight", prefix), group_size)?,
+        );
 
         // FFN weights
-        let w_gate = BitLinear::new(gguf.load_planar_weights(
-            &format!("{}.ffn.w_gate.weight", prefix), group_size)?);
-        let w_up = BitLinear::new(gguf.load_planar_weights(
-            &format!("{}.ffn.w_up.weight", prefix), group_size)?);
-        let w_down = BitLinear::new(gguf.load_planar_weights(
-            &format!("{}.ffn.w_down.weight", prefix), group_size)?);
+        let w_gate = BitLinear::new(
+            gguf.load_planar_weights(&format!("{}.ffn.w_gate.weight", prefix), group_size)?,
+        );
+        let w_up = BitLinear::new(
+            gguf.load_planar_weights(&format!("{}.ffn.w_up.weight", prefix), group_size)?,
+        );
+        let w_down = BitLinear::new(
+            gguf.load_planar_weights(&format!("{}.ffn.w_down.weight", prefix), group_size)?,
+        );
 
         // Norms
         let norm_attn = Self::load_norm(gguf, &format!("{}.norm_attn.weight", prefix))?;
@@ -366,10 +476,22 @@ impl NanochatModel {
         let mhc_ffn = Self::extract_mhc_n2(mhc_layers, mhc_idx * 2 + 1)?;
 
         Ok(SharedLoopBlock::new(
-            wq, wk, wv, wo, g_qk,
-            w_gate, w_up, w_down, g_ffn,
-            norm_attn, norm_ffn, mhc_attn, mhc_ffn,
-            config.dim, config.n_heads, config.n_kv_heads,
+            wq,
+            wk,
+            wv,
+            wo,
+            g_qk,
+            w_gate,
+            w_up,
+            w_down,
+            g_ffn,
+            norm_attn,
+            norm_ffn,
+            mhc_attn,
+            mhc_ffn,
+            config.dim,
+            config.n_heads,
+            config.n_kv_heads,
         ))
     }
 
@@ -377,8 +499,10 @@ impl NanochatModel {
         let get_u32 = |key: &str| -> io::Result<usize> {
             match gguf.metadata.get(key) {
                 Some(GgufValue::U32(v)) => Ok(*v as usize),
-                _ => Err(io::Error::new(io::ErrorKind::NotFound,
-                    format!("missing GGUF metadata: {key}"))),
+                _ => Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("missing GGUF metadata: {key}"),
+                )),
             }
         };
         // Optional fields with defaults
@@ -446,7 +570,7 @@ impl NanochatModel {
 
         // LoopLM configuration (if present)
         let loop_config = if gguf.metadata.contains_key("nanochat.loop.local_before") {
-            use crate::config::{LoopConfig, AdaptiveLoopConfig};
+            use crate::config::{AdaptiveLoopConfig, LoopConfig};
 
             let local_before = match gguf.metadata.get("nanochat.loop.local_before") {
                 Some(GgufValue::U32(v)) => *v as usize,
@@ -462,7 +586,10 @@ impl NanochatModel {
             };
 
             // Adaptive loop config (optional)
-            let adaptive_loop = if gguf.metadata.contains_key("nanochat.loop.adaptive.min_loops") {
+            let adaptive_loop = if gguf
+                .metadata
+                .contains_key("nanochat.loop.adaptive.min_loops")
+            {
                 let min_loops = match gguf.metadata.get("nanochat.loop.adaptive.min_loops") {
                     Some(GgufValue::U32(v)) => *v as usize,
                     _ => loop_count,
@@ -471,7 +598,10 @@ impl NanochatModel {
                     Some(GgufValue::U32(v)) => *v as usize,
                     _ => loop_count,
                 };
-                let perplexity_threshold = match gguf.metadata.get("nanochat.loop.adaptive.perplexity_threshold") {
+                let perplexity_threshold = match gguf
+                    .metadata
+                    .get("nanochat.loop.adaptive.perplexity_threshold")
+                {
                     Some(GgufValue::F32(v)) => *v,
                     _ => 5.0,
                 };
@@ -521,9 +651,16 @@ impl NanochatModel {
     }
 
     fn load_embedding(gguf: &GgufFile, name: &str) -> io::Result<Embedding> {
-        let tensor = gguf.tensors.iter().find(|t| t.name == name)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound,
-                format!("tensor '{name}' not found")))?;
+        let tensor = gguf
+            .tensors
+            .iter()
+            .find(|t| t.name == name)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("tensor '{name}' not found"),
+                )
+            })?;
 
         let vocab_size = tensor.dims[0] as usize;
         let dim = tensor.dims[1] as usize;
@@ -543,26 +680,46 @@ impl NanochatModel {
                     .collect()
             }
             dt => {
-                return Err(io::Error::new(io::ErrorKind::InvalidData,
-                    format!("unsupported embedding dtype: {dt} (expected F32=0 or F16=1)")));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unsupported embedding dtype: {dt} (expected F32=0 or F16=1)"),
+                ));
             }
         };
 
         if weight.len() != vocab_size * dim {
-            return Err(io::Error::new(io::ErrorKind::InvalidData,
-                format!("embedding size mismatch: {} vs {}", weight.len(), vocab_size * dim)));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "embedding size mismatch: {} vs {}",
+                    weight.len(),
+                    vocab_size * dim
+                ),
+            ));
         }
 
-        Ok(Embedding { weight, vocab_size, dim })
+        Ok(Embedding {
+            weight,
+            vocab_size,
+            dim,
+        })
     }
 
     fn load_norm(gguf: &GgufFile, name: &str) -> io::Result<RMSNorm> {
-        let tensor = gguf.tensors.iter().find(|t| t.name == name)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound,
-                format!("tensor '{name}' not found")))?;
+        let tensor = gguf
+            .tensors
+            .iter()
+            .find(|t| t.name == name)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("tensor '{name}' not found"),
+                )
+            })?;
 
         let data = gguf.tensor_data(tensor);
-        let weight: Vec<f32> = data.chunks_exact(4)
+        let weight: Vec<f32> = data
+            .chunks_exact(4)
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
 
@@ -572,10 +729,14 @@ impl NanochatModel {
     fn extract_mhc_n2(layers: &[mhc_lite::MhcLayerParams], idx: usize) -> io::Result<MhcLiteN2> {
         match layers.get(idx) {
             Some(mhc_lite::MhcLayerParams::N2(mhc)) => Ok(mhc.clone()),
-            Some(_) => Err(io::Error::new(io::ErrorKind::InvalidData,
-                format!("expected N2 mHC at index {idx}"))),
-            None => Err(io::Error::new(io::ErrorKind::InvalidData,
-                format!("mHC index {idx} out of range (have {})", layers.len()))),
+            Some(_) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("expected N2 mHC at index {idx}"),
+            )),
+            None => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("mHC index {idx} out of range (have {})", layers.len()),
+            )),
         }
     }
 
@@ -633,7 +794,10 @@ impl NanochatModel {
         if self.weight_tied {
             self.tok_embed.forward_as_lm_head(&x_normed, &mut logits);
         } else {
-            self.lm_head.as_ref().unwrap().forward(&x_normed, &mut logits);
+            self.lm_head
+                .as_ref()
+                .unwrap()
+                .forward(&x_normed, &mut logits);
         }
 
         logits
@@ -647,24 +811,33 @@ impl NanochatModel {
 
         // 1. Local layers before loop
         for (i, block) in self.local_blocks_before.iter().enumerate() {
-            block.forward(&mut x_exp, &mut self.local_states_before[i], &self.rope, pos);
+            block.forward(
+                &mut x_exp,
+                &mut self.local_states_before[i],
+                &self.rope,
+                pos,
+            );
         }
 
         // 2. Shared loop layer (iterated loop_count times)
         if let Some(ref loop_block) = self.shared_loop_block {
             let mut global_state: Option<Vec<f32>> = None;
-            let kv_cache = self.loop_kv_cache.as_mut()
+            let kv_cache = self
+                .loop_kv_cache
+                .as_mut()
                 .expect("loop_kv_cache should be initialized for LoopLM models");
 
             for iter in 0..loop_count {
                 let append_kv = iter == 0; // Only append KV on first iteration
-                let (x_out, g_state) = loop_block.forward(
-                    &x_exp,
-                    global_state.as_deref(),
-                    kv_cache,
-                    append_kv,
-                    Some(pos), // Pass explicit token position for causal masking
-                ).expect("Loop block forward failed: token_pos/cache mismatch");
+                let (x_out, g_state) = loop_block
+                    .forward(
+                        &x_exp,
+                        global_state.as_deref(),
+                        kv_cache,
+                        append_kv,
+                        Some(pos), // Pass explicit token position for causal masking
+                    )
+                    .expect("Loop block forward failed: token_pos/cache mismatch");
                 x_exp = x_out;
                 global_state = Some(g_state);
             }
@@ -710,7 +883,8 @@ impl NanochatModel {
         // 1. Embed all tokens: [seq_len * dim]
         let mut x_all = vec![0.0f32; seq_len * dim];
         for (t, &tid) in token_ids.iter().enumerate() {
-            self.tok_embed.forward_token(tid, &mut x_all[t * dim..(t + 1) * dim]);
+            self.tok_embed
+                .forward_token(tid, &mut x_all[t * dim..(t + 1) * dim]);
         }
 
         // 2. Expand all tokens to multi-stream: [seq_len * exp_dim]
@@ -747,13 +921,15 @@ impl NanochatModel {
                 // Each token maintains its own global state across iterations
                 for iter in 0..loop_cfg.loop_count {
                     let append_kv = (iter == 0);
-                    let new_states = loop_block.forward_batch(
-                        &mut x_exp_all,
-                        &global_states,
-                        loop_kv_cache,
-                        append_kv,
-                        seq_len,
-                    ).expect("Loop batched forward failed: token_pos/cache mismatch");
+                    let new_states = loop_block
+                        .forward_batch(
+                            &mut x_exp_all,
+                            &global_states,
+                            loop_kv_cache,
+                            append_kv,
+                            seq_len,
+                        )
+                        .expect("Loop batched forward failed: token_pos/cache mismatch");
 
                     // Update global states for next iteration
                     global_states = new_states.into_iter().map(Some).collect();
@@ -796,7 +972,10 @@ impl NanochatModel {
         if self.weight_tied {
             self.tok_embed.forward_as_lm_head(&x_normed, &mut logits);
         } else {
-            self.lm_head.as_ref().unwrap().forward(&x_normed, &mut logits);
+            self.lm_head
+                .as_ref()
+                .unwrap()
+                .forward(&x_normed, &mut logits);
         }
 
         logits
@@ -917,7 +1096,14 @@ impl NanochatModel {
             0
         };
 
-        ffn_total = (actual_layer_count - if self.shared_loop_block.is_some() { 1 } else { 0 }) * ffn_per_layer + shared_loop_ffn;
+        ffn_total = (actual_layer_count
+            - if self.shared_loop_block.is_some() {
+                1
+            } else {
+                0
+            })
+            * ffn_per_layer
+            + shared_loop_ffn;
 
         let norm_per_layer = dim * 2; // attn_norm + ffn_norm
         norm_total = actual_layer_count * norm_per_layer;
@@ -925,7 +1111,11 @@ impl NanochatModel {
         let mhc_per_layer = 9 * 2; // 9 params each for attn + ffn mHC (N=2)
         mhc_total = actual_layer_count * mhc_per_layer;
 
-        let lm_head = if self.weight_tied { 0 } else { self.config.vocab_size * dim };
+        let lm_head = if self.weight_tied {
+            0
+        } else {
+            self.config.vocab_size * dim
+        };
         let final_norm = dim;
 
         ModelParamCount {
@@ -1053,24 +1243,38 @@ mod tests {
         use crate::config::LayerType;
 
         // Test Interleaved with no ratio: all standard
-        let config = ModelConfig { deltanet_ratio: None, n_layers: 4, ..ModelConfig::d20() };
+        let config = ModelConfig {
+            deltanet_ratio: None,
+            n_layers: 4,
+            ..ModelConfig::d20()
+        };
         assert!(!config.is_deltanet_layer(0));
         assert!(!config.is_deltanet_layer(1));
 
         // Test Interleaved with ratio 0.0: all standard
-        let config = ModelConfig { deltanet_ratio: Some(0.0), n_layers: 4, ..ModelConfig::d20() };
+        let config = ModelConfig {
+            deltanet_ratio: Some(0.0),
+            n_layers: 4,
+            ..ModelConfig::d20()
+        };
         assert!(!config.is_deltanet_layer(0));
 
         // Test Interleaved with ratio 1.0: all DeltaNet
-        let config = ModelConfig { deltanet_ratio: Some(1.0), n_layers: 4, ..ModelConfig::d20() };
+        let config = ModelConfig {
+            deltanet_ratio: Some(1.0),
+            n_layers: 4,
+            ..ModelConfig::d20()
+        };
         assert!(config.is_deltanet_layer(0));
         assert!(config.is_deltanet_layer(3));
 
         // Test Interleaved with ratio 0.5: expect 2 DeltaNet layers
-        let config = ModelConfig { deltanet_ratio: Some(0.5), n_layers: 4, ..ModelConfig::d20() };
-        let dn_count: usize = (0..4)
-            .filter(|&i| config.is_deltanet_layer(i))
-            .count();
+        let config = ModelConfig {
+            deltanet_ratio: Some(0.5),
+            n_layers: 4,
+            ..ModelConfig::d20()
+        };
+        let dn_count: usize = (0..4).filter(|&i| config.is_deltanet_layer(i)).count();
         assert_eq!(dn_count, 2, "expected 2 DeltaNet layers for ratio=0.5");
 
         // Test explicit Pattern: [DeltaNet, Standard]
@@ -1080,9 +1284,9 @@ mod tests {
             layer_sequence: crate::config::LayerSequence::Pattern(pattern),
             ..ModelConfig::d20()
         };
-        assert!(config.is_deltanet_layer(0));  // First in pattern
+        assert!(config.is_deltanet_layer(0)); // First in pattern
         assert!(!config.is_deltanet_layer(1)); // Second in pattern
-        assert!(config.is_deltanet_layer(2));  // Pattern repeats
+        assert!(config.is_deltanet_layer(2)); // Pattern repeats
         assert!(!config.is_deltanet_layer(3)); // Pattern repeats
     }
 
@@ -1142,11 +1346,11 @@ mod tests {
         assert_eq!(config.rope_scale, 8.0);
 
         // Verify layer pattern: [DeltaNet, DeltaNet, DeltaNet, Attention] × 12
-        assert!(config.is_deltanet_layer(0));  // DeltaNet
-        assert!(config.is_deltanet_layer(1));  // DeltaNet
-        assert!(config.is_deltanet_layer(2));  // DeltaNet
+        assert!(config.is_deltanet_layer(0)); // DeltaNet
+        assert!(config.is_deltanet_layer(1)); // DeltaNet
+        assert!(config.is_deltanet_layer(2)); // DeltaNet
         assert!(!config.is_deltanet_layer(3)); // Attention
-        assert!(config.is_deltanet_layer(4));  // Pattern repeats
+        assert!(config.is_deltanet_layer(4)); // Pattern repeats
         assert!(!config.is_deltanet_layer(47)); // Last layer should be Attention (47 % 4 = 3)
     }
 
@@ -1164,7 +1368,10 @@ mod tests {
         assert!(count.ffn > 0, "FFN should have params");
         assert!(count.norm > 0, "norms should have params");
         assert!(count.lm_head > 0, "LM head should have params");
-        assert_eq!(count.total, count.embed + count.attn + count.ffn + count.norm + count.lm_head + count.mhc);
+        assert_eq!(
+            count.total,
+            count.embed + count.attn + count.ffn + count.norm + count.lm_head + count.mhc
+        );
     }
 
     #[test]
@@ -1324,7 +1531,8 @@ mod tests {
         let logits_batch = model_batch.forward_sequence_batched(&tokens);
 
         assert_eq!(logits_seq.len(), logits_batch.len());
-        let max_diff: f32 = logits_seq.iter()
+        let max_diff: f32 = logits_seq
+            .iter()
             .zip(logits_batch.iter())
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
@@ -1343,7 +1551,8 @@ mod tests {
         let logits_batched = model.forward_sequence_batched(&[42]);
 
         assert_eq!(logits_single.len(), logits_batched.len());
-        let max_diff: f32 = logits_single.iter()
+        let max_diff: f32 = logits_single
+            .iter()
             .zip(logits_batched.iter())
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
@@ -1393,10 +1602,14 @@ mod tests {
         let mut model = NanochatModel::new_random(config.clone());
 
         // Verify we have a mix of standard and DeltaNet layers
-        let n_standard = model.blocks.iter()
+        let n_standard = model
+            .blocks
+            .iter()
             .filter(|b| matches!(b.attention, AttentionLayer::Standard(_)))
             .count();
-        let n_deltanet = model.blocks.iter()
+        let n_deltanet = model
+            .blocks
+            .iter()
             .filter(|b| matches!(b.attention, AttentionLayer::DeltaNet(_)))
             .count();
 
@@ -1404,7 +1617,12 @@ mod tests {
         assert_eq!(n_deltanet, 2, "expected 2 DeltaNet layers");
 
         // Verify corresponding states match layer types
-        for (i, (block, state)) in model.blocks.iter().zip(model.attn_states.iter()).enumerate() {
+        for (i, (block, state)) in model
+            .blocks
+            .iter()
+            .zip(model.attn_states.iter())
+            .enumerate()
+        {
             match (&block.attention, state) {
                 (AttentionLayer::Standard(_), AttentionState::Kv(_)) => {}
                 (AttentionLayer::DeltaNet(_), AttentionState::Recurrent(_)) => {}
@@ -1415,8 +1633,14 @@ mod tests {
         // Forward pass should work
         let logits = model.forward_token(42, 0);
         assert_eq!(logits.len(), config.vocab_size);
-        assert!(logits.iter().all(|v| v.is_finite()), "non-finite logits from hybrid model");
-        assert!(logits.iter().any(|&v| v != 0.0), "all-zero logits from hybrid model");
+        assert!(
+            logits.iter().all(|v| v.is_finite()),
+            "non-finite logits from hybrid model"
+        );
+        assert!(
+            logits.iter().any(|&v| v != 0.0),
+            "all-zero logits from hybrid model"
+        );
     }
 
     #[test]
@@ -1425,7 +1649,12 @@ mod tests {
         config.deltanet_ratio = Some(0.5);
         let model = NanochatModel::new_random(config);
 
-        for (i, (block, state)) in model.blocks.iter().zip(model.attn_states.iter()).enumerate() {
+        for (i, (block, state)) in model
+            .blocks
+            .iter()
+            .zip(model.attn_states.iter())
+            .enumerate()
+        {
             match &block.attention {
                 AttentionLayer::DeltaNet(_) => {
                     assert!(
@@ -1504,9 +1733,10 @@ mod tests {
             assert!(
                 (logits1[i] - logits2[i]).abs() < 1e-5,
                 "logit[{}] differs after reset: {} vs {}",
-                i, logits1[i], logits2[i]
+                i,
+                logits1[i],
+                logits2[i]
             );
         }
     }
-
 }

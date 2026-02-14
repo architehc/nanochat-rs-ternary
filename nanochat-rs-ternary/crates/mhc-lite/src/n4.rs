@@ -280,12 +280,8 @@ mod tests {
         let mhc = MhcLiteN4::new_identity();
         let h = mhc.h_res();
         // Should be close to identity
-        for i in 0..4 {
-            assert!(
-                (h[i][i] - 1.0).abs() < 0.01,
-                "Diagonal [{i}] = {}",
-                h[i][i]
-            );
+        for (i, row) in h.iter().enumerate() {
+            assert!((row[i] - 1.0).abs() < 0.01, "Diagonal [{i}] = {}", row[i]);
         }
         verify_doubly_stochastic(&h, 1e-5).unwrap();
     }
@@ -295,8 +291,8 @@ mod tests {
         // BvN guarantees exactness for ANY logits
         let mhc = MhcLiteN4 {
             res_logits: [
-                1.0, -2.0, 0.5, 3.0, -1.0, 0.0, 2.5, -0.5, 1.5, -1.5, 0.3, -0.3, 0.7, -0.7,
-                1.2, -1.2, 0.1, -0.1, 2.0, -2.0, 0.8, -0.8, 1.8, -1.8,
+                1.0, -2.0, 0.5, 3.0, -1.0, 0.0, 2.5, -0.5, 1.5, -1.5, 0.3, -0.3, 0.7, -0.7, 1.2,
+                -1.2, 0.1, -0.1, 2.0, -2.0, 0.8, -0.8, 1.8, -1.8,
             ],
             pre_logits: [0.0; 4],
             pre_bias: [0.0; 4],
@@ -313,9 +309,9 @@ mod tests {
         let mut matrices = Vec::new();
         for seed in 0..64 {
             let mut logits = [0.0f32; 24];
-            for i in 0..24 {
+            for (i, logit) in logits.iter_mut().enumerate() {
                 // Pseudo-random logits
-                logits[i] = ((seed * 24 + i) as f32 * 0.7).sin() * 3.0;
+                *logit = ((seed * 24 + i) as f32 * 0.7).sin() * 3.0;
             }
             let mhc = MhcLiteN4 {
                 res_logits: logits,
@@ -330,11 +326,7 @@ mod tests {
         let gain = crate::verify::composite_amax_gain(&matrices);
         // For 64 doubly stochastic matrices, gain should be <= 1.0 (exact)
         // mHC-lite gives exact DS, so composite is also DS, gain exactly 1.0
-        assert!(
-            gain <= 1.0 + 1e-4,
-            "Composite gain {} exceeds bound",
-            gain
-        );
+        assert!(gain <= 1.0 + 1e-4, "Composite gain {} exceeds bound", gain);
     }
 
     #[test]
@@ -365,8 +357,8 @@ mod tests {
         assert_eq!(y.len(), 4);
 
         // Output should be finite
-        for i in 0..4 {
-            assert!(y[i].is_finite(), "Output {} is not finite", y[i]);
+        for &val in y.iter() {
+            assert!(val.is_finite(), "Output {} is not finite", val);
         }
     }
 
@@ -416,13 +408,22 @@ mod tests {
         for (k, perm) in PERMS_S4.iter().enumerate() {
             let mut sorted = *perm;
             sorted.sort();
-            assert_eq!(sorted, [0, 1, 2, 3], "PERMS_S4[{}] is not a valid permutation", k);
+            assert_eq!(
+                sorted,
+                [0, 1, 2, 3],
+                "PERMS_S4[{}] is not a valid permutation",
+                k
+            );
         }
         // Should have exactly 24 distinct permutations
         let mut set: Vec<[usize; 4]> = PERMS_S4.to_vec();
         set.sort();
         set.dedup();
-        assert_eq!(set.len(), 24, "PERMS_S4 does not have 24 distinct permutations");
+        assert_eq!(
+            set.len(),
+            24,
+            "PERMS_S4 does not have 24 distinct permutations"
+        );
     }
 
     #[test]
@@ -447,7 +448,11 @@ mod tests {
         for &v in &h_pre {
             assert!(v > 0.0, "h_pre should be positive, got {}", v);
             assert!(v < 1.0, "h_pre should be < 1.0, got {}", v);
-            assert!((v - 0.6225).abs() < 0.01, "h_pre ≈ sigmoid(0.5) ≈ 0.622, got {}", v);
+            assert!(
+                (v - 0.6225).abs() < 0.01,
+                "h_pre ≈ sigmoid(0.5) ≈ 0.622, got {}",
+                v
+            );
         }
     }
 
@@ -460,7 +465,11 @@ mod tests {
         for &v in &h_post {
             assert!(v > 0.0, "h_post should be positive, got {}", v);
             assert!(v < 2.0, "h_post should be < 2.0, got {}", v);
-            assert!((v - 1.245).abs() < 0.01, "h_post ≈ 2*sigmoid(0.5) ≈ 1.245, got {}", v);
+            assert!(
+                (v - 1.245).abs() < 0.01,
+                "h_post ≈ 2*sigmoid(0.5) ≈ 1.245, got {}",
+                v
+            );
         }
     }
 
@@ -469,8 +478,8 @@ mod tests {
         // Property test: 1000 random logit vectors should all produce valid DS matrices
         for seed in 0..1000 {
             let mut logits = [0.0f32; 24];
-            for i in 0..24 {
-                logits[i] = ((seed * 24 + i) as f32 * 0.7).sin() * 5.0;
+            for (i, logit) in logits.iter_mut().enumerate() {
+                *logit = ((seed * 24 + i) as f32 * 0.7).sin() * 5.0;
             }
             let mhc = MhcLiteN4 {
                 res_logits: logits,
@@ -480,8 +489,7 @@ mod tests {
                 post_bias: [0.0; 4],
             };
             let h = mhc.h_res();
-            verify_doubly_stochastic(&h, 1e-5)
-                .unwrap_or_else(|e| panic!("Seed {}: {}", seed, e));
+            verify_doubly_stochastic(&h, 1e-5).unwrap_or_else(|e| panic!("Seed {}: {}", seed, e));
         }
     }
 }

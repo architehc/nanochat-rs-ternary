@@ -4,8 +4,8 @@
 
 use super::Dataset;
 use rand::seq::SliceRandom;
-use rand::SeedableRng;
 use rand::Rng;
+use rand::SeedableRng;
 
 /// Python code templates with realistic token patterns
 pub struct CodePatternsDataset {
@@ -96,9 +96,9 @@ impl CodePatternsDataset {
             }
 
             // Add some variation with random tokens (10% of tokens)
-            for j in 0..seq.len() {
+            for token in &mut seq {
                 if rng.gen::<f32>() < 0.1 {
-                    seq[j] = rng.gen_range(0..vocab_size);
+                    *token = rng.gen_range(0..vocab_size);
                 }
             }
 

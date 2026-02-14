@@ -39,10 +39,10 @@ impl Default for MaxRLConfig {
     fn default() -> Self {
         Self {
             learning_rate: 1e-5,
-            correctness_threshold: 20.0,  // Reward > 20 = "correct"
-            temperature: 1.0,              // Beta parameter
+            correctness_threshold: 20.0, // Reward > 20 = "correct"
+            temperature: 1.0,            // Beta parameter
             kl_coef: 0.1,
-            n_samples: 8,                  // More samples for better ML estimate
+            n_samples: 8, // More samples for better ML estimate
             clip_ratio: Some(0.2),
             max_grad_norm: 1.0,
         }
@@ -72,8 +72,8 @@ impl MaxRLTrainer {
     /// L = -E[w(r) * log π(a|s)]  where w(r) = exp((r - threshold) / temp)
     pub fn compute_maxrl_loss(
         &self,
-        log_probs: &[f64],           // Log probabilities of generated sequences
-        rewards: &[f64],              // Rewards for each sequence
+        log_probs: &[f64],             // Log probabilities of generated sequences
+        rewards: &[f64],               // Rewards for each sequence
         ref_log_probs: Option<&[f64]>, // Reference policy (for KL)
     ) -> (f64, MaxRLStats) {
         assert_eq!(log_probs.len(), rewards.len());
@@ -128,11 +128,13 @@ impl MaxRLTrainer {
             n_total: log_probs.len(),
             correctness_rate: n_correct as f64 / n,
             avg_correct_reward: if n_correct > 0 {
-                rewards.iter()
+                rewards
+                    .iter()
                     .zip(std::iter::repeat(()))
                     .filter(|(r, _)| **r > self.config.correctness_threshold)
                     .map(|(r, _)| r)
-                    .sum::<f64>() / n_correct as f64
+                    .sum::<f64>()
+                    / n_correct as f64
             } else {
                 0.0
             },
@@ -151,7 +153,8 @@ impl MaxRLTrainer {
         rewards: &[f64],
     ) -> (f64, MaxRLStats) {
         // Separate correct and incorrect samples
-        let correct_indices: Vec<usize> = rewards.iter()
+        let correct_indices: Vec<usize> = rewards
+            .iter()
             .enumerate()
             .filter(|(_, &r)| r > self.config.correctness_threshold)
             .map(|(i, _)| i)
@@ -161,24 +164,27 @@ impl MaxRLTrainer {
 
         if n_correct == 0 {
             // No correct samples - return high loss
-            return (1000.0, MaxRLStats {
-                loss: 1000.0,
-                n_correct: 0,
-                n_total: log_probs.len(),
-                correctness_rate: 0.0,
-                avg_correct_reward: 0.0,
-            });
+            return (
+                1000.0,
+                MaxRLStats {
+                    loss: 1000.0,
+                    n_correct: 0,
+                    n_total: log_probs.len(),
+                    correctness_rate: 0.0,
+                    avg_correct_reward: 0.0,
+                },
+            );
         }
 
         // Compute normalized advantages for correct samples
-        let correct_rewards: Vec<f64> = correct_indices.iter()
-            .map(|&i| rewards[i])
-            .collect();
+        let correct_rewards: Vec<f64> = correct_indices.iter().map(|&i| rewards[i]).collect();
 
         let mean = correct_rewards.iter().sum::<f64>() / n_correct as f64;
-        let variance = correct_rewards.iter()
+        let variance = correct_rewards
+            .iter()
             .map(|r| (r - mean).powi(2))
-            .sum::<f64>() / n_correct as f64;
+            .sum::<f64>()
+            / n_correct as f64;
         let std_dev = variance.sqrt().max(1e-6);
 
         // Compute loss with normalized advantages
@@ -261,7 +267,8 @@ impl MaxRLBatch {
     /// Filter correct samples based on threshold
     pub fn filter_correct(&mut self, threshold: f64) {
         for i in 0..self.prompts.len() {
-            self.correct_indices[i] = self.rewards[i].iter()
+            self.correct_indices[i] = self.rewards[i]
+                .iter()
                 .enumerate()
                 .filter(|(_, &r)| r > threshold)
                 .map(|(idx, _)| idx)
@@ -271,12 +278,8 @@ impl MaxRLBatch {
 
     /// Get statistics about correctness
     pub fn correctness_stats(&self) -> (usize, usize, f64) {
-        let total_correct: usize = self.correct_indices.iter()
-            .map(|v| v.len())
-            .sum();
-        let total_samples: usize = self.rewards.iter()
-            .map(|v| v.len())
-            .sum();
+        let total_correct: usize = self.correct_indices.iter().map(|v| v.len()).sum();
+        let total_samples: usize = self.rewards.iter().map(|v| v.len()).sum();
         let rate = total_correct as f64 / total_samples.max(1) as f64;
 
         (total_correct, total_samples, rate)

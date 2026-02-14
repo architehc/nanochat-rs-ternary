@@ -14,15 +14,15 @@
 //   MhcLiteN2 — 2-stream, 1 learnable param, recommended starting point
 //   MhcLiteN4 — 4-stream, full BvN with 24 permutation matrices
 
+pub mod io;
 pub mod n2;
 pub mod n4;
 pub mod verify;
-pub mod io;
 
+pub use io::{load_mhc_file, save_mhc_file, MhcFileHeader, MhcLayerParams};
 pub use n2::MhcLiteN2;
 pub use n4::MhcLiteN4;
-pub use verify::{verify_doubly_stochastic, verify_doubly_stochastic_2x2, composite_amax_gain};
-pub use io::{MhcFileHeader, load_mhc_file, save_mhc_file, MhcLayerParams};
+pub use verify::{composite_amax_gain, verify_doubly_stochastic, verify_doubly_stochastic_2x2};
 
 // ============================================================================
 // Shared Utilities

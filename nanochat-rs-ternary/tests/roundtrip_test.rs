@@ -5,16 +5,15 @@
 
 use std::path::PathBuf;
 
-use ternary_core::gguf::{GgufFile, GgufWriter, GgufValue, GGUF_TYPE_Q1_58};
+use mhc_lite::{
+    load_mhc_file, save_mhc_file, verify_doubly_stochastic, verify_doubly_stochastic_2x2,
+    MhcLayerParams, MhcLiteN2, MhcLiteN4,
+};
+use ternary_core::gguf::{GgufFile, GgufValue, GgufWriter, GGUF_TYPE_Q1_58};
 use ternary_core::pack::pack_matrix;
 use ternary_core::planar::PlanarWeights;
 use ternary_core::verify::{gemv_scalar_ref, verify_gemv};
 use ternary_kernels::cpu;
-use mhc_lite::{
-    MhcLiteN2, MhcLiteN4, MhcLayerParams,
-    save_mhc_file, load_mhc_file,
-    verify_doubly_stochastic, verify_doubly_stochastic_2x2,
-};
 
 fn test_path(name: &str) -> PathBuf {
     PathBuf::from("/tmp/claude-1000/-home-habitat-ternary-clawd/95e7afdf-b472-41a0-a3d5-73532dc4ecb7/scratchpad")
@@ -55,7 +54,10 @@ fn roundtrip_single_ternary_tensor() {
     // GGUF write
     let mut writer = GgufWriter::new();
     writer.add_metadata("model.group_size", GgufValue::U32(gs as u32));
-    writer.add_metadata("model.name", GgufValue::String("roundtrip_test".to_string()));
+    writer.add_metadata(
+        "model.name",
+        GgufValue::String("roundtrip_test".to_string()),
+    );
     writer.add_ternary_tensor("layer.0.weight", &pw_orig);
     writer.write(&path).unwrap();
 
@@ -84,7 +86,10 @@ fn roundtrip_single_ternary_tensor() {
         assert!(
             (y_orig[r] - y_loaded[r]).abs() < 1e-5,
             "row {}: orig={}, loaded={}, diff={}",
-            r, y_orig[r], y_loaded[r], (y_orig[r] - y_loaded[r]).abs()
+            r,
+            y_orig[r],
+            y_loaded[r],
+            (y_orig[r] - y_loaded[r]).abs()
         );
     }
 
@@ -178,7 +183,10 @@ fn roundtrip_gguf_to_ffi_gemv() {
         assert!(
             diff < 1e-4,
             "row {}: ref={}, ffi={}, diff={}",
-            r, y_ref[r], y_ffi[r], diff
+            r,
+            y_ref[r],
+            y_ffi[r],
+            diff
         );
     }
 
@@ -216,7 +224,8 @@ fn roundtrip_mhc_n2() {
         if let (MhcLayerParams::N2(a), MhcLayerParams::N2(b)) = (orig, loaded) {
             assert!(
                 (a.alpha_logit - b.alpha_logit).abs() < 1e-7,
-                "layer {} alpha mismatch", i
+                "layer {} alpha mismatch",
+                i
             );
             // Verify loaded parameters still produce DS matrix
             let h = b.h_res();
@@ -241,11 +250,7 @@ fn roundtrip_mhc_n4() {
                 res_logits[i] = ((layer_idx * 24 + i) as f32 * 0.7).sin() * 3.0;
             }
             MhcLayerParams::N4(MhcLiteN4::from_weights(
-                res_logits,
-                [0.0; 4],
-                [0.5; 4],
-                [0.0; 4],
-                [0.5; 4],
+                res_logits, [0.0; 4], [0.5; 4], [0.0; 4], [0.5; 4],
             ))
         })
         .collect();
@@ -302,7 +307,8 @@ fn roundtrip_pack_planar_consistency() {
     for i in 0..pw_a.data.len() {
         assert_eq!(
             pw_a.data[i], pw_b.data[i],
-            "packed data mismatch at byte {}", i
+            "packed data mismatch at byte {}",
+            i
         );
     }
 
@@ -316,7 +322,10 @@ fn roundtrip_pack_planar_consistency() {
     for r in 0..rows {
         assert!(
             (y_a[r] - y_b[r]).abs() < 1e-6,
-            "row {}: path_a={}, path_b={}", r, y_a[r], y_b[r]
+            "row {}: path_a={}, path_b={}",
+            r,
+            y_a[r],
+            y_b[r]
         );
     }
 }

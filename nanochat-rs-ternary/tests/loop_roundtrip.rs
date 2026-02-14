@@ -40,7 +40,11 @@ fn test_loop_export_load_forward_roundtrip() {
     let train_model = NanochatTrainModel::new(&cfg, vb).unwrap();
 
     // Verify loop architecture was built correctly
-    assert_eq!(train_model.blocks.len(), 0, "Standard blocks should be empty");
+    assert_eq!(
+        train_model.blocks.len(),
+        0,
+        "Standard blocks should be empty"
+    );
     assert_eq!(train_model.local_blocks_before.len(), 1);
     assert_eq!(train_model.local_blocks_after.len(), 1);
     assert!(train_model.shared_loop_block.is_some());
@@ -81,11 +85,8 @@ fn test_loop_export_load_forward_roundtrip() {
     println!("✓ Exported to GGUF + mHC");
 
     // 4. Load via inference model
-    let mut inf_model = NanochatModel::from_gguf(
-        gguf_path.to_str().unwrap(),
-        mhc_path.to_str().unwrap(),
-    )
-    .unwrap();
+    let mut inf_model =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap()).unwrap();
 
     println!("✓ Loaded from GGUF + mHC");
 
@@ -211,18 +212,21 @@ fn test_loop_adaptive_config_roundtrip() {
     )
     .unwrap();
 
-    let inf_model = NanochatModel::from_gguf(
-        gguf_path.to_str().unwrap(),
-        mhc_path.to_str().unwrap(),
-    )
-    .unwrap();
+    let inf_model =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap()).unwrap();
 
     // Verify adaptive loop config
     let loaded_loop_cfg = inf_model.config.loop_config.as_ref().unwrap();
     assert!(loaded_loop_cfg.adaptive_loop.is_some());
 
     let adaptive = loaded_loop_cfg.adaptive_loop.as_ref().unwrap();
-    let expected_adaptive = cfg.loop_config.as_ref().unwrap().adaptive_loop.as_ref().unwrap();
+    let expected_adaptive = cfg
+        .loop_config
+        .as_ref()
+        .unwrap()
+        .adaptive_loop
+        .as_ref()
+        .unwrap();
 
     assert_eq!(adaptive.min_loops, expected_adaptive.min_loops);
     assert_eq!(adaptive.max_loops, expected_adaptive.max_loops);
@@ -258,19 +262,13 @@ fn test_loop_batched_autoregressive_parity() {
     let tokens = vec![1u32, 5, 10, 20, 42, 7, 13, 25];
 
     // Run autoregressive (ground truth)
-    let mut model_auto = NanochatModel::from_gguf(
-        gguf_path.to_str().unwrap(),
-        mhc_path.to_str().unwrap(),
-    )
-    .unwrap();
+    let mut model_auto =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap()).unwrap();
     let logits_auto = model_auto.forward_sequence(&tokens);
 
     // Run batched prefill
-    let mut model_batched = NanochatModel::from_gguf(
-        gguf_path.to_str().unwrap(),
-        mhc_path.to_str().unwrap(),
-    )
-    .unwrap();
+    let mut model_batched =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap()).unwrap();
     let logits_batched = model_batched.forward_sequence_batched(&tokens);
 
     // Strict numerical comparison

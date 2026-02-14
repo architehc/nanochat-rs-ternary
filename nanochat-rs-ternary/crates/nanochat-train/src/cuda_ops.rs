@@ -2,7 +2,7 @@
 //!
 //! Provides CUDA kernels that are missing from Candle's built-in ops.
 
-use candle_core::{Result, Tensor, Device};
+use candle_core::{Device, Result, Tensor};
 
 // Note: CUDA kernels are compiled and linked, but Candle's internal CUDA APIs
 // are not publicly exposed in a stable way. For production use, we use a CPU

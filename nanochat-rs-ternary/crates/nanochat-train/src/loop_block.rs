@@ -5,7 +5,7 @@
 //!
 //! Input → [Local Layers] → [Shared Loop Layer × L iterations] → [Local Layers] → Output
 
-use candle_core::{Result, Tensor, Device, D, IndexOp};
+use candle_core::{Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 use crate::config::TrainConfig;
@@ -87,11 +87,25 @@ impl SharedLoopBlock {
         let mhc_ffn = MhcLiteN2Train::new(vb.pp("mhc_ffn"))?;
 
         Ok(Self {
-            wq, wk, wv, wo, g_qk,
-            w_gate, w_up, w_down, g_ffn,
-            norm_attn, norm_ffn,
-            mhc_attn, mhc_ffn,
-            dim, n_heads, n_kv_heads, head_dim, n_rep, ffn_dim,
+            wq,
+            wk,
+            wv,
+            wo,
+            g_qk,
+            w_gate,
+            w_up,
+            w_down,
+            g_ffn,
+            norm_attn,
+            norm_ffn,
+            mhc_attn,
+            mhc_ffn,
+            dim,
+            n_heads,
+            n_kv_heads,
+            head_dim,
+            n_rep,
+            ffn_dim,
         })
     }
 
@@ -244,9 +258,15 @@ impl SharedLoopBlock {
     /// Collect all linear (BitLinearSTE) parameters.
     pub fn linear_params(&self) -> Vec<&Tensor> {
         vec![
-            self.wq.weight(), self.wk.weight(), self.wv.weight(), self.wo.weight(),
-            self.g_qk.weight(), self.g_ffn.weight(),
-            self.w_gate.weight(), self.w_up.weight(), self.w_down.weight(),
+            self.wq.weight(),
+            self.wk.weight(),
+            self.wv.weight(),
+            self.wo.weight(),
+            self.g_qk.weight(),
+            self.g_ffn.weight(),
+            self.w_gate.weight(),
+            self.w_up.weight(),
+            self.w_down.weight(),
         ]
     }
 
@@ -266,9 +286,9 @@ impl SharedLoopBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::DType;
-    use candle_nn::VarMap;
     use crate::config::TrainConfig;
+    use candle_core::{DType, Device, IndexOp};
+    use candle_nn::VarMap;
 
     fn test_config() -> TrainConfig {
         TrainConfig {

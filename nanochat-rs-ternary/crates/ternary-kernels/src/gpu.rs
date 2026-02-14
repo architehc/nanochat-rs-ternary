@@ -65,25 +65,26 @@ impl GpuWeights {
         let scales_bytes = pw.rows * n_groups * std::mem::size_of::<f32>();
 
         let d_data = unsafe { cuda_alloc(data_bytes) };
-        assert!(!d_data.is_null(), "GPU alloc failed for data ({} bytes)", data_bytes);
+        assert!(
+            !d_data.is_null(),
+            "GPU alloc failed for data ({} bytes)",
+            data_bytes
+        );
 
         let d_scales = unsafe { cuda_alloc(scales_bytes) };
-        assert!(!d_scales.is_null(), "GPU alloc failed for scales ({} bytes)", scales_bytes);
+        assert!(
+            !d_scales.is_null(),
+            "GPU alloc failed for scales ({} bytes)",
+            scales_bytes
+        );
 
         // Upload row-major data
-        let ret = unsafe {
-            cuda_memcpy_h2d(d_data, pw.data.as_ptr(), data_bytes)
-        };
+        let ret = unsafe { cuda_memcpy_h2d(d_data, pw.data.as_ptr(), data_bytes) };
         assert_eq!(ret, 0, "H2D copy failed for data");
 
         // Upload row-major scales
-        let ret = unsafe {
-            cuda_memcpy_h2d(
-                d_scales,
-                pw.scales_rm.as_ptr() as *const u8,
-                scales_bytes,
-            )
-        };
+        let ret =
+            unsafe { cuda_memcpy_h2d(d_scales, pw.scales_rm.as_ptr() as *const u8, scales_bytes) };
         assert_eq!(ret, 0, "H2D copy failed for scales");
 
         GpuWeights {
@@ -243,7 +244,9 @@ mod tests {
             assert!(
                 max_diff < 1e-3,
                 "[{}x{}] GPU vs CPU max diff: {}",
-                m, k, max_diff
+                m,
+                k,
+                max_diff
             );
         }
     }

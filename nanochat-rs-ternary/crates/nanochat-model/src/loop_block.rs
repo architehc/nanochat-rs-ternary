@@ -5,10 +5,10 @@
 
 use std::io;
 
-use crate::config::ModelConfig;
-use crate::bitlinear::BitLinear;
-use crate::norm::RMSNorm;
 use crate::attention::KvCache;
+use crate::bitlinear::BitLinear;
+use crate::config::ModelConfig;
+use crate::norm::RMSNorm;
 use mhc_lite::MhcLiteN2;
 
 /// Shared loop block for inference: recurrent transformer layer with global state.
@@ -56,24 +56,47 @@ impl SharedLoopBlock {
     /// This is typically called when loading a model from GGUF, not constructed from scratch.
     /// For testing, use `new_empty()` to create with zero-initialized weights.
     pub fn new(
-        wq: BitLinear, wk: BitLinear, wv: BitLinear, wo: BitLinear,
+        wq: BitLinear,
+        wk: BitLinear,
+        wv: BitLinear,
+        wo: BitLinear,
         g_qk: BitLinear,
-        w_gate: BitLinear, w_up: BitLinear, w_down: BitLinear,
+        w_gate: BitLinear,
+        w_up: BitLinear,
+        w_down: BitLinear,
         g_ffn: BitLinear,
-        norm_attn: RMSNorm, norm_ffn: RMSNorm,
-        mhc_attn: MhcLiteN2, mhc_ffn: MhcLiteN2,
-        dim: usize, n_heads: usize, n_kv_heads: usize,
+        norm_attn: RMSNorm,
+        norm_ffn: RMSNorm,
+        mhc_attn: MhcLiteN2,
+        mhc_ffn: MhcLiteN2,
+        dim: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
     ) -> Self {
         let head_dim = dim / n_heads;
         let n_rep = n_heads / n_kv_heads;
         let ffn_dim = w_gate.rows; // Infer from weight dimensions
 
         Self {
-            wq, wk, wv, wo, g_qk,
-            w_gate, w_up, w_down, g_ffn,
-            norm_attn, norm_ffn,
-            mhc_attn, mhc_ffn,
-            dim, n_heads, n_kv_heads, head_dim, n_rep, ffn_dim,
+            wq,
+            wk,
+            wv,
+            wo,
+            g_qk,
+            w_gate,
+            w_up,
+            w_down,
+            g_ffn,
+            norm_attn,
+            norm_ffn,
+            mhc_attn,
+            mhc_ffn,
+            dim,
+            n_heads,
+            n_kv_heads,
+            head_dim,
+            n_rep,
+            ffn_dim,
         }
     }
 
@@ -119,11 +142,25 @@ impl SharedLoopBlock {
         let n_rep = n_heads / n_kv_heads;
 
         Self {
-            wq, wk, wv, wo, g_qk,
-            w_gate, w_up, w_down, g_ffn,
-            norm_attn, norm_ffn,
-            mhc_attn, mhc_ffn,
-            dim, n_heads, n_kv_heads, head_dim, n_rep, ffn_dim,
+            wq,
+            wk,
+            wv,
+            wo,
+            g_qk,
+            w_gate,
+            w_up,
+            w_down,
+            g_ffn,
+            norm_attn,
+            norm_ffn,
+            mhc_attn,
+            mhc_ffn,
+            dim,
+            n_heads,
+            n_kv_heads,
+            head_dim,
+            n_rep,
+            ffn_dim,
         }
     }
 
@@ -205,7 +242,8 @@ impl SharedLoopBlock {
             }
 
             // Mix: gate * attn_proj + (1 - gate) * global_state
-            gate_weights.iter()
+            gate_weights
+                .iter()
                 .zip(attn_proj.iter())
                 .zip(g_state.iter())
                 .map(|((&g, &a), &s)| g * a + (1.0 - g) * s)
@@ -254,7 +292,8 @@ impl SharedLoopBlock {
             }
 
             // Mix
-            gate_weights.iter()
+            gate_weights
+                .iter()
                 .zip(ffn_out.iter())
                 .zip(g_state.iter())
                 .map(|((&g, &f), &s)| g * f + (1.0 - g) * s)
@@ -267,7 +306,8 @@ impl SharedLoopBlock {
         let x_expanded_out = self.mhc_ffn.apply(&x_expanded, &gated_ffn, self.dim);
 
         // 6. Update global state: average of attention and FFN outputs
-        let global_state_out: Vec<f32> = gated_attn.iter()
+        let global_state_out: Vec<f32> = gated_attn
+            .iter()
             .zip(gated_ffn.iter())
             .map(|(&a, &f)| (a + f) * 0.5)
             .collect();
@@ -285,7 +325,13 @@ impl SharedLoopBlock {
     ///
     /// # Errors
     /// Returns error if token_pos exceeds cache length (indicates caller bug)
-    fn compute_attention(&self, q: &[f32], kv_cache: &KvCache, token_pos: usize, out: &mut [f32]) -> Result<(), String> {
+    fn compute_attention(
+        &self,
+        q: &[f32],
+        kv_cache: &KvCache,
+        token_pos: usize,
+        out: &mut [f32],
+    ) -> Result<(), String> {
         // Causal masking: only attend to positions 0..=token_pos
         let causal_len = token_pos + 1;
 
@@ -426,7 +472,9 @@ mod tests {
         let mut kv_cache = KvCache::new(cfg.max_seq_len, cfg.n_kv_heads, cfg.head_dim());
 
         // First iteration (no global state, append KV)
-        let (x_out, global_state) = block.forward(&x_expanded, None, &mut kv_cache, true, None).unwrap();
+        let (x_out, global_state) = block
+            .forward(&x_expanded, None, &mut kv_cache, true, None)
+            .unwrap();
 
         // Check output shapes
         assert_eq!(x_out.len(), dim * n_streams);
@@ -448,19 +496,25 @@ mod tests {
         let mut kv_cache = KvCache::new(cfg.max_seq_len, cfg.n_kv_heads, cfg.head_dim());
 
         // Iteration 1: append KV, no global state
-        let (mut x_state, mut global_state) = block.forward(&x_expanded, None, &mut kv_cache, true, None).unwrap();
+        let (mut x_state, mut global_state) = block
+            .forward(&x_expanded, None, &mut kv_cache, true, None)
+            .unwrap();
 
         let kv_len_after_first = kv_cache.len;
         assert_eq!(kv_len_after_first, 1);
 
         // Iteration 2: don't append KV, use global state
-        (x_state, global_state) = block.forward(&x_state, Some(&global_state), &mut kv_cache, false, None).unwrap();
+        (x_state, global_state) = block
+            .forward(&x_state, Some(&global_state), &mut kv_cache, false, None)
+            .unwrap();
 
         // KV cache should NOT grow
         assert_eq!(kv_cache.len, kv_len_after_first);
 
         // Iteration 3: another loop
-        (x_state, global_state) = block.forward(&x_state, Some(&global_state), &mut kv_cache, false, None).unwrap();
+        (x_state, global_state) = block
+            .forward(&x_state, Some(&global_state), &mut kv_cache, false, None)
+            .unwrap();
 
         // KV cache still shouldn't grow
         assert_eq!(kv_cache.len, kv_len_after_first);
@@ -494,7 +548,10 @@ mod tests {
 
         // Output should have correct shape and be non-zero
         assert_eq!(out.len(), dim);
-        assert!(out.iter().any(|&x| x != 0.0), "Attention output should be non-zero");
+        assert!(
+            out.iter().any(|&x| x != 0.0),
+            "Attention output should be non-zero"
+        );
     }
 
     #[test]
@@ -509,10 +566,14 @@ mod tests {
         let mut kv_cache = KvCache::new(cfg.max_seq_len, cfg.n_kv_heads, cfg.head_dim());
 
         // First iteration creates global state
-        let (x1, global_state1) = block.forward(&x_expanded, None, &mut kv_cache, true, None).unwrap();
+        let (x1, global_state1) = block
+            .forward(&x_expanded, None, &mut kv_cache, true, None)
+            .unwrap();
 
         // Second iteration uses global state
-        let (x2, global_state2) = block.forward(&x1, Some(&global_state1), &mut kv_cache, false, None).unwrap();
+        let (x2, global_state2) = block
+            .forward(&x1, Some(&global_state1), &mut kv_cache, false, None)
+            .unwrap();
 
         // With zero weights, global states will be zero but shapes should be correct
         assert_eq!(global_state1.len(), dim);

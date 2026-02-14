@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use nanochat_model::model::NanochatModel;
 use nanochat_serve::engine::InferenceEngine;
-use nanochat_serve::server::{AppState, build_router};
+use nanochat_serve::server::{build_router, AppState};
 
 struct Args {
     model: String,
@@ -65,7 +65,13 @@ fn parse_args() -> Args {
         std::process::exit(1);
     }
 
-    Args { model, mhc, tokenizer: tokenizer_path, host, port }
+    Args {
+        model,
+        mhc,
+        tokenizer: tokenizer_path,
+        host,
+        port,
+    }
 }
 
 #[tokio::main]
@@ -107,7 +113,11 @@ async fn main() {
         std::process::exit(1);
     });
     let tok_vocab = tokenizer.get_vocab_size(true);
-    tracing::info!("Tokenizer loaded from {} ({} tokens)", args.tokenizer, tok_vocab);
+    tracing::info!(
+        "Tokenizer loaded from {} ({} tokens)",
+        args.tokenizer,
+        tok_vocab
+    );
 
     let model_name = format!("nanochat-{}m", model.param_count().total / 1_000_000);
     let vocab_size = model.config.vocab_size as u32;
@@ -123,10 +133,12 @@ async fn main() {
     let app = build_router(state);
 
     let addr = format!("{}:{}", args.host, args.port);
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
-        eprintln!("Failed to bind to {addr}: {e}");
-        std::process::exit(1);
-    });
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to bind to {addr}: {e}");
+            std::process::exit(1);
+        });
     tracing::info!("Listening on http://{addr}");
     tracing::info!("Endpoints:");
     tracing::info!("  GET  /                    (chat UI)");

@@ -3,7 +3,10 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "nanochat-train", about = "Train nanochat ternary models in Rust")]
+#[command(
+    name = "nanochat-train",
+    about = "Train nanochat ternary models in Rust"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -136,7 +139,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "nano-1b" | "nano_1b" => nanochat_train::config::TrainConfig::nano_1b(),
                 "tiny-cpu" | "tiny_cpu" => nanochat_train::config::TrainConfig::tiny_cpu(),
                 other => {
-                    eprintln!("Unknown config: {}. Use d20, nano-125m, nano-1b, or tiny-cpu.", other);
+                    eprintln!(
+                        "Unknown config: {}. Use d20, nano-125m, nano-1b, or tiny-cpu.",
+                        other
+                    );
                     std::process::exit(1);
                 }
             };
@@ -149,7 +155,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("=== nanochat-train ===");
             println!("Config: {}", config);
-            println!("Model params: ~{:.1}M", cfg.param_count_estimate() as f64 / 1e6);
+            println!(
+                "Model params: ~{:.1}M",
+                cfg.param_count_estimate() as f64 / 1e6
+            );
             println!("FFN dim: {}", cfg.ffn_dim());
             println!("Device: {:?}", device);
             println!("Batch size: {}", cfg.batch_size);
@@ -172,10 +181,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .varmap
                     .load(format!("{}/model.safetensors", ckpt_dir))?;
                 trainer.global_step = meta.step;
-                println!(
-                    "Resumed at step {} (loss={:.4})",
-                    meta.step, meta.loss
-                );
+                println!("Resumed at step {} (loss={:.4})", meta.step, meta.loss);
                 trainer
             } else {
                 nanochat_train::train::Trainer::new(cfg.clone(), device)?
@@ -204,21 +210,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 }
                 other => {
-                    eprintln!(
-                        "Unknown dataset: {}. Use 'synthetic' or 'tokens'.",
-                        other
-                    );
+                    eprintln!("Unknown dataset: {}. Use 'synthetic' or 'tokens'.", other);
                     std::process::exit(1);
                 }
             };
 
             println!("Dataset: {} samples", ds.len());
-            let tokens_per_epoch =
-                ds.len() as f64 * effective_seq_len as f64;
-            println!(
-                "Tokens per epoch: {:.1}M",
-                tokens_per_epoch / 1e6
-            );
+            let tokens_per_epoch = ds.len() as f64 * effective_seq_len as f64;
+            println!("Tokens per epoch: {:.1}M", tokens_per_epoch / 1e6);
             println!();
 
             // Run training loop with per-step logging and checkpoint management
@@ -258,8 +257,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 serde_json::from_str(&meta_json)?;
 
             let mut varmap = candle_nn::VarMap::new();
-            let vb =
-                candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
+            let vb = candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
             let model = nanochat_train::model::NanochatTrainModel::new(&meta.config, vb)?;
 
             // Load saved weights

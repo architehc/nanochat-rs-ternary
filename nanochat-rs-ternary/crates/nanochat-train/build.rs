@@ -13,7 +13,10 @@ fn main() {
 
         // Check if nvcc exists
         if !std::path::Path::new(&nvcc).exists() {
-            println!("cargo:warning=CUDA feature enabled but nvcc not found at {}", nvcc);
+            println!(
+                "cargo:warning=CUDA feature enabled but nvcc not found at {}",
+                nvcc
+            );
             println!("cargo:warning=Skipping CUDA kernel compilation");
             return;
         }

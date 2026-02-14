@@ -146,20 +146,23 @@ impl EvalMetrics {
         println!("Dataset: {}", self.dataset_name);
         println!();
         println!("Pass@k Scores:");
-        println!("  pass@1:  {:.2}% ({}/{})",
+        println!(
+            "  pass@1:  {:.2}% ({}/{})",
             self.pass_at_1.score * 100.0,
             self.pass_at_1.num_solved,
             self.pass_at_1.num_problems
         );
         if let Some(p10) = &self.pass_at_10 {
-            println!("  pass@10: {:.2}% ({}/{})",
+            println!(
+                "  pass@10: {:.2}% ({}/{})",
                 p10.score * 100.0,
                 p10.num_solved,
                 p10.num_problems
             );
         }
         if let Some(p100) = &self.pass_at_100 {
-            println!("  pass@100: {:.2}% ({}/{})",
+            println!(
+                "  pass@100: {:.2}% ({}/{})",
                 p100.score * 100.0,
                 p100.num_solved,
                 p100.num_problems
@@ -167,7 +170,10 @@ impl EvalMetrics {
         }
         println!();
         println!("Performance:");
-        println!("  Problems solved: {}/{}", self.problems_solved, self.total_problems);
+        println!(
+            "  Problems solved: {}/{}",
+            self.problems_solved, self.total_problems
+        );
         println!("  Avg execution time: {:.1}ms", self.avg_execution_time_ms);
         println!();
 

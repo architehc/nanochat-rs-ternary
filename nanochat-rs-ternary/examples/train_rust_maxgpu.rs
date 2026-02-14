@@ -10,13 +10,13 @@
 //! Dataset: 68M tokens from production Rust codebases (13 repos)
 //! Expected training time: 3-7 hours for 20K steps (d20)
 
+use candle_core::Device;
+use clap::Parser;
 use nanochat_train::{
     config::TrainConfig,
     data::{Dataset, TokenFileDataset},
     train::Trainer,
 };
-use candle_core::Device;
-use clap::Parser;
 use std::path::Path;
 
 #[derive(Parser, Debug)]
@@ -93,7 +93,8 @@ fn find_latest_checkpoint(checkpoint_dir: &str) -> Option<(String, usize)> {
                         let checkpoint_path = entry.path();
                         // Verify checkpoint has required files
                         if checkpoint_path.join("model.safetensors").exists()
-                            && checkpoint_path.join("meta.json").exists() {
+                            && checkpoint_path.join("meta.json").exists()
+                        {
                             checkpoints.push((checkpoint_path.to_string_lossy().to_string(), step));
                         }
                     }
@@ -121,7 +122,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Device setup
     let device = if args.device.starts_with("cuda") {
-        let gpu_id = args.device.strip_prefix("cuda:")
+        let gpu_id = args
+            .device
+            .strip_prefix("cuda:")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
         match Device::new_cuda(gpu_id) {
@@ -140,10 +143,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load dataset
     println!("Loading Rust code dataset...");
-    let dataset = TokenFileDataset::from_binary_file(
-        std::path::Path::new(&args.data),
-        args.seq_len,
-    )?;
+    let dataset =
+        TokenFileDataset::from_binary_file(std::path::Path::new(&args.data), args.seq_len)?;
     println!("✓ Dataset loaded: {} samples\n", dataset.len());
 
     // Configuration - d20 (20M params) - fits in 24GB GPU
@@ -160,9 +161,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let embed = config.vocab_size * config.dim;
         let ffn_dim = (config.dim as f32 * config.ffn_mult) as usize;
         let per_layer = 4 * config.dim * config.dim  // Q,K,V,O
-            + 3 * config.dim * ffn_dim;  // gate, up, down
-        let total = embed + config.n_layers * per_layer + config.dim;  // +final norm
-        total / 1_000_000  // in millions
+            + 3 * config.dim * ffn_dim; // gate, up, down
+        let total = embed + config.n_layers * per_layer + config.dim; // +final norm
+        total / 1_000_000 // in millions
     };
 
     println!("Model Configuration:");
@@ -173,18 +174,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Heads: {}", config.n_heads);
     println!("  Batch size: {} (MAX GPU!)", args.batch_size);
     println!("  Sequence length: {}", args.seq_len);
-    println!("  Effective batch: {} tokens/step", args.batch_size * args.seq_len);
+    println!(
+        "  Effective batch: {} tokens/step",
+        args.batch_size * args.seq_len
+    );
     println!("  Total steps: {}", args.total_steps);
     println!("  Learning rate: {}", args.lr);
     println!("  Gradient clip: {}\n", args.grad_clip);
 
     // Memory estimate based on actual config
-    let model_params_gb = param_count as f64 * 4.0 / 1024.0;  // FP32 in GB
-    let batch_mem_gb = (args.batch_size * args.seq_len * config.dim * 4 * 12) as f64 / 1024.0 / 1024.0 / 1024.0;
+    let model_params_gb = param_count as f64 * 4.0 / 1024.0; // FP32 in GB
+    let batch_mem_gb =
+        (args.batch_size * args.seq_len * config.dim * 4 * 12) as f64 / 1024.0 / 1024.0 / 1024.0;
     println!("Estimated GPU Memory Usage:");
-    println!("  Model + grads + optimizer: ~{:.1} GB", model_params_gb * 4.5);
+    println!(
+        "  Model + grads + optimizer: ~{:.1} GB",
+        model_params_gb * 4.5
+    );
     println!("  Activations (batch): ~{:.1} GB", batch_mem_gb);
-    println!("  Total estimated: ~{:.1} GB\n", model_params_gb * 4.5 + batch_mem_gb);
+    println!(
+        "  Total estimated: ~{:.1} GB\n",
+        model_params_gb * 4.5 + batch_mem_gb
+    );
 
     // Create trainer
     println!("═══════════════════════════════════════════════════════════");
@@ -216,7 +227,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Apply CLI overrides to checkpoint config
         let mut overrides = Vec::new();
         if t.config.total_steps != args.total_steps {
-            overrides.push(format!("total_steps: {} -> {}", t.config.total_steps, args.total_steps));
+            overrides.push(format!(
+                "total_steps: {} -> {}",
+                t.config.total_steps, args.total_steps
+            ));
             t.config.total_steps = args.total_steps;
         }
         if t.config.lr != args.lr as f64 {
@@ -225,19 +239,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             t.base_lr_muon = args.lr as f64;
         }
         if t.config.grad_clip != args.grad_clip as f64 {
-            overrides.push(format!("grad_clip: {:.2} -> {:.2}", t.config.grad_clip, args.grad_clip));
+            overrides.push(format!(
+                "grad_clip: {:.2} -> {:.2}",
+                t.config.grad_clip, args.grad_clip
+            ));
             t.config.grad_clip = args.grad_clip as f64;
         }
         if t.config.warmup_steps != args.warmup_steps {
-            overrides.push(format!("warmup_steps: {} -> {}", t.config.warmup_steps, args.warmup_steps));
+            overrides.push(format!(
+                "warmup_steps: {} -> {}",
+                t.config.warmup_steps, args.warmup_steps
+            ));
             t.config.warmup_steps = args.warmup_steps;
         }
         if t.config.batch_size != args.batch_size {
-            overrides.push(format!("batch_size: {} -> {}", t.config.batch_size, args.batch_size));
+            overrides.push(format!(
+                "batch_size: {} -> {}",
+                t.config.batch_size, args.batch_size
+            ));
             t.config.batch_size = args.batch_size;
         }
         if t.config.max_seq_len != args.seq_len {
-            overrides.push(format!("max_seq_len: {} -> {}", t.config.max_seq_len, args.seq_len));
+            overrides.push(format!(
+                "max_seq_len: {} -> {}",
+                t.config.max_seq_len, args.seq_len
+            ));
             t.config.max_seq_len = args.seq_len;
         }
 
@@ -261,8 +287,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Calculate epochs
     let steps_per_epoch = (dataset.len() + args.batch_size - 1) / args.batch_size;
     let epochs = (args.total_steps + steps_per_epoch - 1) / steps_per_epoch;
-    println!("Training for {} epochs ({} steps per epoch)\n", epochs, steps_per_epoch);
-    println!("Expected time: 3-7 hours for {}K steps\n", args.total_steps / 1000);
+    println!(
+        "Training for {} epochs ({} steps per epoch)\n",
+        epochs, steps_per_epoch
+    );
+    println!(
+        "Expected time: 3-7 hours for {}K steps\n",
+        args.total_steps / 1000
+    );
 
     trainer.train_loop(
         &dataset,
@@ -280,7 +312,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Next steps:");
     println!("1. Export to GGUF:");
     println!("   cargo run --release -p nanochat-train --example export_checkpoint -- \\");
-    println!("     --checkpoint {}/step_{} \\", args.checkpoint_dir, args.total_steps);
+    println!(
+        "     --checkpoint {}/step_{} \\",
+        args.checkpoint_dir, args.total_steps
+    );
     println!("     --output models/rust-d20.gguf\n");
 
     println!("2. Test Rust code completion:");

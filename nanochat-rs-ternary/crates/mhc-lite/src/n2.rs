@@ -127,8 +127,7 @@ impl MhcLiteN2 {
             let s1 = &x[b * 2 * dim_c + dim_c..b * 2 * dim_c + 2 * dim_c];
             let ly = &layer_output[b * dim_c..(b + 1) * dim_c];
 
-            let (o0, o1) = out[b * 2 * dim_c..b * 2 * dim_c + 2 * dim_c]
-                .split_at_mut(dim_c);
+            let (o0, o1) = out[b * 2 * dim_c..b * 2 * dim_c + 2 * dim_c].split_at_mut(dim_c);
 
             for i in 0..dim_c {
                 // FIXED: Apply residual to each stream FIRST
@@ -282,8 +281,8 @@ mod tests {
 
         // With identity init, output should be close to input + layer_contribution
         // (won't be exact due to sigmoid scaling)
-        for i in 0..4 {
-            assert!(y[i].is_finite(), "Output {} is not finite", y[i]);
+        for &val in y.iter() {
+            assert!(val.is_finite(), "Output {} is not finite", val);
         }
     }
 
@@ -333,13 +332,7 @@ mod tests {
 
     #[test]
     fn test_n2_from_weights() {
-        let mhc = MhcLiteN2::from_weights(
-            2.0,
-            [0.1, 0.2],
-            [0.3, 0.4],
-            [0.5, 0.6],
-            [0.7, 0.8],
-        );
+        let mhc = MhcLiteN2::from_weights(2.0, [0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]);
         assert!((mhc.alpha_logit - 2.0).abs() < 1e-7);
         assert!((mhc.pre_logits[0] - 0.1).abs() < 1e-7);
         assert!((mhc.post_bias[1] - 0.8).abs() < 1e-7);

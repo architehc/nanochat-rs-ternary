@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use syn::visit::Visit;
-use syn::{File, Item, Expr, Stmt, Pat, UseTree};
+use syn::{Expr, File, Item, Pat, Stmt, UseTree};
 
 /// Comprehensive AST metrics for a code sample
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,7 +155,8 @@ struct MetricsVisitor<'a> {
 
 impl<'a> MetricsVisitor<'a> {
     fn new(code: &'a str) -> Self {
-        let loc = code.lines()
+        let loc = code
+            .lines()
             .filter(|line| {
                 let trimmed = line.trim();
                 !trimmed.is_empty() && !trimmed.starts_with("//")
@@ -215,9 +216,7 @@ impl<'a> Visit<'a> for MetricsVisitor<'a> {
                 self.structure.n_functions += 1;
 
                 // Check for documentation
-                if func.attrs.iter().any(|attr| {
-                    attr.path().is_ident("doc")
-                }) {
+                if func.attrs.iter().any(|attr| attr.path().is_ident("doc")) {
                     self.n_functions_with_docs += 1;
                     self.quality.has_docs = true;
                 }
@@ -281,7 +280,10 @@ impl<'a> Visit<'a> for MetricsVisitor<'a> {
             }
             Expr::Call(call) => {
                 let func_str = quote::quote!(#call).to_string();
-                if func_str.contains("unwrap") || func_str.contains("expect") || func_str.contains("panic") {
+                if func_str.contains("unwrap")
+                    || func_str.contains("expect")
+                    || func_str.contains("panic")
+                {
                     self.quality.n_panics += 1;
                 }
 
