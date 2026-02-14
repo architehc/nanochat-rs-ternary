@@ -12,6 +12,13 @@ num_cpus = "1.16"
 serde_json = "1.0"
 candle-core = "0.9"
 candle-nn = "0.9"
+# P1 improvements
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+prometheus = "0.13"
+lazy_static = "1.5"
+toml = "0.8"
 
 # Root package for integration tests and benchmarks
 [package]

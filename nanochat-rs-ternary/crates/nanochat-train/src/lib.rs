@@ -7,6 +7,7 @@ pub mod distill;
 pub mod export;
 pub mod ffn;
 pub mod layers;
+pub mod logging;
 pub mod loop_block;
 pub mod mhc;
 pub mod model;

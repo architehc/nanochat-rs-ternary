@@ -15,6 +15,7 @@ use tower_http::cors::CorsLayer;
 
 use crate::api::*;
 use crate::engine::InferenceEngine;
+use crate::metrics;
 
 /// Shared application state.
 pub struct AppState {
@@ -29,6 +30,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(chat_ui))
         .route("/health", get(health))
+        .route("/metrics", get(prometheus_metrics))
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .layer(CorsLayer::permissive())
@@ -41,6 +43,10 @@ async fn chat_ui() -> Html<&'static str> {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn prometheus_metrics() -> impl IntoResponse {
+    metrics::render_metrics()
 }
 
 async fn list_models(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
