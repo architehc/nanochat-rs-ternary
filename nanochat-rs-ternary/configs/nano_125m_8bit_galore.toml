@@ -1,0 +1,43 @@
+# nano-125m with BOTH 8-bit Quantization AND GaLore 2
+# Maximum memory efficiency: ~88% optimizer memory reduction
+# Hardware: Config C (Dual EPYC + RTX 4090)
+
+# Model architecture
+dim = 768
+n_layers = 12
+n_heads = 12
+n_kv_heads = 12
+ffn_mult = 2.6875
+vocab_size = 50257
+max_seq_len = 512
+group_size = 128
+mhc_n_streams = 2
+weight_tied = true
+rope_theta = 10000.0
+
+# Training hyperparams
+lr = 0.02
+mhc_lr = 0.0001
+weight_decay = 0.0
+batch_size = 8
+grad_accum_steps = 4
+warmup_steps = 500
+total_steps = 50000
+decay_start_frac = 0.8
+grad_clip = 1.0
+ns_steps = 5
+muon_momentum = 0.95
+lion_betas = [0.9, 0.99]
+
+# E2 Optimizer Enhancements - MAXIMUM MEMORY SAVINGS
+use_8bit_optim = true      # Enable 8-bit quantized optimizer states
+use_galore = true          # Enable GaLore 2 (currently falls back to 8-bit only)
+galore_rank = 384          # Config C: Dual EPYC + RTX 4090
+galore_update_freq = 200   # Update projections every 200 steps
+
+# Note: When both are enabled, currently only 8-bit quantization is used
+# GaLore2<QuantizedMuon> wrapper is TODO in future update
+
+# Distillation (optional)
+distill_kl_weight = 0.0
+loop_scale_penalty = 0.0

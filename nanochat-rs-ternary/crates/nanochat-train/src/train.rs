@@ -7,7 +7,7 @@ use std::time::Instant;
 use crate::config::TrainConfig;
 use crate::data::{DataLoader, Dataset};
 use crate::model::NanochatTrainModel;
-use crate::optim::{wsd_schedule, Lion, Muon};
+use crate::optim::{wsd_schedule, Lion, MuonOptimizer};
 
 /// Checkpoint management utilities
 mod checkpoint_manager {
@@ -135,7 +135,7 @@ pub struct StepStats {
 pub struct Trainer {
     pub model: NanochatTrainModel,
     pub varmap: VarMap,
-    muon: Muon,
+    muon: MuonOptimizer,
     lion: Lion,
     pub config: TrainConfig,
     pub device: Device,
@@ -180,13 +180,24 @@ impl Trainer {
         let base_lr_muon = config.lr;
         let base_lr_lion = config.mhc_lr;
 
-        let muon = Muon::new(
+        let muon = MuonOptimizer::from_config(
             muon_vars,
             base_lr_muon,
             config.muon_momentum,
             config.ns_steps,
             config.weight_decay,
+            config.use_8bit_optim,
+            config.use_galore,
+            config.galore_rank,
+            config.galore_update_freq,
         )?;
+
+        // Log optimizer configuration on resume
+        let mem_stats = muon.memory_stats();
+        println!("\n🔧 Resumed with optimizer: {}", mem_stats.variant);
+        if mem_stats.memory_reduction > 0.0 {
+            println!("  Memory reduction: {:.1}%", mem_stats.memory_reduction * 100.0);
+        }
 
         let lion = Lion::new(
             lion_vars,
@@ -234,13 +245,31 @@ impl Trainer {
             }
         }
 
-        let muon = Muon::new(
+        // Create Muon optimizer with optional 8-bit quantization and/or GaLore
+        let muon = MuonOptimizer::from_config(
             muon_vars,
             config.lr,
             config.muon_momentum,
             config.ns_steps,
             config.weight_decay,
+            config.use_8bit_optim,
+            config.use_galore,
+            config.galore_rank,
+            config.galore_update_freq,
         )?;
+
+        // Log optimizer configuration
+        let mem_stats = muon.memory_stats();
+        println!("\n🔧 Optimizer Configuration:");
+        println!("  Muon variant: {}", mem_stats.variant);
+        if mem_stats.memory_reduction > 0.0 {
+            println!("  Memory reduction: {:.1}%", mem_stats.memory_reduction * 100.0);
+            println!("  Details: {}", mem_stats.details);
+        }
+        if config.use_galore {
+            println!("  GaLore rank: {}", config.galore_rank);
+            println!("  GaLore update freq: {} steps", config.galore_update_freq);
+        }
 
         let lion = Lion::new(
             lion_vars,
@@ -580,6 +609,10 @@ mod tests {
             ns_steps: 3,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,

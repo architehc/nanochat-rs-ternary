@@ -2,6 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
+fn default_galore_rank() -> usize {
+    256 // Config B default (dual RTX 4090)
+}
+
+fn default_galore_update_freq() -> usize {
+    200 // Update projections every 200 steps
+}
+
 /// Adaptive loop control for inference (LoopLM).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveLoopConfig {
@@ -71,6 +79,20 @@ pub struct TrainConfig {
     pub ns_steps: usize,
     pub muon_momentum: f64,
     pub lion_betas: (f64, f64),
+
+    // Advanced optimizer options (E2 recommendations)
+    /// Use 8-bit quantized optimizer states (arXiv:2509.23106)
+    #[serde(default)]
+    pub use_8bit_optim: bool,
+    /// Use GaLore 2 low-rank gradient projection (arXiv:2504.20437)
+    #[serde(default)]
+    pub use_galore: bool,
+    /// GaLore rank (Config A=512, Config B=256, Config C=384)
+    #[serde(default = "default_galore_rank")]
+    pub galore_rank: usize,
+    /// GaLore projection update frequency
+    #[serde(default = "default_galore_update_freq")]
+    pub galore_update_freq: usize,
 
     // Stage-1 distillation hyperparams (LoopLM training)
     /// Teacher model path for distillation (None = no distillation)
@@ -145,6 +167,10 @@ impl TrainConfig {
             ns_steps: 5,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -179,6 +205,10 @@ impl TrainConfig {
             ns_steps: 5,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -222,6 +252,10 @@ impl TrainConfig {
             ns_steps: 5,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
             distill_teacher: None, // Can be set to teacher model path
             distill_kl_weight: 1.0,
             loop_scale_penalty: 0.1, // Annealed during training
@@ -257,6 +291,10 @@ impl TrainConfig {
             ns_steps: 3,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -291,6 +329,10 @@ impl TrainConfig {
             ns_steps: 5,
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
