@@ -333,8 +333,7 @@ impl TrainConfig {
             mtp_n_tokens: 3,
             mtp_weight: 0.2,
 
-            // E3 P1: Collider Token Filtering (DISABLED - not yet wired into training loop)
-            // TODO: Implement backward pass filtering and wire into train.rs
+            // E3 P1: Collider Token Filtering (TEMPORARILY DISABLED - per-token loop too slow on CPU)
             use_collider: false,
             collider_threshold: 0.3,
             collider_sparsity: 0.35,

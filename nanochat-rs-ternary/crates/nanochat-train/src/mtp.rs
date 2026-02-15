@@ -20,7 +20,7 @@ pub struct MultiTokenPrediction {
     output_heads: Vec<Linear>,
 
     /// Loss weights for each position [1.0, 0.5, 0.25, 0.125, ...]
-    loss_weights: Vec<f64>,
+    loss_weights: Vec<f32>,
 }
 
 impl MultiTokenPrediction {
@@ -40,7 +40,7 @@ impl MultiTokenPrediction {
             heads.push(head);
 
             // Geometric decay: 1.0, 0.5, 0.25, 0.125, ...
-            let weight = 0.5_f64.powi(i as i32);
+            let weight = 0.5_f32.powi(i as i32);
             weights.push(weight);
         }
 
@@ -65,16 +65,16 @@ impl MultiTokenPrediction {
 
     /// Compute MTP loss with weighted auxiliary losses.
     pub fn compute_loss(&self, predictions: &[Tensor], targets: &[Tensor]) -> Result<MTPLoss> {
-        let mut total_loss = 0.0;
-        let mut primary_loss = 0.0;
-        let mut aux_loss = 0.0;
+        let mut total_loss = 0.0_f32;
+        let mut primary_loss = 0.0_f32;
+        let mut aux_loss = 0.0_f32;
 
         for (i, (pred, target)) in predictions.iter().zip(targets.iter()).enumerate() {
             // Compute cross-entropy loss
             let log_probs = candle_nn::ops::log_softmax(pred, D::Minus1)?;
             let loss = candle_nn::loss::nll(&log_probs, target)?;
 
-            let loss_val = loss.to_scalar::<f64>()?;
+            let loss_val = loss.to_scalar::<f32>()?;
             let weighted_loss = loss_val * self.loss_weights[i];
 
             if i == 0 {
@@ -98,7 +98,7 @@ impl MultiTokenPrediction {
         self.n_future_tokens
     }
 
-    pub fn loss_weights(&self) -> &[f64] {
+    pub fn loss_weights(&self) -> &[f32] {
         &self.loss_weights
     }
 }
@@ -106,16 +106,16 @@ impl MultiTokenPrediction {
 /// MTP loss breakdown.
 #[derive(Debug, Clone)]
 pub struct MTPLoss {
-    pub total: f64,
-    pub primary: f64,
-    pub auxiliary: f64,
+    pub total: f32,
+    pub primary: f32,
+    pub auxiliary: f32,
     pub n_tokens: usize,
 }
 
 impl MTPLoss {
     /// Get data efficiency gain estimate.
-    pub fn data_efficiency_multiplier(&self) -> f64 {
-        1.0 + (self.n_tokens as f64 - 1.0) * 0.5
+    pub fn data_efficiency_multiplier(&self) -> f32 {
+        1.0 + (self.n_tokens as f32 - 1.0) * 0.5
     }
 }
 

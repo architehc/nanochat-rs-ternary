@@ -410,27 +410,40 @@ impl Trainer {
         // E3: Multi-Token Prediction (15-20% data efficiency boost)
         if let Some(ref mtp) = self.mtp {
             // Predict future tokens from hidden states
-            let mtp_predictions = mtp.forward(&hidden)?;
+            let mtp_logits_list = mtp.forward(&hidden)?;
 
-            // Prepare future targets (shift target_ids)
-            let mut mtp_targets = Vec::new();
-            for i in 1..=self.config.mtp_n_tokens {
-                // Shift targets by i positions
-                let shifted = if i < seq_len {
-                    target_ids.narrow(1, i, seq_len - i)?
-                } else {
-                    // Pad with zeros if we don't have enough tokens
-                    continue;
-                };
-                mtp_targets.push(shifted);
+            // Prepare aligned predictions and targets
+            let mut mtp_preds_flat = Vec::new();
+            let mut mtp_targets_flat = Vec::new();
+
+            for (i, mtp_logit) in mtp_logits_list.iter().enumerate().take(self.config.mtp_n_tokens) {
+                let shift = i + 1;
+                if shift >= seq_len {
+                    break; // Not enough tokens for this future position
+                }
+
+                // MTP logit: [batch, seq, vocab]
+                // We want to predict position i+1 from position i
+                // So use logits[0:seq-shift] to predict targets[shift:seq]
+                let pred_len = seq_len - shift;
+                let mtp_pred_trimmed = mtp_logit.narrow(1, 0, pred_len)?;
+                let mtp_pred_flat = mtp_pred_trimmed.reshape((batch * pred_len, vocab))?;
+
+                // Target: shift by (i+1)
+                let target_shifted = target_ids.narrow(1, shift, pred_len)?;
+                let target_flat = target_shifted.reshape(batch * pred_len)?;
+
+                mtp_preds_flat.push(mtp_pred_flat);
+                mtp_targets_flat.push(target_flat);
             }
 
             // Compute MTP loss
-            if !mtp_targets.is_empty() {
-                let mtp_loss_result = mtp.compute_loss(&mtp_predictions[..mtp_targets.len()], &mtp_targets)?;
-                let mtp_loss_tensor = Tensor::new(&[mtp_loss_result.auxiliary], &self.device)?;
-                let mtp_weighted = (mtp_loss_tensor * self.config.mtp_weight)?;
-                loss = (loss + mtp_weighted)?;
+            if !mtp_preds_flat.is_empty() {
+                let mtp_loss_result = mtp.compute_loss(&mtp_preds_flat, &mtp_targets_flat)?;
+                let mtp_weighted = mtp_loss_result.auxiliary * (self.config.mtp_weight as f32);
+                // Create scalar tensor (shape []) to match main loss
+                let mtp_tensor = Tensor::new(mtp_weighted, &self.device)?;
+                loss = (loss + mtp_tensor)?;
             }
         }
 

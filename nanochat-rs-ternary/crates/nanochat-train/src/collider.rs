@@ -7,7 +7,7 @@
 //! 2. Filtering out low-importance tokens during backward pass
 //! 3. Transforming sparse GEMMs to dense operations
 
-use candle_core::{DType, Result, Tensor, D};
+use candle_core::{DType, IndexOp, Result, Tensor, D};
 
 /// Token filtering via cross-layer activation sparsity.
 ///
@@ -68,24 +68,34 @@ impl Collider {
         // Normalize to [0, 1] using min-max scaling
         let min_loss = losses.min_keepdim(1)?;
         let max_loss = losses.max_keepdim(1)?;
-        let range = (max_loss - &min_loss)? + 1e-8;
+        let range = ((&max_loss - &min_loss)? + 1e-8)?;
 
-        let normalized = ((losses - min_loss)? / range)?;
+        let normalized = losses.broadcast_sub(&min_loss)?.broadcast_div(&range)?;
 
         Ok(normalized)
     }
 
     /// Compute per-token cross-entropy loss (not reduced).
     fn per_token_cross_entropy(&self, log_probs: &Tensor, targets: &Tensor) -> Result<Tensor> {
-        let (_batch_size, _seq_len, _vocab_size) = log_probs.dims3()?;
+        let (batch_size, seq_len, _vocab_size) = log_probs.dims3()?;
 
-        // TODO: Implement proper per-token indexing when candle supports it
-        // For now, use a simplified cross-entropy computation
+        // Gather log probabilities for the target tokens
+        // For each position, get log_prob[target_id]
+        let mut losses = Vec::new();
 
-        // Simplified: compute negative log likelihood per token
-        let losses = candle_nn::loss::cross_entropy(log_probs, targets)?;
+        for b in 0..batch_size {
+            for s in 0..seq_len {
+                let log_prob_row = log_probs.i((b, s))?;  // [vocab]
+                let target_id = targets.i((b, s))?.to_scalar::<u32>()? as usize;
+                let neg_log_prob = log_prob_row.i(target_id)?.neg()?;
+                losses.push(neg_log_prob.to_scalar::<f32>()?);
+            }
+        }
 
-        Ok(losses)
+        // Convert back to tensor and reshape
+        let losses_tensor = Tensor::from_vec(losses, (batch_size, seq_len), &log_probs.device())?;
+
+        Ok(losses_tensor)
     }
 
     /// Create binary mask for important tokens.
