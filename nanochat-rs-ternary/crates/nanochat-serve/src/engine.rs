@@ -36,6 +36,8 @@ impl Default for SamplingParams {
 pub struct GeneratedToken {
     pub token_id: u32,
     pub finish_reason: Option<String>,
+    /// Whether the forward pass was degraded (LoopLM errors)
+    pub degraded: bool,
 }
 
 /// Inference engine wrapping the model with generation logic.
@@ -126,6 +128,11 @@ impl InferenceEngine {
             vec![]
         };
 
+        // Check for degraded state after prefill
+        if self.model.last_forward_was_degraded() {
+            eprintln!("WARNING: Forward pass degraded during prefill");
+        }
+
         // Decode: generate one token at a time
         let mut pos = prompt_ids.len();
 
@@ -150,6 +157,7 @@ impl InferenceEngine {
             let should_continue = on_token(GeneratedToken {
                 token_id: next_token,
                 finish_reason: finish_reason.clone(),
+                degraded: false, // Will be set to true in next iteration if needed
             });
 
             if !should_continue || is_eot || at_limit {
@@ -158,6 +166,11 @@ impl InferenceEngine {
 
             logits = self.model.forward_token(next_token, pos);
             pos += 1;
+
+            // Check for degraded state after each token
+            if self.model.last_forward_was_degraded() {
+                eprintln!("WARNING: Forward pass degraded at position {}", pos);
+            }
         }
     }
 }
@@ -316,6 +329,11 @@ impl NumaInferenceEngine {
             vec![]
         };
 
+        // Check for degraded state after prefill
+        if self.model.last_forward_was_degraded() {
+            eprintln!("WARNING: NUMA Forward pass degraded during prefill");
+        }
+
         // Decode: generate one token at a time
         let mut pos = prompt_ids.len();
 
@@ -336,6 +354,11 @@ impl NumaInferenceEngine {
 
             logits = self.model.forward_token(next_token, pos);
             pos += 1;
+
+            // Check for degraded state after each token
+            if self.model.last_forward_was_degraded() {
+                eprintln!("WARNING: NUMA Forward pass degraded at position {}", pos);
+            }
         }
 
         tokens
@@ -654,8 +677,7 @@ mod tests {
 
     #[test]
     fn test_numa_engine_forward() {
-        let config = nanochat_model::config::ModelConfig::test_config(128, 2, 4, 256);
-        let mut config = ModelConfig::test_config(128, 4, 4, 256); // Use 4 layers to test split at 2
+        let config = ModelConfig::test_config(128, 4, 4, 256); // Use 4 layers to test split at 2
         let mut engine = NumaInferenceEngine::new_random(config);
         engine.eot_token = 0; // Use 0 as EOT for small vocab
 

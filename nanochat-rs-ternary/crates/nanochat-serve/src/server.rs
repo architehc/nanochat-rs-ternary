@@ -111,16 +111,22 @@ async fn non_stream_completion(
         let output_ids = engine.generate(&token_ids, &params);
         let output_len = output_ids.len();
 
+        // Check for degraded state after generation
+        let degraded = engine.model.last_forward_was_degraded();
+        if degraded {
+            eprintln!("WARNING: Non-streaming generation had degraded outputs (LoopLM errors)");
+        }
+
         let text = state
             .tokenizer
             .decode(&output_ids, true)
             .unwrap_or_default();
 
-        Ok((text, prompt_len, output_len))
+        Ok((text, prompt_len, output_len, degraded))
     })
     .await;
 
-    let (generated_text, prompt_tokens, completion_tokens) = match result {
+    let (generated_text, prompt_tokens, completion_tokens, degraded) = match result {
         Ok(Ok(data)) => data,
         Ok(Err(err)) => {
             // Track error
@@ -178,6 +184,13 @@ async fn non_stream_completion(
     // Track generated tokens
     metrics::TOKENS_GENERATED.inc_by(completion_tokens as f64);
 
+    // Determine finish reason based on degraded state
+    let finish_reason = if degraded {
+        "degraded".to_string() // Custom finish reason for degraded outputs
+    } else {
+        "stop".to_string()
+    };
+
     Json(ChatCompletionResponse {
         id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
         object: "chat.completion".to_string(),
@@ -189,7 +202,7 @@ async fn non_stream_completion(
                 role: Role::Assistant,
                 content: generated_text,
             },
-            finish_reason: "stop".to_string(),
+            finish_reason,
         }],
         usage: Usage::new(prompt_tokens, completion_tokens),
     })
@@ -282,8 +295,14 @@ async fn stream_completion(
         let mut engine = state.engine.lock().unwrap();
 
         let mut token_count = 0usize;
+        let mut had_degraded = false;
         engine.generate_streaming(&token_ids, &params, |tok| {
             token_count += 1;
+
+            // Track degraded state
+            if tok.degraded {
+                had_degraded = true;
+            }
 
             let text = state
                 .tokenizer
@@ -312,6 +331,11 @@ async fn stream_completion(
             let json = serde_json::to_string(&chunk).unwrap();
             tx.blocking_send(Ok(Event::default().data(json))).is_ok()
         });
+
+        // Log if any degraded outputs occurred
+        if had_degraded {
+            eprintln!("WARNING: Streaming response had degraded outputs (LoopLM errors)");
+        }
 
         // Track generated tokens
         metrics::TOKENS_GENERATED.inc_by(token_count as f64);
