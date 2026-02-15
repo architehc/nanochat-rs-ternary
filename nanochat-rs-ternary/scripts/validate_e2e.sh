@@ -15,7 +15,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"
+WORKSPACE_DIR="$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/.." WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary" pwd)"
 cd "${WORKSPACE_DIR}"
 
 echo -e "${GREEN}========================================${NC}"

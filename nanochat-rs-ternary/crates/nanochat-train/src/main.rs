@@ -138,6 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut cfg = match config.as_str() {
                 "d20" => nanochat_train::config::TrainConfig::d20(),
+                "d20-mtp" | "d20_mtp" => nanochat_train::config::TrainConfig::d20_mtp(),
                 "d20-e3" | "d20_e3" | "d20-e3-full" | "d20_e3_full" => {
                     nanochat_train::config::TrainConfig::d20_e3_full()
                 }
@@ -147,7 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "test-8bit" | "test_8bit" => nanochat_train::config::TrainConfig::test_8bit(),
                 other => {
                     tracing::error!(
-                        "Unknown config: {}. Use d20, d20-e3-full, nano-125m, nano-1b, tiny-cpu, or test-8bit.",
+                        "Unknown config: {}. Use d20, d20-mtp, d20-e3-full, nano-125m, nano-1b, tiny-cpu, or test-8bit.",
                         other
                     );
                     std::process::exit(1);

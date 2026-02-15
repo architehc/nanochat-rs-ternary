@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"
+WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXPERIMENT_NAME="small_560m_$(date +%Y%m%d_%H%M%S)"
 RUNS_DIR="${WORKSPACE_DIR}/runs/${EXPERIMENT_NAME}"
 
@@ -25,10 +25,11 @@ TB_PID=$!
 trap "kill $TB_PID 2>/dev/null || true" EXIT
 
 # Train
-RUST_LOG=info target/release/nanochat-train \
-    --config configs/models/small_560m.toml \
-    --output-dir "${RUNS_DIR}" \
-    --tensorboard-dir "${RUNS_DIR}/tensorboard" \
+RUST_LOG=info target/release/nanochat-train train \
+    --config d20 \
+    --dataset synthetic \
+    --device cuda \
+    --checkpoint-dir "${RUNS_DIR}/checkpoints" \
     2>&1 | tee "${RUNS_DIR}/training.log"
 
 echo ""

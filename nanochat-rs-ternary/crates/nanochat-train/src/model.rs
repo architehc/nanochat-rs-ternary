@@ -161,7 +161,10 @@ impl NanochatTrainModel {
         let x_dims = hidden.dims().to_vec();
         let logits = if x_dims.len() == 3 {
             let (b, m, k) = (x_dims[0], x_dims[1], x_dims[2]);
-            hidden.reshape((b * m, k))?.matmul(&lm_w)?.reshape((b, m, ()))
+            hidden
+                .reshape((b * m, k))?
+                .matmul(&lm_w)?
+                .reshape((b, m, ()))
         } else {
             hidden.matmul(&lm_w)
         }?;

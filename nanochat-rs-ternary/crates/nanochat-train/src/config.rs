@@ -290,6 +290,15 @@ impl TrainConfig {
         }
     }
 
+    /// d20 with MTP enabled (for testing on 24GB GPUs).
+    pub fn d20_mtp() -> Self {
+        let mut cfg = Self::d20();
+        cfg.use_mtp = true;
+        cfg.mtp_n_tokens = 3;
+        cfg.mtp_weight = 0.2;
+        cfg
+    }
+
     /// Production d20 (560M) with full E3 optimization stack.
     /// Designed for RTX PRO 6000 Ada (96GB VRAM).
     pub fn d20_e3_full() -> Self {

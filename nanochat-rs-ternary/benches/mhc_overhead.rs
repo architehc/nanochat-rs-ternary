@@ -138,7 +138,7 @@ fn bench_mhc_verification(c: &mut Criterion) {
         .map(|seed| {
             let mut logits = [0.0f32; 24];
             #[allow(clippy::needless_range_loop)] // Index needed for deterministic data generation
-    for i in 0..24 {
+            for i in 0..24 {
                 logits[i] = ((seed * 24 + i) as f32 * 0.7).sin() * 3.0;
             }
             let mhc = MhcLiteN4::from_weights(logits, [0.0; 4], [0.5; 4], [0.0; 4], [0.5; 4]);

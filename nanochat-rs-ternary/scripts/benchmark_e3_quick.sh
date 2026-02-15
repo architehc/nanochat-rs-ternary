@@ -29,7 +29,7 @@ echo ""
 # Configs to test
 declare -A configs
 configs["Baseline"]="d20"
-configs["E3_Full"]="d20-e3-full"
+configs["MTP_Only"]="d20-mtp"
 
 # Run benchmarks
 for name in "${!configs[@]}"; do
@@ -40,12 +40,18 @@ for name in "${!configs[@]}"; do
     output_dir="${RESULTS_DIR}/${name}"
     mkdir -p "${output_dir}"
 
+    # Determine batch size based on config (E3-full is larger, needs smaller batch)
+    batch_size=4
+    if [[ "${config}" == *"e3"* ]]; then
+        batch_size=1  # Large model needs smaller batch to fit in GPU
+    fi
+
     # Run 500 steps (~2-3 minutes on GPU)
     RUST_LOG=info timeout 900 target/release/nanochat-train train \
         --config "${config}" \
         --dataset synthetic \
         --n-samples 10000 \
-        --batch-size 4 \
+        --batch-size ${batch_size} \
         --epochs 1 \
         --checkpoint-interval 10000 \
         --log-interval 50 \

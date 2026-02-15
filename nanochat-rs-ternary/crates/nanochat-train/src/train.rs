@@ -146,8 +146,8 @@ pub struct Trainer {
     pub base_lr_lion: f64, // Made public for CLI overrides
 
     // E3 optimizations
-    mtp: Option<MultiTokenPrediction>,  // Multi-Token Prediction (15-20% data efficiency)
-    collider: Option<Collider>,         // Token filtering (35% faster backprop)
+    mtp: Option<MultiTokenPrediction>, // Multi-Token Prediction (15-20% data efficiency)
+    collider: Option<Collider>,        // Token filtering (35% faster backprop)
 }
 
 impl Trainer {
@@ -240,10 +240,8 @@ impl Trainer {
 
         // E3 optimizations: Collider token filtering
         let collider = if config.use_collider {
-            let collider_module = Collider::new(
-                config.collider_threshold,
-                config.collider_sparsity,
-            );
+            let collider_module =
+                Collider::new(config.collider_threshold, config.collider_sparsity);
             println!(
                 "  Collider resumed: threshold={:.2}, sparsity={:.2}",
                 config.collider_threshold, config.collider_sparsity
@@ -358,10 +356,8 @@ impl Trainer {
 
         // E3 optimizations: Collider token filtering
         let collider = if config.use_collider {
-            let collider_module = Collider::new(
-                config.collider_threshold,
-                config.collider_sparsity,
-            );
+            let collider_module =
+                Collider::new(config.collider_threshold, config.collider_sparsity);
             println!(
                 "  Collider enabled: threshold={:.2}, sparsity={:.2}",
                 config.collider_threshold, config.collider_sparsity
@@ -416,7 +412,11 @@ impl Trainer {
             let mut mtp_preds_flat = Vec::new();
             let mut mtp_targets_flat = Vec::new();
 
-            for (i, mtp_logit) in mtp_logits_list.iter().enumerate().take(self.config.mtp_n_tokens) {
+            for (i, mtp_logit) in mtp_logits_list
+                .iter()
+                .enumerate()
+                .take(self.config.mtp_n_tokens)
+            {
                 let shift = i + 1;
                 if shift >= seq_len {
                     break; // Not enough tokens for this future position

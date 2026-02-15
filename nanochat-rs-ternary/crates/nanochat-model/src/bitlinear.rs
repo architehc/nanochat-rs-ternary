@@ -184,7 +184,8 @@ mod tests {
 
         // Random-ish weights
         let mut weights = vec![0.0f32; rows * cols];
-        #[allow(clippy::needless_range_loop)] // Index needed for deterministic pseudo-random generation
+        #[allow(clippy::needless_range_loop)]
+        // Index needed for deterministic pseudo-random generation
         for i in 0..weights.len() {
             let v = ((i as u32).wrapping_mul(2654435761) >> 16) % 200;
             weights[i] = v as f32 / 100.0 - 1.0;

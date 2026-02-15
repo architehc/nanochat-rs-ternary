@@ -220,8 +220,7 @@ impl TensorBoardLogger {
 
         info!(
             log_dir = log_dir,
-            "TensorBoard logging initialized - run: tensorboard --logdir {}",
-            log_dir
+            "TensorBoard logging initialized - run: tensorboard --logdir {}", log_dir
         );
 
         Self { writer }
@@ -236,20 +235,30 @@ impl TensorBoardLogger {
     /// - `mhc/composite_gain` (if available)
     pub fn log_step(&mut self, step: usize, metrics: &TrainingMetrics) {
         // Loss metrics
-        self.writer.add_scalar("loss/total", metrics.loss as f32, step);
-        self.writer.add_scalar("loss/ce", metrics.ce_loss as f32, step);
-        self.writer.add_scalar("loss/entropy", metrics.entropy as f32, step);
+        self.writer
+            .add_scalar("loss/total", metrics.loss as f32, step);
+        self.writer
+            .add_scalar("loss/ce", metrics.ce_loss as f32, step);
+        self.writer
+            .add_scalar("loss/entropy", metrics.entropy as f32, step);
 
         // Training metrics
-        self.writer.add_scalar("training/lr", metrics.learning_rate as f32, step);
-        self.writer.add_scalar("training/grad_norm", metrics.grad_norm as f32, step);
+        self.writer
+            .add_scalar("training/lr", metrics.learning_rate as f32, step);
+        self.writer
+            .add_scalar("training/grad_norm", metrics.grad_norm as f32, step);
 
         // Throughput
-        self.writer.add_scalar("throughput/tokens_per_sec", metrics.tokens_per_sec as f32, step);
+        self.writer.add_scalar(
+            "throughput/tokens_per_sec",
+            metrics.tokens_per_sec as f32,
+            step,
+        );
 
         // Optional: mHC routing gain
         if let Some(gain) = metrics.mhc_gain {
-            self.writer.add_scalar("mhc/composite_gain", gain as f32, step);
+            self.writer
+                .add_scalar("mhc/composite_gain", gain as f32, step);
         }
 
         // Flush to disk
@@ -258,8 +267,10 @@ impl TensorBoardLogger {
 
     /// Log evaluation metrics.
     pub fn log_eval(&mut self, step: usize, perplexity: f64, accuracy: f64) {
-        self.writer.add_scalar("eval/perplexity", perplexity as f32, step);
-        self.writer.add_scalar("eval/accuracy", accuracy as f32, step);
+        self.writer
+            .add_scalar("eval/perplexity", perplexity as f32, step);
+        self.writer
+            .add_scalar("eval/accuracy", accuracy as f32, step);
         self.writer.flush();
     }
 

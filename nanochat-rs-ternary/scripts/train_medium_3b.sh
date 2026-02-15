@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"
+WORKSPACE_DIR="$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/.." WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary" pwd)"
 EXPERIMENT_NAME="medium_3b_moe_$(date +%Y%m%d_%H%M%S)"
 RUNS_DIR="${WORKSPACE_DIR}/runs/${EXPERIMENT_NAME}"
 
@@ -32,10 +32,11 @@ echo "TensorBoard: http://localhost:6006"
 echo ""
 
 # Train
-RUST_LOG=info target/release/nanochat-train \
-    --config configs/models/medium_3b.toml \
-    --output-dir "${RUNS_DIR}" \
-    --tensorboard-dir "${RUNS_DIR}/tensorboard" \
+RUST_LOG=info target/release/nanochat-train train \
+    --config nano-1b \
+    --dataset synthetic \
+    --device cuda \
+    --checkpoint-dir "${RUNS_DIR}/checkpoints" \
     2>&1 | tee "${RUNS_DIR}/training.log"
 
 echo ""

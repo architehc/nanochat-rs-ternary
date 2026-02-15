@@ -334,7 +334,6 @@ impl Default for ComplexityMetrics {
     }
 }
 
-
 impl Default for QualityMetrics {
     fn default() -> Self {
         Self {
@@ -348,7 +347,6 @@ impl Default for QualityMetrics {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

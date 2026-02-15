@@ -16,7 +16,7 @@ set -euo pipefail
 
 # Configuration
 EXPERIMENT_NAME="nanochat_production_8h_$(date +%Y%m%d_%H%M%S)"
-WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"
+WORKSPACE_DIR="$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/.." WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary" pwd)"
 RUNS_DIR="${WORKSPACE_DIR}/runs/${EXPERIMENT_NAME}"
 CHECKPOINTS_DIR="${RUNS_DIR}/checkpoints"
 TENSORBOARD_DIR="${RUNS_DIR}/tensorboard"
@@ -137,8 +137,11 @@ echo "Expected duration: 8 hours"
 echo "---"
 
 cd "${WORKSPACE_DIR}"
-RUST_LOG=info target/release/nanochat-train \
-    --config "${RUNS_DIR}/config.toml" \
+RUST_LOG=info target/release/nanochat-train train \
+    --config d20 \
+    --dataset synthetic \
+    --device cuda \
+    --checkpoint-dir "${CHECKPOINTS_DIR}" \
     2>&1 | tee "${RUNS_DIR}/training.log"
 
 # Save final checkpoint

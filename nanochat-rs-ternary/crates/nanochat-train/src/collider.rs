@@ -85,7 +85,7 @@ impl Collider {
 
         for b in 0..batch_size {
             for s in 0..seq_len {
-                let log_prob_row = log_probs.i((b, s))?;  // [vocab]
+                let log_prob_row = log_probs.i((b, s))?; // [vocab]
                 let target_id = targets.i((b, s))?.to_scalar::<u32>()? as usize;
                 let neg_log_prob = log_prob_row.i(target_id)?.neg()?;
                 losses.push(neg_log_prob.to_scalar::<f32>()?);
