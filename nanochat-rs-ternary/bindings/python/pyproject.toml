@@ -15,5 +15,4 @@ classifiers = [
 ]
 
 [tool.maturin]
-python-source = "python"
 module-name = "nanochat_py"

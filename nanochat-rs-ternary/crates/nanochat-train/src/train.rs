@@ -8,6 +8,7 @@ use std::time::Instant;
 use crate::collider::Collider;
 use crate::config::TrainConfig;
 use crate::data::{DataLoader, Dataset};
+use crate::fp4::FP4Trainer;
 use crate::model::NanochatTrainModel;
 use crate::mtp::MultiTokenPrediction;
 use crate::optim::{wsd_schedule, Lion, LionState, MuonOptimizer, MuonOptimizerState};
@@ -155,6 +156,7 @@ pub struct Trainer {
     // E3 optimizations
     mtp: Option<MultiTokenPrediction>, // Multi-Token Prediction (15-20% data efficiency)
     collider: Option<Collider>,        // Token filtering (35% faster backprop)
+    fp4: Option<FP4Trainer>,           // Optional FP4 mixed-precision path
 }
 
 impl Trainer {
@@ -297,6 +299,19 @@ impl Trainer {
             None
         };
 
+        // Optional FP4 path.
+        let fp4 = if config.use_fp4 {
+            let fp4_module = FP4Trainer::new(config.fp4_stochastic_rounding);
+            fp4_module.enable_fp4_tensor_cores()?;
+            println!(
+                "  FP4 resumed: stochastic_rounding={}",
+                config.fp4_stochastic_rounding
+            );
+            Some(fp4_module)
+        } else {
+            None
+        };
+
         let mut trainer = Self {
             model,
             varmap,
@@ -309,6 +324,7 @@ impl Trainer {
             base_lr_lion,
             mtp,
             collider,
+            fp4,
         };
 
         trainer.load_optimizer_state(checkpoint_dir)?;
@@ -416,6 +432,19 @@ impl Trainer {
             None
         };
 
+        // Optional FP4 path.
+        let fp4 = if config.use_fp4 {
+            let fp4_module = FP4Trainer::new(config.fp4_stochastic_rounding);
+            fp4_module.enable_fp4_tensor_cores()?;
+            println!(
+                "  FP4 enabled: stochastic_rounding={}",
+                config.fp4_stochastic_rounding
+            );
+            Some(fp4_module)
+        } else {
+            None
+        };
+
         Ok(Self {
             model,
             varmap,
@@ -428,6 +457,7 @@ impl Trainer {
             base_lr_lion,
             mtp,
             collider,
+            fp4,
         })
     }
 
@@ -440,10 +470,23 @@ impl Trainer {
         let (batch, seq_len, _hidden_dim) = hidden.dims3()?;
         let vocab = self.config.vocab_size;
 
+        // Optional FP4 path via STE: forward uses quantized activations while
+        // gradients flow through the original hidden states.
+        let hidden_for_lm = if let Some(ref fp4) = self.fp4 {
+            let hidden_detached = hidden.detach();
+            let hidden_quant = fp4.quantize_fp4(&hidden_detached)?;
+            let delta = (&hidden_quant - &hidden_detached)?;
+            (&hidden + delta)?
+        } else {
+            hidden.clone()
+        };
+
         // E3: Collider token filtering (sparse token path for LM head + loss).
         // Build a binary keep-mask from detached logits to avoid autograd overhead.
         let collider_mask = if let Some(ref collider) = self.collider {
-            let logits_detached = self.model.project_hidden_to_logits(&hidden.detach())?;
+            let logits_detached = self
+                .model
+                .project_hidden_to_logits(&hidden_for_lm.detach())?;
             let importance = collider.compute_importance(&logits_detached, target_ids)?;
             Some(collider.create_mask(&importance)?)
         } else {
@@ -451,19 +494,18 @@ impl Trainer {
         };
 
         // Primary cross-entropy loss with label smoothing.
-        // Collider path compacts to kept rows using gather/index_select so dropped rows are
-        // removed from dense LM-head/loss compute.
+        // Collider sparse-backward path compacts to kept rows and runs dense GEMM on compacted tensors.
         let (logits_flat, targets_flat) = if let Some(mask) = collider_mask.as_ref() {
             let collider = self
                 .collider
                 .as_ref()
                 .ok_or_else(|| candle_core::Error::Msg("Collider missing".to_string()))?;
-            let (hidden_kept, keep_indices) = collider.compact_hidden(&hidden, mask)?;
+            let (hidden_kept, targets_kept) =
+                collider.sparse_backward(&hidden_for_lm, target_ids, mask)?;
             let logits_kept = self.model.project_hidden_to_logits(&hidden_kept)?;
-            let targets_kept = collider.compact_targets(target_ids, &keep_indices)?;
             (logits_kept, targets_kept)
         } else {
-            let logits_dense = self.model.project_hidden_to_logits(&hidden)?;
+            let logits_dense = self.model.project_hidden_to_logits(&hidden_for_lm)?;
             let logits_flat = logits_dense.reshape((batch * seq_len, vocab))?;
             let targets_flat = target_ids.reshape(batch * seq_len)?;
             (logits_flat, targets_flat)
@@ -852,6 +894,8 @@ mod tests {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,

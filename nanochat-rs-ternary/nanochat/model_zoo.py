@@ -4,17 +4,10 @@ Downloads and caches pre-trained ternary models with SHA256 verification.
 """
 
 import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Dict, Optional
-
-try:
-    import requests
-    from tqdm import tqdm
-except ImportError:
-    print("Error: requires 'requests' and 'tqdm'")
-    print("Install with: pip install requests tqdm")
-    raise
 
 # Model registry with HuggingFace URLs and metadata
 MODELS: Dict[str, Dict] = {
@@ -67,6 +60,42 @@ MODELS: Dict[str, Dict] = {
         "layers": 32,
     },
 }
+
+CHECKSUM_OVERRIDES_PATH = Path(__file__).with_name("model_zoo_checksums.json")
+
+
+def compute_file_sha256(path: Path) -> str:
+    """Compute SHA256 for a file."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _load_checksum_overrides():
+    """Load checksum overrides from model_zoo_checksums.json if present."""
+    if not CHECKSUM_OVERRIDES_PATH.exists():
+        return
+
+    with open(CHECKSUM_OVERRIDES_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    for model_name, values in data.items():
+        if model_name not in MODELS:
+            continue
+        gguf = values.get("sha256_gguf")
+        mhc = values.get("sha256_mhc")
+        if gguf:
+            MODELS[model_name]["sha256_gguf"] = gguf
+        if mhc:
+            MODELS[model_name]["sha256_mhc"] = mhc
+
+
+_load_checksum_overrides()
 
 
 class ModelZoo:
@@ -161,6 +190,15 @@ class ModelZoo:
         self, url: str, dest: Path, expected_hash: Optional[str] = None
     ):
         """Download a file with progress bar and optional checksum verification."""
+        try:
+            import requests
+            from tqdm import tqdm
+        except ImportError as e:
+            raise RuntimeError(
+                "Downloading models requires 'requests' and 'tqdm'. "
+                "Install with: pip install requests tqdm"
+            ) from e
+
         response = requests.get(url, stream=True)
         response.raise_for_status()
 
@@ -181,7 +219,14 @@ class ModelZoo:
                     sha256.update(chunk)
 
         # Verify checksum
-        if expected_hash and expected_hash != "TO_BE_FILLED":
+        if expected_hash:
+            if expected_hash == "TO_BE_FILLED":
+                print(
+                    f"  ⚠ Checksum for {dest.name} is not registered yet; "
+                    "skipping verification."
+                )
+                return
+
             actual_hash = sha256.hexdigest()
             if actual_hash != expected_hash:
                 dest.unlink()  # Remove corrupted file
@@ -192,6 +237,34 @@ class ModelZoo:
                     f"File may be corrupted. Please try again."
                 )
             print(f"  ✓ Checksum verified")
+
+    def verify_cached_model(self, name: str) -> bool:
+        """Verify cached model file checksums if registered.
+
+        Returns:
+            True if verification succeeds (or hashes are not yet registered).
+        """
+        if name not in MODELS:
+            raise ValueError(f"Unknown model: {name}")
+
+        model_dir = self.cache_dir / name
+        gguf_path = model_dir / "model.gguf"
+        mhc_path = model_dir / "model.mhc"
+        if not gguf_path.exists() or not mhc_path.exists():
+            raise FileNotFoundError(f"Cached files missing for model '{name}'")
+
+        info = MODELS[name]
+        expected_gguf = info.get("sha256_gguf")
+        expected_mhc = info.get("sha256_mhc")
+        actual_gguf = compute_file_sha256(gguf_path)
+        actual_mhc = compute_file_sha256(mhc_path)
+
+        ok = True
+        if expected_gguf and expected_gguf != "TO_BE_FILLED":
+            ok = ok and actual_gguf == expected_gguf
+        if expected_mhc and expected_mhc != "TO_BE_FILLED":
+            ok = ok and actual_mhc == expected_mhc
+        return ok
 
     def load(self, name: str):
         """Download if needed and return model paths.
@@ -236,7 +309,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="nanochat model zoo CLI")
     parser.add_argument(
         "command",
-        choices=["list", "download"],
+        choices=["list", "download", "hash", "verify"],
         help="Command to execute",
     )
     parser.add_argument(
@@ -254,6 +327,14 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip checksum verification",
     )
+    parser.add_argument(
+        "--gguf-path",
+        help="Path to local GGUF file (for hash command)",
+    )
+    parser.add_argument(
+        "--mhc-path",
+        help="Path to local mHC file (for hash command)",
+    )
 
     args = parser.parse_args()
     zoo = ModelZoo()
@@ -264,3 +345,18 @@ if __name__ == "__main__":
         if not args.model:
             parser.error("Model name required for download command")
         zoo.download(args.model, force=args.force, verify_checksum=not args.no_verify)
+    elif args.command == "hash":
+        if not args.gguf_path or not args.mhc_path:
+            parser.error("--gguf-path and --mhc-path are required for hash command")
+        gguf_sha = compute_file_sha256(Path(args.gguf_path))
+        mhc_sha = compute_file_sha256(Path(args.mhc_path))
+        print(f"sha256_gguf={gguf_sha}")
+        print(f"sha256_mhc={mhc_sha}")
+    elif args.command == "verify":
+        if not args.model:
+            parser.error("Model name required for verify command")
+        ok = zoo.verify_cached_model(args.model)
+        if ok:
+            print(f"✓ Checksum verification passed for {args.model}")
+        else:
+            raise SystemExit(f"Checksum verification failed for {args.model}")

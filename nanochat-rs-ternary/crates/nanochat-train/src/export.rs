@@ -358,6 +358,8 @@ mod tests {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = ["crates/*", "bindings/python"]
 
 [workspace.dependencies]
 bytemuck = { version = "1.14", features = ["derive"] }

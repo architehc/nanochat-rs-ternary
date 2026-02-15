@@ -4,6 +4,7 @@
 //! - load(path): Load model from GGUF + mHC
 //! - generate(prompt, max_tokens): Generate text
 //! - generate_batch(prompts, max_tokens): Batch generation
+#![allow(clippy::useless_conversion)]
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;

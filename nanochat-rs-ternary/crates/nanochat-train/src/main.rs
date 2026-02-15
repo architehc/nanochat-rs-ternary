@@ -142,6 +142,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "d20-e3" | "d20_e3" | "d20-e3-full" | "d20_e3_full" => {
                     nanochat_train::config::TrainConfig::d20_e3_full()
                 }
+                "d20-e3-fp4" | "d20_e3_fp4" => nanochat_train::config::TrainConfig::d20_e3_fp4(),
                 "nano-125m" | "nano_125m" => nanochat_train::config::TrainConfig::nano_125m(),
                 "nano-1b" | "nano_1b" => nanochat_train::config::TrainConfig::nano_1b(),
                 "medium-3b" | "medium_3b" => nanochat_train::config::TrainConfig::medium_3b(),
@@ -150,7 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "test-8bit" | "test_8bit" => nanochat_train::config::TrainConfig::test_8bit(),
                 other => {
                     tracing::error!(
-                        "Unknown config: {}. Use d20, d20-mtp, d20-e3-full, nano-125m, nano-1b, medium-3b, large-7b, tiny-cpu, or test-8bit.",
+                        "Unknown config: {}. Use d20, d20-mtp, d20-e3-full, d20-e3-fp4, nano-125m, nano-1b, medium-3b, large-7b, tiny-cpu, or test-8bit.",
                         other
                     );
                     std::process::exit(1);

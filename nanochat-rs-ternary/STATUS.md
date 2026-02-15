@@ -26,12 +26,12 @@
 - Config available: `d20-mtp`
 
 ### Collider Token Filtering
-**Status**: 🔧 **PARTIALLY IMPLEMENTED (ENABLED MASKING)**
+**Status**: ✅ **IMPLEMENTED (SPARSE COMPACTION PATH)**
 
 - Complete implementation in `crates/nanochat-train/src/collider.rs`
-- Importance scoring and gradient masking are active in training
-- Sparse backward / sparse GEMM transform is still pending
-- Needs vectorization optimization for strong speedups
+- Importance scoring and sparse token compaction are active in training
+- Sparse backward path compacts kept tokens before LM-head/loss compute
+- Further performance tuning remains possible, but feature path is active
 
 ### Other E3 Features
 - ✅ **8-bit Muon**: Implemented and validated (`optim/muon_quantized.rs`)

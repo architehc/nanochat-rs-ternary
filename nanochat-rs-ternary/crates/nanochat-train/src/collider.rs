@@ -21,12 +21,10 @@ pub struct Collider {
     /// Target sparsity ratio (0-1): fraction of tokens to filter
     sparsity_target: f64,
 
-    /// Apply filtering during backward pass (TODO: not yet implemented)
-    #[allow(dead_code)]
+    /// Apply filtering during backward pass.
     filter_backward: bool,
 
-    /// Transform sparse GEMMs to dense (gather important tokens) (TODO: not yet implemented)
-    #[allow(dead_code)]
+    /// Transform sparse GEMMs to dense (gather important tokens).
     transform_gemm: bool,
 }
 
@@ -177,6 +175,50 @@ impl Collider {
         let (batch, seq_len) = targets.dims2()?;
         let flat = targets.reshape(batch * seq_len)?;
         flat.index_select(indices, 0)
+    }
+
+    /// Transform sparse token path into a compact dense GEMM input.
+    ///
+    /// Returns:
+    /// - compact hidden activations `[n_kept, hidden_dim]`
+    /// - kept token indices over flattened `[batch, seq]`
+    pub fn transform_sparse_gemms(
+        &self,
+        hidden: &Tensor,
+        mask: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        self.compact_hidden(hidden, mask)
+    }
+
+    /// Prepare sparse-backward inputs by filtering/compacting hidden + targets.
+    ///
+    /// This is the main Collider "sparse backward" entrypoint used by training.
+    /// When `transform_gemm` is enabled, low-importance rows are removed so the LM
+    /// head/loss path runs on a smaller dense matrix.
+    pub fn sparse_backward(
+        &self,
+        hidden: &Tensor,
+        targets: &Tensor,
+        mask: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        if !self.filter_backward {
+            let (batch, seq_len, hidden_dim) = hidden.dims3()?;
+            let hidden_flat = hidden.reshape((batch * seq_len, hidden_dim))?;
+            let targets_flat = targets.reshape(batch * seq_len)?;
+            return Ok((hidden_flat, targets_flat));
+        }
+
+        if self.transform_gemm {
+            let (hidden_kept, indices) = self.transform_sparse_gemms(hidden, mask)?;
+            let targets_kept = self.compact_targets(targets, &indices)?;
+            Ok((hidden_kept, targets_kept))
+        } else {
+            let filtered = self.filter_activations(hidden, mask)?;
+            let (batch, seq_len, hidden_dim) = filtered.dims3()?;
+            let hidden_flat = filtered.reshape((batch * seq_len, hidden_dim))?;
+            let targets_flat = targets.reshape(batch * seq_len)?;
+            Ok((hidden_flat, targets_flat))
+        }
     }
 
     /// Apply token filtering to activations.
@@ -363,6 +405,28 @@ mod tests {
             vec![vec![1.0, 10.0], vec![3.0, 30.0]]
         );
         assert_eq!(targets_compact.to_vec1::<u32>().unwrap(), vec![11, 33]);
+    }
+
+    #[test]
+    fn test_sparse_backward_compacts_rows() {
+        let device = Device::Cpu;
+        let collider = Collider::new(0.5, 0.35);
+
+        let hidden = Tensor::new(
+            &[[[1.0f32, 10.0], [2.0, 20.0], [3.0, 30.0], [4.0, 40.0]]],
+            &device,
+        )
+        .unwrap();
+        let targets = Tensor::new(&[[11u32, 22u32, 33u32, 44u32]], &device).unwrap();
+        let mask = Tensor::new(&[[1.0f32, 0.0, 1.0, 0.0]], &device).unwrap();
+
+        let (hidden_kept, targets_kept) =
+            collider.sparse_backward(&hidden, &targets, &mask).unwrap();
+        assert_eq!(
+            hidden_kept.to_vec2::<f32>().unwrap(),
+            vec![vec![1.0, 10.0], vec![3.0, 30.0]]
+        );
+        assert_eq!(targets_kept.to_vec1::<u32>().unwrap(), vec![11, 33]);
     }
 
     #[test]

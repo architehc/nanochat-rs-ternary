@@ -34,6 +34,10 @@ fn default_async_prefetch_size() -> usize {
     8 // Prefetch 8 batches (smooths variance, low memory overhead)
 }
 
+fn default_fp4_stochastic_rounding() -> bool {
+    true
+}
+
 /// Adaptive loop control for inference (LoopLM).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveLoopConfig {
@@ -151,6 +155,14 @@ pub struct TrainConfig {
     #[serde(default = "default_async_prefetch_size")]
     pub async_prefetch_size: usize,
 
+    // FP4 mixed precision (Blackwell-oriented)
+    /// Enable software-simulated FP4 activation quantization in training loop.
+    #[serde(default)]
+    pub use_fp4: bool,
+    /// Use stochastic rounding behavior in FP4 module.
+    #[serde(default = "default_fp4_stochastic_rounding")]
+    pub fp4_stochastic_rounding: bool,
+
     // Stage-1 distillation hyperparams (LoopLM training)
     /// Teacher model path for distillation (None = no distillation)
     #[serde(default)]
@@ -237,6 +249,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -284,6 +298,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -351,6 +367,8 @@ impl TrainConfig {
             use_async_loader: true,
             async_n_workers: 6,
             async_prefetch_size: 12,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
 
             // Distillation (disabled)
             distill_teacher: None,
@@ -400,6 +418,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -456,6 +476,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
             distill_teacher: None, // Can be set to teacher model path
             distill_kl_weight: 1.0,
             loop_scale_penalty: 0.1, // Annealed during training
@@ -504,6 +526,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -551,6 +575,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -598,6 +624,8 @@ impl TrainConfig {
             use_async_loader: true,
             async_n_workers: 8,
             async_prefetch_size: 16,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
@@ -645,10 +673,20 @@ impl TrainConfig {
             use_async_loader: true,
             async_n_workers: 8,
             async_prefetch_size: 16,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
         }
+    }
+
+    /// E3 profile with FP4 path enabled for Blackwell-oriented experimentation.
+    pub fn d20_e3_fp4() -> Self {
+        let mut cfg = Self::d20_e3_full();
+        cfg.use_fp4 = true;
+        cfg.fp4_stochastic_rounding = true;
+        cfg
     }
 }
 
