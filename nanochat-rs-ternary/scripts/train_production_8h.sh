@@ -16,104 +16,30 @@ set -euo pipefail
 
 # Configuration
 EXPERIMENT_NAME="nanochat_production_8h_$(date +%Y%m%d_%H%M%S)"
-WORKSPACE_DIR="$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/.." WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary" pwd)"
+WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNS_DIR="${WORKSPACE_DIR}/runs/${EXPERIMENT_NAME}"
 CHECKPOINTS_DIR="${RUNS_DIR}/checkpoints"
 TENSORBOARD_DIR="${RUNS_DIR}/tensorboard"
 
 # Training hyperparameters (8 hours = 480 minutes * 500 steps/min = 240,000 steps)
 TOTAL_STEPS=240000
-BATCH_SIZE=8
-SEQ_LENGTH=2048
-LEARNING_RATE=0.02
-WARMUP_STEPS=5000
 CHECKPOINT_INTERVAL=10000
 LOG_INTERVAL=100
+N_SAMPLES=5000000
 
-# Model configuration
-MODEL_SIZE="125m"  # Start with smaller model for production validation
-VOCAB_SIZE=32000
-NUM_LAYERS=12
-HIDDEN_DIM=768
-NUM_HEADS=12
-FFN_MULT=3.5
-
-# Dataset
-DATASET_URL="https://huggingface.co/datasets/bigcode/the-stack-dedup/resolve/main/data/rust/train-00000-of-00016.parquet"
-DATASET_PATH="${WORKSPACE_DIR}/data/rust_stack_train.parquet"
+# Model configuration preset
+TRAIN_CONFIG="d20-e3-full"
+MODEL_SIZE="560m (d20-e3-full)"
 
 # Create directories
 mkdir -p "${RUNS_DIR}"
 mkdir -p "${CHECKPOINTS_DIR}"
 mkdir -p "${TENSORBOARD_DIR}"
-mkdir -p "${WORKSPACE_DIR}/data"
-
-# Download dataset if not present
-if [ ! -f "${DATASET_PATH}" ]; then
-    echo "Downloading dataset..."
-    curl -L "${DATASET_URL}" -o "${DATASET_PATH}"
-fi
 
 # Build with TensorBoard support
 echo "Building nanochat-train with TensorBoard support..."
 cd "${WORKSPACE_DIR}"
 cargo build --release -p nanochat-train --features tensorboard,cuda
-
-# Create configuration file
-cat > "${RUNS_DIR}/config.toml" <<EOF
-[model]
-vocab_size = ${VOCAB_SIZE}
-hidden_dim = ${HIDDEN_DIM}
-num_layers = ${NUM_LAYERS}
-num_heads = ${NUM_HEADS}
-num_kv_heads = 4
-ffn_mult = ${FFN_MULT}
-max_seq_len = ${SEQ_LENGTH}
-group_size = 128
-mhc_n_streams = 2
-
-[training]
-total_steps = ${TOTAL_STEPS}
-batch_size = ${BATCH_SIZE}
-seq_length = ${SEQ_LENGTH}
-learning_rate = ${LEARNING_RATE}
-warmup_steps = ${WARMUP_STEPS}
-weight_decay = 0.01
-grad_clip = 1.0
-entropy_weight = 0.01
-
-# E3 optimizations
-use_mtp = true
-mtp_n_future_tokens = 4
-use_async_loader = true
-num_workers = 4
-prefetch_batches = 8
-
-# Optimizer: Muon for linear layers, Lion for other params
-optimizer_type = "muon"
-muon_momentum = 0.95
-lion_lr_mult = 0.005
-lion_weight_decay = 0.1
-
-# LR schedule: Warmup-Stable-Decay
-schedule_type = "wsd"
-stable_ratio = 0.8
-min_lr_ratio = 0.1
-
-[checkpointing]
-checkpoint_dir = "${CHECKPOINTS_DIR}"
-checkpoint_interval = ${CHECKPOINT_INTERVAL}
-keep_last_n = 5
-
-[logging]
-log_interval = ${LOG_INTERVAL}
-tensorboard_dir = "${TENSORBOARD_DIR}"
-structured_logging = true
-
-[data]
-dataset_path = "${DATASET_PATH}"
-tokenizer_path = "gpt2"
-EOF
 
 # Start TensorBoard in background
 echo "Starting TensorBoard on http://localhost:6006"
@@ -138,25 +64,29 @@ echo "---"
 
 cd "${WORKSPACE_DIR}"
 RUST_LOG=info target/release/nanochat-train train \
-    --config d20 \
+    --config "${TRAIN_CONFIG}" \
     --dataset synthetic \
+    --n-samples "${N_SAMPLES}" \
     --device cuda \
     --checkpoint-dir "${CHECKPOINTS_DIR}" \
     2>&1 | tee "${RUNS_DIR}/training.log"
 
 # Save final checkpoint
 echo "Training complete. Saving final model..."
-FINAL_CHECKPOINT="${CHECKPOINTS_DIR}/final_step_${TOTAL_STEPS}.gguf"
+FINAL_GGUF="${CHECKPOINTS_DIR}/final_step_${TOTAL_STEPS}.gguf"
+FINAL_MHC="${CHECKPOINTS_DIR}/final_step_${TOTAL_STEPS}.mhc"
 
 # Export to GGUF for inference
 if [ -f "${CHECKPOINTS_DIR}/checkpoint_${TOTAL_STEPS}.safetensors" ]; then
-    echo "Exporting to GGUF format..."
+    echo "Exporting to GGUF + MHC format..."
     cargo run --release -p nanochat-train -- \
         export \
         --checkpoint "${CHECKPOINTS_DIR}/checkpoint_${TOTAL_STEPS}.safetensors" \
-        --output "${FINAL_CHECKPOINT}"
+        --gguf "${FINAL_GGUF}" \
+        --mhc "${FINAL_MHC}"
 
-    echo "Final model saved to: ${FINAL_CHECKPOINT}"
+    echo "Final model saved to: ${FINAL_GGUF}"
+    echo "Final mHC saved to: ${FINAL_MHC}"
 fi
 
 # Generate training summary
@@ -170,10 +100,10 @@ Total Steps: ${TOTAL_STEPS}
 Model Size: ${MODEL_SIZE}
 
 Configuration:
-- Batch Size: ${BATCH_SIZE}
-- Sequence Length: ${SEQ_LENGTH}
-- Learning Rate: ${LEARNING_RATE}
-- Warmup Steps: ${WARMUP_STEPS}
+- Config preset: ${TRAIN_CONFIG}
+- Synthetic samples: ${N_SAMPLES}
+- Checkpoint interval: ${CHECKPOINT_INTERVAL}
+- Log interval: ${LOG_INTERVAL}
 
 Features Enabled:
 - Multi-Token Prediction (4 future tokens)
@@ -188,7 +118,8 @@ Hardware:
 - Throughput: ~500 steps/minute
 
 Results:
-- Final checkpoint: ${FINAL_CHECKPOINT}
+- Final model (GGUF): ${FINAL_GGUF}
+- Final routing (MHC): ${FINAL_MHC}
 - TensorBoard logs: ${TENSORBOARD_DIR}
 - Full training log: ${RUNS_DIR}/training.log
 
@@ -197,7 +128,9 @@ To view metrics:
 
 To run inference:
   cargo run --release -p nanochat-serve -- \\
-    --model ${FINAL_CHECKPOINT} \\
+    --model ${FINAL_GGUF} \\
+    --mhc ${FINAL_MHC} \\
+    --tokenizer models/gpt2-tokenizer.json \\
     --port 8000
 SUMMARY
 

@@ -93,7 +93,7 @@ impl Collider {
         }
 
         // Convert back to tensor and reshape
-        let losses_tensor = Tensor::from_vec(losses, (batch_size, seq_len), &log_probs.device())?;
+        let losses_tensor = Tensor::from_vec(losses, (batch_size, seq_len), log_probs.device())?;
 
         Ok(losses_tensor)
     }

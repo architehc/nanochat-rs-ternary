@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-WORKSPACE_DIR="$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/.." WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary" pwd)"
+WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXPERIMENT_NAME="medium_3b_moe_$(date +%Y%m%d_%H%M%S)"
 RUNS_DIR="${WORKSPACE_DIR}/runs/${EXPERIMENT_NAME}"
 
@@ -33,7 +33,7 @@ echo ""
 
 # Train
 RUST_LOG=info target/release/nanochat-train train \
-    --config nano-1b \
+    --config medium-3b \
     --dataset synthetic \
     --device cuda \
     --checkpoint-dir "${RUNS_DIR}/checkpoints" \
@@ -45,6 +45,7 @@ echo ""
 echo "To export to GGUF:"
 echo "  cargo run --release -p nanochat-train -- export \\"
 echo "    --checkpoint ${RUNS_DIR}/final.safetensors \\"
-echo "    --output models/nanochat-3b-moe.gguf"
+echo "    --gguf models/nanochat-3b-moe.gguf \\"
+echo "    --mhc models/nanochat-3b-moe.mhc"
 echo ""
 echo "Expected quality: Competitive with GPT-3.5 on Rust code generation"

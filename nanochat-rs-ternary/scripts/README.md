@@ -118,8 +118,8 @@ After training:
 ```bash
 cargo run --release -p nanochat-train -- export \
     --checkpoint runs/experiment/checkpoint_N.safetensors \
-    --output models/nanochat.gguf \
-    --mhc-output models/nanochat.mhc
+    --gguf models/nanochat.gguf \
+    --mhc models/nanochat.mhc
 ```
 
 ## Inference
@@ -130,6 +130,7 @@ Start server:
 cargo run --release -p nanochat-serve -- \
     --model models/nanochat.gguf \
     --mhc models/nanochat.mhc \
+    --tokenizer models/gpt2-tokenizer.json \
     --port 8000
 ```
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Quick E3 Benchmark using predefined configs
-# Compares baseline vs E3-full
+# Compares baseline vs MTP-only
 # Runtime: ~10 minutes (500 steps each)
 
 set -euo pipefail
@@ -10,7 +10,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-WORKSPACE_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"
+WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RESULTS_DIR="${WORKSPACE_DIR}/benchmark_results_quick_$(date +%Y%m%d_%H%M%S)"
 
 echo -e "${GREEN}========================================${NC}"
@@ -40,10 +40,10 @@ for name in "${!configs[@]}"; do
     output_dir="${RESULTS_DIR}/${name}"
     mkdir -p "${output_dir}"
 
-    # Determine batch size based on config (E3-full is larger, needs smaller batch)
+    # Determine batch size based on config.
     batch_size=4
     if [[ "${config}" == *"e3"* ]]; then
-        batch_size=1  # Large model needs smaller batch to fit in GPU
+        batch_size=1
     fi
 
     # Run 500 steps (~2-3 minutes on GPU)
@@ -73,7 +73,7 @@ cat > "${RESULTS_DIR}/REPORT.md" <<EOF
 # E3 Quick Benchmark Results
 
 **Date**: $(date)
-**Configs**: Baseline (d20) vs E3 Full (d20-e3-full)
+**Configs**: Baseline (d20) vs MTP Only (d20-mtp)
 
 ---
 

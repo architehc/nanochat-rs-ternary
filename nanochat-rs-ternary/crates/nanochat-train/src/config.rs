@@ -556,6 +556,53 @@ impl TrainConfig {
             loop_scale_penalty: 0.0,
         }
     }
+
+    /// Large model (~3B params).
+    pub fn medium_3b() -> Self {
+        Self {
+            dim: 2048,
+            n_layers: 28,
+            n_heads: 32,
+            n_kv_heads: 8,
+            ffn_mult: 3.5,
+            vocab_size: 50257,
+            max_seq_len: 4096,
+            group_size: 128,
+            mhc_n_streams: 4,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: None,
+
+            lr: 0.01,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 16,
+            warmup_steps: 5000,
+            total_steps: 200_000,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+            use_8bit_optim: true,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+            use_mtp: true,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: true,
+            async_n_workers: 8,
+            async_prefetch_size: 16,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -608,5 +655,13 @@ mod tests {
         // d20 should be roughly 15M-30M
         assert!(params > 10_000_000, "Too few params: {}", params);
         assert!(params < 50_000_000, "Too many params: {}", params);
+    }
+
+    #[test]
+    fn test_medium_3b_param_estimate() {
+        let cfg = TrainConfig::medium_3b();
+        let params = cfg.param_count_estimate();
+        assert!(params > 1_600_000_000, "Too few params: {}", params);
+        assert!(params < 2_500_000_000, "Too many params: {}", params);
     }
 }

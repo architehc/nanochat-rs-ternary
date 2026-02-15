@@ -26,7 +26,7 @@ trap "kill $TB_PID 2>/dev/null || true" EXIT
 
 # Train
 RUST_LOG=info target/release/nanochat-train train \
-    --config d20 \
+    --config d20-e3-full \
     --dataset synthetic \
     --device cuda \
     --checkpoint-dir "${RUNS_DIR}/checkpoints" \
@@ -38,4 +38,5 @@ echo ""
 echo "To export to GGUF:"
 echo "  cargo run --release -p nanochat-train -- export \\"
 echo "    --checkpoint ${RUNS_DIR}/final.safetensors \\"
-echo "    --output models/nanochat-560m.gguf"
+echo "    --gguf models/nanochat-560m.gguf \\"
+echo "    --mhc models/nanochat-560m.mhc"
