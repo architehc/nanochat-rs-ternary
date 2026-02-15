@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_layer_stats_identity() {
-        let layer = MhcLiteN2::new_identity();
+        let layer = MhcLiteN2::from_weights(5.0, [0.0, 0.0], [0.5, 0.5], [0.0, 0.0], [0.5, 0.5]);
         let stats = MhcAnalyzer::analyze_n2_layer(&layer, 0);
 
         // Debug: print actual values

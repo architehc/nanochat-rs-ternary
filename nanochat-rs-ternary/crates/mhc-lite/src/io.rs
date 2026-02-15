@@ -1,7 +1,7 @@
 // io.rs — Binary serialization for mHC parameters
 //
 // File format:
-//   Header: [magic:u32 = 0x6D484321][version:u32 = 1][n_layers:u32][n_streams:u32]
+//   Header: [magic:u32 = 0x6D484321][version:u32 = 2][n_layers:u32][n_streams:u32]
 //   Per layer (N=2): 36 bytes
 //   Per layer (N=4): 160 bytes
 
@@ -14,7 +14,8 @@ use crate::n4::MhcLiteN4;
 
 /// Magic number: "mHC!" in little-endian
 pub const MHC_MAGIC: u32 = 0x6D484321;
-pub const MHC_VERSION: u32 = 1;
+pub const MHC_VERSION: u32 = 2;
+pub const MHC_VERSION_V1: u32 = 1;
 const MAX_LAYERS: u32 = 10_000;
 
 /// File header for mHC binary format.
@@ -50,7 +51,7 @@ pub fn load_mhc_file<P: AsRef<Path>>(path: P) -> io::Result<(MhcFileHeader, Vec<
 
     file.read_exact(&mut buf4)?;
     let version = u32::from_le_bytes(buf4);
-    if version != MHC_VERSION {
+    if version != MHC_VERSION && version != MHC_VERSION_V1 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("unsupported mHC version: {}", version),

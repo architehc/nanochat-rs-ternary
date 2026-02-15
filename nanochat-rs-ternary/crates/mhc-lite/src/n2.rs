@@ -16,6 +16,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum N2DecodeError {
     TooShort { expected: usize, actual: usize },
+    NonFinite { field: &'static str },
 }
 
 impl fmt::Display for N2DecodeError {
@@ -27,6 +28,9 @@ impl fmt::Display for N2DecodeError {
                     "N2 decode failed: expected at least {} bytes, got {} bytes",
                     expected, actual
                 )
+            }
+            N2DecodeError::NonFinite { field } => {
+                write!(f, "N2 decode failed: non-finite value in field '{field}'")
             }
         }
     }
@@ -51,11 +55,14 @@ pub struct MhcLiteN2 {
 }
 
 impl MhcLiteN2 {
-    /// Create with identity initialization (alpha=1 -> pure identity residual)
+    /// Create with neutral initialization.
+    ///
+    /// NOTE: despite the historical name, this intentionally uses
+    /// `alpha_logit=0.0` (balanced residual) to avoid identity-bypass behavior.
     pub fn new_identity() -> Self {
         Self {
-            // Large positive logit -> sigmoid ~ 1 -> identity matrix
-            alpha_logit: 5.0,
+            // Balanced residual mixing at initialization.
+            alpha_logit: 0.0,
             // Equal mixing for pre/post, biased toward identity-like behavior
             pre_logits: [0.0, 0.0],
             pre_bias: [0.5, 0.5],
@@ -237,12 +244,35 @@ impl MhcLiteN2 {
             ])
         };
 
+        let alpha_logit = f(0);
+        let pre_logits = [f(4), f(8)];
+        let pre_bias = [f(12), f(16)];
+        let post_logits = [f(20), f(24)];
+        let post_bias = [f(28), f(32)];
+
+        let all_values = [
+            ("alpha_logit", alpha_logit),
+            ("pre_logits[0]", pre_logits[0]),
+            ("pre_logits[1]", pre_logits[1]),
+            ("pre_bias[0]", pre_bias[0]),
+            ("pre_bias[1]", pre_bias[1]),
+            ("post_logits[0]", post_logits[0]),
+            ("post_logits[1]", post_logits[1]),
+            ("post_bias[0]", post_bias[0]),
+            ("post_bias[1]", post_bias[1]),
+        ];
+        for (field, value) in all_values {
+            if !value.is_finite() {
+                return Err(N2DecodeError::NonFinite { field });
+            }
+        }
+
         Ok(Self {
-            alpha_logit: f(0),
-            pre_logits: [f(4), f(8)],
-            pre_bias: [f(12), f(16)],
-            post_logits: [f(20), f(24)],
-            post_bias: [f(28), f(32)],
+            alpha_logit,
+            pre_logits,
+            pre_bias,
+            post_logits,
+            post_bias,
         })
     }
 
@@ -272,14 +302,14 @@ mod tests {
     use crate::verify::verify_doubly_stochastic_2x2;
 
     #[test]
-    fn test_n2_identity_init() {
+    fn test_n2_neutral_init() {
         let mhc = MhcLiteN2::new_identity();
         let h = mhc.h_res();
-        // Should be close to identity
-        assert!((h[0][0] - 1.0).abs() < 0.02);
-        assert!(h[0][1].abs() < 0.02);
-        assert!(h[1][0].abs() < 0.02);
-        assert!((h[1][1] - 1.0).abs() < 0.02);
+        // Should be balanced at initialization.
+        assert!((h[0][0] - 0.5).abs() < 1e-6);
+        assert!((h[0][1] - 0.5).abs() < 1e-6);
+        assert!((h[1][0] - 0.5).abs() < 1e-6);
+        assert!((h[1][1] - 0.5).abs() < 1e-6);
         verify_doubly_stochastic_2x2(&h, 1e-6).unwrap();
     }
 
@@ -326,8 +356,7 @@ mod tests {
         let y = MhcLiteN2::collapse_output(&x_out, dim_c);
         assert_eq!(y.len(), 4);
 
-        // With identity init, output should be close to input + layer_contribution
-        // (won't be exact due to sigmoid scaling)
+        // With neutral init, output should remain finite.
         for &val in y.iter() {
             assert!(val.is_finite(), "Output {} is not finite", val);
         }
@@ -358,6 +387,19 @@ mod tests {
     fn test_n2_from_bytes_too_short() {
         let data = vec![0u8; 35]; // one byte short
         assert!(MhcLiteN2::from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn test_n2_from_bytes_rejects_non_finite() {
+        let mut data = vec![0u8; 36];
+        data[0..4].copy_from_slice(&f32::NAN.to_le_bytes());
+        let err = MhcLiteN2::from_bytes(&data).unwrap_err();
+        assert_eq!(
+            err,
+            N2DecodeError::NonFinite {
+                field: "alpha_logit"
+            }
+        );
     }
 
     #[test]

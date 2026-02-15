@@ -354,7 +354,10 @@ impl PlanarWeights {
     /// Quantizes to ternary, packs, and creates both row-major and column-major
     /// layouts with proper alignment.
     pub fn from_row_major(weights: &[f32], rows: usize, cols: usize, group_size: usize) -> Self {
-        assert_eq!(weights.len(), rows * cols);
+        let rows_cols = rows
+            .checked_mul(cols)
+            .expect("from_row_major: rows*cols overflow");
+        assert_eq!(weights.len(), rows_cols);
         assert!(cols.is_multiple_of(4), "cols must be divisible by 4");
         assert!(
             cols.is_multiple_of(group_size),
@@ -379,11 +382,17 @@ impl PlanarWeights {
         let rows_padded = round_up(rows, 64);
 
         // Row-major packed data
-        let mut data = AlignedVec::new_zeroed(rows * kp);
+        let rows_kp = rows
+            .checked_mul(kp)
+            .expect("from_packed_matrix: rows*kp overflow");
+        let mut data = AlignedVec::new_zeroed(rows_kp);
         data[..pm.packed.len()].copy_from_slice(&pm.packed);
 
         // Column-major transpose
-        let mut data_colmaj = AlignedVec::new_zeroed(kp * rows_padded);
+        let kp_rows_padded = kp
+            .checked_mul(rows_padded)
+            .expect("from_packed_matrix: kp*rows_padded overflow");
+        let mut data_colmaj = AlignedVec::new_zeroed(kp_rows_padded);
         for r in 0..rows {
             for c in 0..kp {
                 data_colmaj[c * rows_padded + r] = data[r * kp + c];
@@ -391,11 +400,17 @@ impl PlanarWeights {
         }
 
         // Row-major scales
-        let mut scales_rm = AlignedVec::new_zeroed(rows * gprow);
+        let rows_gprow = rows
+            .checked_mul(gprow)
+            .expect("from_packed_matrix: rows*gprow overflow");
+        let mut scales_rm = AlignedVec::new_zeroed(rows_gprow);
         scales_rm[..pm.scales.len()].copy_from_slice(&pm.scales);
 
         // Group-major scales (transposed)
-        let mut scales_gm = AlignedVec::new_zeroed(gprow * rows_padded);
+        let gprow_rows_padded = gprow
+            .checked_mul(rows_padded)
+            .expect("from_packed_matrix: gprow*rows_padded overflow");
+        let mut scales_gm = AlignedVec::new_zeroed(gprow_rows_padded);
         for r in 0..rows {
             for g in 0..gprow {
                 scales_gm[g * rows_padded + r] = scales_rm[r * gprow + g];
@@ -424,8 +439,12 @@ impl PlanarWeights {
     ) -> Self {
         let kp = cols / 4;
         let gprow = cols / group_size;
-        assert_eq!(packed.len(), rows * kp);
-        assert_eq!(scales.len(), rows * gprow);
+        let rows_kp = rows.checked_mul(kp).expect("from_packed: rows*kp overflow");
+        let rows_gprow = rows
+            .checked_mul(gprow)
+            .expect("from_packed: rows*gprow overflow");
+        assert_eq!(packed.len(), rows_kp);
+        assert_eq!(scales.len(), rows_gprow);
 
         let pm = PackedMatrix {
             packed: packed.to_vec(),

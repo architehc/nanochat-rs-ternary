@@ -144,12 +144,15 @@ pub fn unpack_group(packed: &[u8], scale: f32) -> Vec<f32> {
 /// - `cols % group_size == 0`
 /// - `group_size % 4 == 0`
 pub fn pack_matrix(weights: &[f32], rows: usize, cols: usize, group_size: usize) -> PackedMatrix {
+    let rows_cols = rows
+        .checked_mul(cols)
+        .expect("pack_matrix: rows*cols overflow");
     assert_eq!(
         weights.len(),
-        rows * cols,
+        rows_cols,
         "pack_matrix: weights.len()={} != rows*cols={}",
         weights.len(),
-        rows * cols
+        rows_cols
     );
     assert!(
         cols.is_multiple_of(group_size),
@@ -167,8 +170,14 @@ pub fn pack_matrix(weights: &[f32], rows: usize, cols: usize, group_size: usize)
     let groups_per_row = cols / group_size;
     let bytes_per_group = group_size / 4;
 
-    let mut packed = vec![0u8; rows * bytes_per_row];
-    let mut scales = vec![0.0f32; rows * groups_per_row];
+    let packed_len = rows
+        .checked_mul(bytes_per_row)
+        .expect("pack_matrix: rows*bytes_per_row overflow");
+    let scales_len = rows
+        .checked_mul(groups_per_row)
+        .expect("pack_matrix: rows*groups_per_row overflow");
+    let mut packed = vec![0u8; packed_len];
+    let mut scales = vec![0.0f32; scales_len];
 
     for r in 0..rows {
         let row_start = r * cols;
@@ -198,7 +207,11 @@ pub fn pack_matrix(weights: &[f32], rows: usize, cols: usize, group_size: usize)
 
 /// Unpack a PackedMatrix back to row-major floats.
 pub fn unpack_matrix(pm: &PackedMatrix) -> Vec<f32> {
-    let mut result = vec![0.0f32; pm.rows * pm.cols];
+    let out_len = pm
+        .rows
+        .checked_mul(pm.cols)
+        .expect("unpack_matrix: rows*cols overflow");
+    let mut result = vec![0.0f32; out_len];
     let bytes_per_group = pm.group_size / 4;
     let groups_per_row = pm.groups_per_row();
     let bytes_per_row = pm.bytes_per_row();

@@ -32,17 +32,13 @@ jobs:
 
     - name: Check formatting
       run: cargo fmt --all -- --check
-      working-directory: ./nanochat-rs-ternary
 
     - name: Run clippy
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      working-directory: ./nanochat-rs-ternary
 
     - name: Run tests
       run: cargo test --workspace --verbose
-      working-directory: ./nanochat-rs-ternary
       timeout-minutes: 30
 
     - name: Build release
       run: cargo build --release --workspace
-      working-directory: ./nanochat-rs-ternary

@@ -17,6 +17,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum N4DecodeError {
     TooShort { expected: usize, actual: usize },
+    NonFinite { field: &'static str, index: usize },
 }
 
 impl fmt::Display for N4DecodeError {
@@ -27,6 +28,12 @@ impl fmt::Display for N4DecodeError {
                     f,
                     "N4 decode failed: expected at least {} bytes, got {} bytes",
                     expected, actual
+                )
+            }
+            N4DecodeError::NonFinite { field, index } => {
+                write!(
+                    f,
+                    "N4 decode failed: non-finite value in field '{field}' at index {index}"
                 )
             }
         }
@@ -285,6 +292,47 @@ impl MhcLiteN4 {
             post_bias[i] = f(144 + i * 4);
         }
 
+        for (i, v) in res_logits.iter().enumerate() {
+            if !v.is_finite() {
+                return Err(N4DecodeError::NonFinite {
+                    field: "res_logits",
+                    index: i,
+                });
+            }
+        }
+        for (i, v) in pre_logits.iter().enumerate() {
+            if !v.is_finite() {
+                return Err(N4DecodeError::NonFinite {
+                    field: "pre_logits",
+                    index: i,
+                });
+            }
+        }
+        for (i, v) in pre_bias.iter().enumerate() {
+            if !v.is_finite() {
+                return Err(N4DecodeError::NonFinite {
+                    field: "pre_bias",
+                    index: i,
+                });
+            }
+        }
+        for (i, v) in post_logits.iter().enumerate() {
+            if !v.is_finite() {
+                return Err(N4DecodeError::NonFinite {
+                    field: "post_logits",
+                    index: i,
+                });
+            }
+        }
+        for (i, v) in post_bias.iter().enumerate() {
+            if !v.is_finite() {
+                return Err(N4DecodeError::NonFinite {
+                    field: "post_bias",
+                    index: i,
+                });
+            }
+        }
+
         Ok(Self {
             res_logits,
             pre_logits,
@@ -462,6 +510,20 @@ mod tests {
     fn test_n4_from_bytes_too_short() {
         let data = vec![0u8; 159]; // one byte short
         assert!(MhcLiteN4::from_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn test_n4_from_bytes_rejects_non_finite() {
+        let mut data = vec![0u8; 160];
+        data[0..4].copy_from_slice(&f32::NAN.to_le_bytes());
+        let err = MhcLiteN4::from_bytes(&data).unwrap_err();
+        assert_eq!(
+            err,
+            N4DecodeError::NonFinite {
+                field: "res_logits",
+                index: 0
+            }
+        );
     }
 
     #[test]

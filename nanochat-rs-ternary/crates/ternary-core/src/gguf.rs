@@ -157,11 +157,17 @@ impl GgufFile {
     ///
     /// For Q1_58 tensors, returns packed bytes + f32 scales concatenated.
     pub fn tensor_data(&self, tensor: &TensorDescriptor) -> io::Result<&[u8]> {
+        let tensor_offset = usize::try_from(tensor.offset).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "tensor offset does not fit usize",
+            )
+        })?;
         let start = self
             .data_offset
-            .checked_add(tensor.offset as usize)
+            .checked_add(tensor_offset)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "tensor offset overflow"))?;
-        let byte_size = self.tensor_byte_size(tensor);
+        let byte_size = self.tensor_byte_size(tensor)?;
         let end = start
             .checked_add(byte_size)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "tensor size overflow"))?;
@@ -180,14 +186,22 @@ impl GgufFile {
         Ok(&self._mmap[start..end])
     }
 
-    fn tensor_byte_size(&self, tensor: &TensorDescriptor) -> usize {
-        let n_elements: u64 = tensor.dims.iter().product();
+    fn tensor_byte_size(&self, tensor: &TensorDescriptor) -> io::Result<usize> {
+        let n_elements_u64 = tensor
+            .dims
+            .iter()
+            .try_fold(1u64, |acc, &d| acc.checked_mul(d))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "tensor dims overflow"))?;
+        let n_elements = usize::try_from(n_elements_u64)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "tensor too large"))?;
         match tensor.dtype {
             GGUF_TYPE_Q1_58 => {
                 // packed bytes (2 bits per element) + f32 scales
                 // For a 2D [rows, cols] tensor with group_size from metadata:
-                let rows = tensor.dims.first().copied().unwrap_or(0) as usize;
-                let cols = tensor.dims.get(1).copied().unwrap_or(0) as usize;
+                let rows = usize::try_from(tensor.dims.first().copied().unwrap_or(0))
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "rows too large"))?;
+                let cols = usize::try_from(tensor.dims.get(1).copied().unwrap_or(0))
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "cols too large"))?;
                 let gs = match self
                     .metadata
                     .get("nanochat.group_size")
@@ -198,11 +212,26 @@ impl GgufFile {
                 };
                 let kp = cols / 4;
                 let gprow = if gs > 0 { cols / gs } else { 1 };
-                rows * kp + rows * gprow * 4 // packed + scales
+                let packed = rows.checked_mul(kp).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "packed size overflow")
+                })?;
+                let scales = rows
+                    .checked_mul(gprow)
+                    .and_then(|v| v.checked_mul(4))
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "scale size overflow")
+                    })?;
+                packed.checked_add(scales).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "tensor size overflow")
+                })
             }
-            0 => n_elements as usize * 4, // F32
-            1 => n_elements as usize * 2, // F16
-            _ => n_elements as usize,
+            0 => n_elements
+                .checked_mul(4)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "F32 tensor too large")),
+            1 => n_elements
+                .checked_mul(2)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "F16 tensor too large")),
+            _ => Ok(n_elements),
         }
     }
 
@@ -226,16 +255,23 @@ impl GgufFile {
             ));
         }
 
-        let rows = tensor.dims[0] as usize;
-        let cols = tensor.dims[1] as usize;
+        let rows = usize::try_from(tensor.dims[0])
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "rows too large"))?;
+        let cols = usize::try_from(tensor.dims[1])
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "cols too large"))?;
         let packed_data = self.tensor_data(tensor)?;
         let kp = cols / 4;
         let gprow = cols / group_size;
 
         // Extract packed weights and scales from the data
         // Layout: packed bytes followed by scales
-        let weight_bytes = rows * kp;
-        let scale_bytes = rows * gprow * 4; // f32 scales
+        let weight_bytes = rows
+            .checked_mul(kp)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "weight size overflow"))?;
+        let scale_bytes = rows
+            .checked_mul(gprow)
+            .and_then(|v| v.checked_mul(4))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "scale size overflow"))?;
 
         if packed_data.len() < weight_bytes + scale_bytes {
             return Err(io::Error::new(
