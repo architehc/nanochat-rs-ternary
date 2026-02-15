@@ -388,7 +388,7 @@ impl Trainer {
 
         // Forward pass to hidden states.
         let hidden = self.model.forward_hidden_only(input_ids)?;
-        let (batch, seq_len, hidden_dim) = hidden.dims3()?;
+        let (batch, seq_len, _hidden_dim) = hidden.dims3()?;
         let vocab = self.config.vocab_size;
 
         // E3: Collider token filtering (sparse token path for LM head + loss).
@@ -405,12 +405,13 @@ impl Trainer {
         // Collider path compacts to kept rows using gather/index_select so dropped rows are
         // removed from dense LM-head/loss compute.
         let (logits_flat, targets_flat) = if let Some(mask) = collider_mask.as_ref() {
-            let keep_indices = collider_kept_indices(mask)?;
-            let hidden_flat = hidden.reshape((batch * seq_len, hidden_dim))?;
-            let hidden_kept = hidden_flat.index_select(&keep_indices, 0)?;
+            let collider = self
+                .collider
+                .as_ref()
+                .ok_or_else(|| candle_core::Error::Msg("Collider missing".to_string()))?;
+            let (hidden_kept, keep_indices) = collider.compact_hidden(&hidden, mask)?;
             let logits_kept = self.model.project_hidden_to_logits(&hidden_kept)?;
-            let targets_dense = target_ids.reshape(batch * seq_len)?;
-            let targets_kept = targets_dense.index_select(&keep_indices, 0)?;
+            let targets_kept = collider.compact_targets(target_ids, &keep_indices)?;
             (logits_kept, targets_kept)
         } else {
             let logits_dense = self.model.project_hidden_to_logits(&hidden)?;
@@ -527,6 +528,11 @@ impl Trainer {
             lr: self.base_lr_muon * mult,
             tokens_per_sec,
         })
+    }
+
+    /// Expose optimizer memory statistics for benchmarking and telemetry.
+    pub fn optimizer_memory_stats(&self) -> crate::optim::OptimizerMemoryStats {
+        self.muon.memory_stats()
     }
 
     /// Train for one epoch over a dataset.
@@ -740,34 +746,6 @@ fn apply_collider_gradient_mask(logits: &Tensor, mask: &Tensor) -> Result<Tensor
     &kept + &dropped_no_grad
 }
 
-/// Build flat token indices for kept Collider tokens.
-fn collider_kept_indices(mask: &Tensor) -> Result<Tensor> {
-    // One host transfer for the full mask (no per-token sync in loops).
-    let mask_vals = mask.flatten_all()?.to_vec1::<f32>()?;
-    let mut kept = Vec::with_capacity(mask_vals.len());
-    for (idx, &v) in mask_vals.iter().enumerate() {
-        if v >= 0.5 {
-            kept.push(idx as u32);
-        }
-    }
-
-    // Safety fallback: ensure at least one token remains selected.
-    if kept.is_empty() {
-        if let Some((best_idx, _)) = mask_vals
-            .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| a.total_cmp(b))
-        {
-            kept.push(best_idx as u32);
-        } else {
-            kept.push(0);
-        }
-    }
-
-    let kept_len = kept.len();
-    Tensor::from_vec(kept, kept_len, mask.device())
-}
-
 /// Compute total gradient norm across all variables.
 pub fn compute_grad_norm(grads: &candle_core::backprop::GradStore, varmap: &VarMap) -> Result<f64> {
     let mut total = 0.0f64;
@@ -852,16 +830,6 @@ mod tests {
         assert!(vals[0][1][0].abs() < 1e-6);
         assert!(vals[0][1][1].abs() < 1e-6);
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_collider_kept_indices() -> Result<()> {
-        let device = Device::Cpu;
-        let mask = Tensor::new(&[[1.0f32, 0.0, 1.0], [0.0, 1.0, 0.0]], &device)?;
-        let indices = collider_kept_indices(&mask)?;
-        let idx = indices.to_vec1::<u32>()?;
-        assert_eq!(idx, vec![0, 2, 4]);
         Ok(())
     }
 

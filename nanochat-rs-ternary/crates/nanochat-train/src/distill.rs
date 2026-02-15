@@ -376,15 +376,43 @@ impl DistillationTrainer {
         // Initialize teacher backend based on mode
         let teacher = match &config.teacher_mode {
             TeacherMode::Local { checkpoint } => {
-                let teacher_varmap = VarMap::new();
+                let checkpoint_str = checkpoint.to_str().ok_or_else(|| {
+                    candle_core::Error::Msg(format!(
+                        "Teacher checkpoint path is not valid UTF-8: {}",
+                        checkpoint.display()
+                    ))
+                })?;
+                let (teacher_varmap, teacher_config, teacher_step, teacher_loss) =
+                    crate::checkpoint::load_checkpoint(checkpoint_str, &device).map_err(|e| {
+                        candle_core::Error::Msg(format!(
+                            "Failed to load teacher checkpoint {}: {}",
+                            checkpoint.display(),
+                            e
+                        ))
+                    })?;
+
+                if teacher_config.vocab_size != config.train_config.vocab_size {
+                    return Err(candle_core::Error::Msg(format!(
+                        "Teacher/student vocab mismatch: teacher={}, student={}",
+                        teacher_config.vocab_size, config.train_config.vocab_size
+                    )));
+                }
+
+                if teacher_config.max_seq_len < config.train_config.max_seq_len {
+                    eprintln!(
+                        "Warning: teacher max_seq_len ({}) < student max_seq_len ({}); distillation batches must stay within teacher context window",
+                        teacher_config.max_seq_len, config.train_config.max_seq_len
+                    );
+                }
+
                 let teacher_vb =
                     candle_nn::VarBuilder::from_varmap(&teacher_varmap, DType::F32, &device);
-                let teacher_model = NanochatTrainModel::new(&config.train_config, teacher_vb)?;
-
-                // TODO: Load teacher checkpoint
+                let teacher_model = NanochatTrainModel::new(&teacher_config, teacher_vb)?;
                 eprintln!(
-                    "Warning: Teacher checkpoint loading not yet implemented: {}",
-                    checkpoint.display()
+                    "Loaded local teacher checkpoint {} (step={}, loss={:.4})",
+                    checkpoint.display(),
+                    teacher_step,
+                    teacher_loss
                 );
 
                 TeacherBackend::Local(Box::new(teacher_model))
@@ -942,7 +970,53 @@ pub fn router_auxiliary_loss(router_logits: &Tensor) -> Result<Tensor> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::Device;
+    use candle_core::{DType, Device};
+    use candle_nn::VarMap;
+
+    fn tiny_train_config() -> TrainConfig {
+        TrainConfig {
+            dim: 64,
+            n_layers: 2,
+            n_heads: 4,
+            n_kv_heads: 4,
+            ffn_mult: 2.0,
+            vocab_size: 256,
+            max_seq_len: 32,
+            group_size: 64,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: None,
+            lr: 0.02,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 1,
+            warmup_steps: 10,
+            total_steps: 100,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 3,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: false,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+        }
+    }
 
     #[test]
     fn test_kl_divergence_loss() {
@@ -1004,5 +1078,66 @@ mod tests {
             "Loss out of range: {}",
             loss_val
         );
+    }
+
+    #[test]
+    fn test_local_teacher_checkpoint_loads() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_train_config();
+
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let _teacher_model = NanochatTrainModel::new(&cfg, vb)?;
+
+        let dir =
+            tempfile::tempdir().map_err(|e| candle_core::Error::Msg(format!("tempdir: {}", e)))?;
+        let dir_path = dir
+            .path()
+            .to_str()
+            .ok_or_else(|| candle_core::Error::Msg("non-utf8 tempdir path".to_string()))?;
+        crate::checkpoint::save_checkpoint(&varmap, &cfg, 7, 1.23, dir_path)
+            .map_err(|e| candle_core::Error::Msg(format!("save checkpoint: {}", e)))?;
+
+        let distill_cfg = DistillConfig::with_local_teacher(cfg, dir.path());
+        let trainer = DistillationTrainer::new(distill_cfg, device)?;
+        assert!(matches!(&trainer.teacher, TeacherBackend::Local(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_local_teacher_vocab_mismatch_errors() -> Result<()> {
+        let device = Device::Cpu;
+        let mut teacher_cfg = tiny_train_config();
+        teacher_cfg.vocab_size = 128;
+
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let _teacher_model = NanochatTrainModel::new(&teacher_cfg, vb)?;
+
+        let dir =
+            tempfile::tempdir().map_err(|e| candle_core::Error::Msg(format!("tempdir: {}", e)))?;
+        let dir_path = dir
+            .path()
+            .to_str()
+            .ok_or_else(|| candle_core::Error::Msg("non-utf8 tempdir path".to_string()))?;
+        crate::checkpoint::save_checkpoint(&varmap, &teacher_cfg, 1, 0.0, dir_path)
+            .map_err(|e| candle_core::Error::Msg(format!("save checkpoint: {}", e)))?;
+
+        let student_cfg = tiny_train_config();
+        let distill_cfg = DistillConfig::with_local_teacher(student_cfg, dir.path());
+        let result = DistillationTrainer::new(distill_cfg, device);
+        assert!(result.is_err(), "expected teacher/student vocab mismatch");
+        let msg = format!(
+            "{}",
+            result
+                .err()
+                .ok_or_else(|| candle_core::Error::Msg("missing error".to_string()))?
+        );
+        assert!(
+            msg.contains("Teacher/student vocab mismatch"),
+            "unexpected error: {}",
+            msg
+        );
+        Ok(())
     }
 }

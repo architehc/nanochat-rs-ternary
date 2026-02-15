@@ -331,9 +331,9 @@ impl TrainConfig {
             muon_momentum: 0.95,
             lion_betas: (0.9, 0.99),
 
-            // E2 Advanced (disabled for baseline)
-            use_8bit_optim: false,
-            use_galore: false,
+            // E2 Advanced (enabled for full E3 profile)
+            use_8bit_optim: true,
+            use_galore: true,
             galore_rank: 256,
             galore_update_freq: 200,
 
@@ -342,8 +342,8 @@ impl TrainConfig {
             mtp_n_tokens: 3,
             mtp_weight: 0.2,
 
-            // E3 P1: Collider Token Filtering (TEMPORARILY DISABLED - per-token loop too slow on CPU)
-            use_collider: false,
+            // E3 P1: Collider Token Filtering (sparse token compaction enabled)
+            use_collider: true,
             collider_threshold: 0.3,
             collider_sparsity: 0.35,
 
@@ -603,6 +603,53 @@ impl TrainConfig {
             loop_scale_penalty: 0.0,
         }
     }
+
+    /// Extra-large model (~7B params) for multi-GPU training.
+    pub fn large_7b() -> Self {
+        Self {
+            dim: 4096,
+            n_layers: 32,
+            n_heads: 32,
+            n_kv_heads: 8,
+            ffn_mult: 2.6667,
+            vocab_size: 128000,
+            max_seq_len: 4096,
+            group_size: 128,
+            mhc_n_streams: 4,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: None,
+
+            lr: 0.008,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 1,
+            grad_accum_steps: 32,
+            warmup_steps: 8000,
+            total_steps: 300_000,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+            use_8bit_optim: true,
+            use_galore: true,
+            galore_rank: 512,
+            galore_update_freq: 200,
+            use_mtp: true,
+            mtp_n_tokens: 4,
+            mtp_weight: 0.2,
+            use_collider: true,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: true,
+            async_n_workers: 8,
+            async_prefetch_size: 16,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -663,5 +710,13 @@ mod tests {
         let params = cfg.param_count_estimate();
         assert!(params > 1_600_000_000, "Too few params: {}", params);
         assert!(params < 2_500_000_000, "Too many params: {}", params);
+    }
+
+    #[test]
+    fn test_large_7b_param_estimate() {
+        let cfg = TrainConfig::large_7b();
+        let params = cfg.param_count_estimate();
+        assert!(params > 5_000_000_000, "Too few params: {}", params);
+        assert!(params < 9_000_000_000, "Too many params: {}", params);
     }
 }

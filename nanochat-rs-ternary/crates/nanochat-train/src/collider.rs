@@ -130,6 +130,55 @@ impl Collider {
         Tensor::from_vec(mask_flat, (batch, seq_len), importance.device())?.to_dtype(DType::F32)
     }
 
+    /// Compute flat token indices for kept tokens.
+    ///
+    /// Returned indices refer to flattened `[batch, seq]` ordering.
+    pub fn kept_token_indices(&self, mask: &Tensor) -> Result<Tensor> {
+        // Single host transfer for the full mask to avoid per-token sync overhead.
+        let mask_vals = mask.flatten_all()?.to_vec1::<f32>()?;
+        let mut kept = Vec::with_capacity(mask_vals.len());
+        for (idx, &v) in mask_vals.iter().enumerate() {
+            if v >= 0.5 {
+                kept.push(idx as u32);
+            }
+        }
+
+        // Keep at least one token to avoid empty-tensor reductions.
+        if kept.is_empty() {
+            if let Some((best_idx, _)) = mask_vals
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.total_cmp(b))
+            {
+                kept.push(best_idx as u32);
+            } else {
+                kept.push(0);
+            }
+        }
+
+        let kept_len = kept.len();
+        Tensor::from_vec(kept, kept_len, mask.device())
+    }
+
+    /// Compact hidden activations using kept token indices.
+    ///
+    /// Input hidden shape: `[batch, seq, hidden_dim]`.
+    /// Output hidden shape: `[n_kept, hidden_dim]`.
+    pub fn compact_hidden(&self, hidden: &Tensor, mask: &Tensor) -> Result<(Tensor, Tensor)> {
+        let (batch, seq_len, hidden_dim) = hidden.dims3()?;
+        let indices = self.kept_token_indices(mask)?;
+        let hidden_flat = hidden.reshape((batch * seq_len, hidden_dim))?;
+        let compact = hidden_flat.index_select(&indices, 0)?;
+        Ok((compact, indices))
+    }
+
+    /// Compact targets `[batch, seq]` to `[n_kept]` using flattened kept indices.
+    pub fn compact_targets(&self, targets: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let (batch, seq_len) = targets.dims2()?;
+        let flat = targets.reshape(batch * seq_len)?;
+        flat.index_select(indices, 0)
+    }
+
     /// Apply token filtering to activations.
     ///
     /// Zeros out activations for low-importance tokens.
@@ -281,6 +330,39 @@ mod tests {
         assert_eq!(result[0][1], [0.0, 0.0]); // filtered
         assert_eq!(result[0][2], [1.0, 1.0]); // kept
         assert_eq!(result[0][3], [0.0, 0.0]); // filtered
+    }
+
+    #[test]
+    fn test_kept_token_indices() {
+        let device = Device::Cpu;
+        let collider = Collider::new(0.5, 0.35);
+        let mask = Tensor::new(&[[1.0f32, 0.0, 1.0], [0.0, 1.0, 0.0]], &device).unwrap();
+        let indices = collider.kept_token_indices(&mask).unwrap();
+        assert_eq!(indices.to_vec1::<u32>().unwrap(), vec![0, 2, 4]);
+    }
+
+    #[test]
+    fn test_compact_hidden_and_targets() {
+        let device = Device::Cpu;
+        let collider = Collider::new(0.5, 0.35);
+
+        // hidden: [batch=1, seq=4, hidden=2]
+        let hidden = Tensor::new(
+            &[[[1.0f32, 10.0], [2.0, 20.0], [3.0, 30.0], [4.0, 40.0]]],
+            &device,
+        )
+        .unwrap();
+        let targets = Tensor::new(&[[11u32, 22u32, 33u32, 44u32]], &device).unwrap();
+        let mask = Tensor::new(&[[1.0f32, 0.0, 1.0, 0.0]], &device).unwrap();
+
+        let (hidden_compact, idx) = collider.compact_hidden(&hidden, &mask).unwrap();
+        let targets_compact = collider.compact_targets(&targets, &idx).unwrap();
+
+        assert_eq!(
+            hidden_compact.to_vec2::<f32>().unwrap(),
+            vec![vec![1.0, 10.0], vec![3.0, 30.0]]
+        );
+        assert_eq!(targets_compact.to_vec1::<u32>().unwrap(), vec![11, 33]);
     }
 
     #[test]

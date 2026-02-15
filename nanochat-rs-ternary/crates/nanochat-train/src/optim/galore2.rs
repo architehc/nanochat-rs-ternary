@@ -64,6 +64,12 @@ pub struct GaLore2<OPT> {
 
     /// Update projections every N steps (default: 200)
     update_freq: usize,
+    /// Adaptive checks run more frequently than full refresh cadence.
+    adaptive_check_freq: usize,
+    /// Enable adaptive refresh based on projection error.
+    adaptive_refresh: bool,
+    /// Relative projection error threshold to trigger refresh.
+    adaptive_error_threshold: f64,
 
     /// Left/right projection matrices per parameter
     projections: HashMap<usize, ProjectionPair>,
@@ -71,7 +77,7 @@ pub struct GaLore2<OPT> {
     /// Current step counter
     step: usize,
 
-    /// Projection scale factor (TODO: not yet used)
+    /// Projection scale factor for projected gradients.
     #[allow(dead_code)]
     scale: f64,
 
@@ -88,8 +94,7 @@ struct ProjectionPair {
     p: Tensor,
     /// Left singular vectors (dim × rank)
     q: Tensor,
-    /// Step when last updated (TODO: not yet used for adaptive refresh)
-    #[allow(dead_code)]
+    /// Step when projection was last refreshed.
     last_updated: usize,
 }
 
@@ -101,10 +106,14 @@ impl<OPT> GaLore2<OPT> {
         update_freq: usize,
         scale: f64,
     ) -> Result<Self> {
+        let effective_update_freq = update_freq.max(1);
         Ok(Self {
             base_optimizer,
             rank,
-            update_freq,
+            update_freq: effective_update_freq,
+            adaptive_check_freq: (effective_update_freq / 4).max(1),
+            adaptive_refresh: true,
+            adaptive_error_threshold: 0.20,
             projections: HashMap::new(),
             step: 0,
             scale,
@@ -213,7 +222,7 @@ impl<OPT> GaLore2<OPT> {
 
         // sigma = u^T @ A @ v
         let sigma = u.t()?.matmul(a)?.matmul(&v)?;
-        let sigma_val = sigma.to_scalar::<f32>()?;
+        let sigma_val = sigma.squeeze(0)?.squeeze(0)?.to_scalar::<f32>()?;
 
         // For simplicity, return single singular triplet repeated k times
         // (Full implementation would compute k eigenvectors)
@@ -249,8 +258,59 @@ impl<OPT> GaLore2<OPT> {
         }
     }
 
+    /// Compute relative projection error ||g - g_hat|| / ||g|| for one variable.
+    fn projection_relative_error(&self, var_idx: usize, grad_2d: &Tensor) -> Result<f64> {
+        if !self.projections.contains_key(&var_idx) {
+            return Ok(f64::INFINITY);
+        }
+
+        let grad_proj = self.project_gradient(var_idx, grad_2d)?;
+        let grad_recon = self.unproject_gradient(var_idx, &grad_proj)?;
+        let diff_norm = (&grad_recon - grad_2d)?
+            .sqr()?
+            .sum_all()?
+            .sqrt()?
+            .to_scalar::<f32>()? as f64;
+        let grad_norm = grad_2d.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()? as f64;
+        if grad_norm <= 1e-12 {
+            return Ok(0.0);
+        }
+        Ok(diff_norm / grad_norm)
+    }
+
+    /// Check if a single variable projection should refresh.
+    fn should_refresh_projection(
+        &self,
+        var_idx: usize,
+        grad_2d: &Tensor,
+        force: bool,
+    ) -> Result<bool> {
+        if force || !self.projections.contains_key(&var_idx) {
+            return Ok(true);
+        }
+
+        let Some(pair) = self.projections.get(&var_idx) else {
+            return Ok(true);
+        };
+
+        // Hard refresh cadence.
+        if self.step.saturating_sub(pair.last_updated) >= self.update_freq {
+            return Ok(true);
+        }
+
+        // Adaptive refresh cadence.
+        if !self.adaptive_refresh
+            || self.step.saturating_sub(pair.last_updated) < self.adaptive_check_freq
+        {
+            return Ok(false);
+        }
+
+        let rel_error = self.projection_relative_error(var_idx, grad_2d)?;
+        Ok(rel_error > self.adaptive_error_threshold)
+    }
+
     /// Update projection matrices using randomized SVD
-    fn update_projections(&mut self, grads: &GradStore) -> Result<()> {
+    fn update_projections(&mut self, grads: &GradStore, force: bool) -> Result<()> {
         for (var_idx, var) in self.vars.iter().enumerate() {
             let grad = match grads.get(var.as_tensor()) {
                 Some(g) => g,
@@ -275,6 +335,10 @@ impl<OPT> GaLore2<OPT> {
                 grad.clone()
             };
 
+            if !self.should_refresh_projection(var_idx, &grad_2d, force)? {
+                continue;
+            }
+
             // Compute SVD: grad ≈ Q @ S @ P^T
             let (q, _s, p) = self.randomized_svd(&grad_2d, self.rank)?;
 
@@ -292,8 +356,9 @@ impl<OPT> GaLore2<OPT> {
     }
 
     /// Check if projection update is needed
-    fn should_update_projection(&self) -> bool {
+    fn should_run_projection_pass(&self) -> bool {
         self.step.is_multiple_of(self.update_freq)
+            || (self.adaptive_refresh && self.step.is_multiple_of(self.adaptive_check_freq))
     }
 
     /// Build transformed gradients for optimizer update.
@@ -387,9 +452,10 @@ impl GaLore2Muon {
     }
 
     pub fn step(&mut self, grads: &GradStore, clip_scale: f64) -> Result<()> {
-        // Update projections periodically
-        if self.galore.should_update_projection() {
-            self.galore.update_projections(grads)?;
+        // Full refresh on update cadence, adaptive check between cadence points.
+        if self.galore.should_run_projection_pass() {
+            let force = self.galore.step.is_multiple_of(self.galore.update_freq);
+            self.galore.update_projections(grads, force)?;
         }
 
         // Apply projected/unprojected gradients in the optimizer step.
@@ -429,8 +495,9 @@ impl GaLore2Quantized {
     }
 
     pub fn step(&mut self, grads: &GradStore, clip_scale: f64) -> Result<()> {
-        if self.galore.should_update_projection() {
-            self.galore.update_projections(grads)?;
+        if self.galore.should_run_projection_pass() {
+            let force = self.galore.step.is_multiple_of(self.galore.update_freq);
+            self.galore.update_projections(grads, force)?;
         }
 
         let projected_grads = self.galore.build_projected_gradients(grads)?;
@@ -516,6 +583,39 @@ mod tests {
             "Q^T @ Q should be approximately I, max diff: {}",
             diff
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_adaptive_projection_pass_cadence() -> Result<()> {
+        let vars = Vec::new();
+        let muon = super::super::Muon::new(vars.clone(), 0.02, 0.95, 5, 0.0)?;
+        let mut galore = GaLore2::new(muon, vars, 32, 8, 1.0)?;
+
+        // step=0 always refreshes.
+        galore.step = 0;
+        assert!(galore.should_run_projection_pass());
+
+        // adaptive_check_freq should be update_freq/4 = 2.
+        galore.step = 1;
+        assert!(!galore.should_run_projection_pass());
+
+        galore.step = 2;
+        assert!(galore.should_run_projection_pass());
+
+        // hard refresh cadence.
+        galore.step = 8;
+        assert!(galore.should_run_projection_pass());
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_freq_zero_is_sanitized() -> Result<()> {
+        let vars = Vec::new();
+        let muon = super::super::Muon::new(vars.clone(), 0.02, 0.95, 5, 0.0)?;
+        let galore = GaLore2::new(muon, vars, 32, 0, 1.0)?;
+        assert_eq!(galore.update_freq, 1);
+        assert_eq!(galore.adaptive_check_freq, 1);
         Ok(())
     }
 }

@@ -18,6 +18,30 @@ except ImportError:
 
 # Model registry with HuggingFace URLs and metadata
 MODELS: Dict[str, Dict] = {
+    "nanochat-125m": {
+        "gguf_url": "https://huggingface.co/architehc/nanochat-125m/resolve/main/model.gguf",
+        "mhc_url": "https://huggingface.co/architehc/nanochat-125m/resolve/main/model.mhc",
+        "config": "nano_125m",
+        "sha256_gguf": "TO_BE_FILLED",
+        "sha256_mhc": "TO_BE_FILLED",
+        "description": "125M parameter ternary model",
+        "size_mb": 110,
+        "vocab_size": 50257,
+        "dim": 768,
+        "layers": 12,
+    },
+    "nanochat-3b": {
+        "gguf_url": "https://huggingface.co/architehc/nanochat-3b/resolve/main/model.gguf",
+        "mhc_url": "https://huggingface.co/architehc/nanochat-3b/resolve/main/model.mhc",
+        "config": "medium_3b",
+        "sha256_gguf": "TO_BE_FILLED",
+        "sha256_mhc": "TO_BE_FILLED",
+        "description": "3B parameter ternary model",
+        "size_mb": 1500,
+        "vocab_size": 50257,
+        "dim": 2048,
+        "layers": 28,
+    },
     "nano-125m-rust": {
         "gguf_url": "https://huggingface.co/architehc/nano-125m-rust/resolve/main/model.gguf",
         "mhc_url": "https://huggingface.co/architehc/nano-125m-rust/resolve/main/model.mhc",
