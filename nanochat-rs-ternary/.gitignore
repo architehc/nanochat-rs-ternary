@@ -7,8 +7,11 @@ target/
 *.log
 *.log
 checkpoints/
-models/
+/models/
 server.log
 
 # Exported model artifacts
 exported_models/
+
+# Allow configs/models/ (model configuration files)
+!configs/models/
