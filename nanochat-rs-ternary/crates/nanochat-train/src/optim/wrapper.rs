@@ -2,7 +2,7 @@
 
 use candle_core::{backprop::GradStore, Result, Var};
 
-use super::{GaLore2Muon, Muon, QuantizedMuon};
+use super::{GaLore2Muon, GaLore2Quantized, Muon, QuantizedMuon};
 
 /// Wrapper enum for different Muon optimizer variants
 pub enum MuonOptimizer {
@@ -12,6 +12,8 @@ pub enum MuonOptimizer {
     Quantized(QuantizedMuon),
     /// GaLore2 wrapper around standard Muon (50-65% memory reduction)
     GaLore(GaLore2Muon),
+    /// GaLore2 wrapper around 8-bit quantized Muon
+    GaLoreQuantized(GaLore2Quantized),
 }
 
 impl MuonOptimizer {
@@ -48,9 +50,8 @@ impl MuonOptimizer {
             (true, true) => {
                 // GaLore2 with quantized Muon (maximum memory savings)
                 let qmuon = QuantizedMuon::new(vars.clone(), lr, beta, ns_steps, wd)?;
-                // TODO: Create GaLore2<QuantizedMuon> variant
-                // For now, just use quantized (8-bit gives most of the savings)
-                Ok(MuonOptimizer::Quantized(qmuon))
+                let galore_q = GaLore2Quantized::new(qmuon, vars, galore_rank, galore_update_freq)?;
+                Ok(MuonOptimizer::GaLoreQuantized(galore_q))
             }
         }
     }
@@ -61,6 +62,7 @@ impl MuonOptimizer {
             MuonOptimizer::Standard(m) => m.step(grads, clip_scale),
             MuonOptimizer::Quantized(qm) => qm.step(grads, clip_scale),
             MuonOptimizer::GaLore(gm) => gm.step(grads, clip_scale),
+            MuonOptimizer::GaLoreQuantized(gqm) => gqm.step(grads, clip_scale),
         }
     }
 
@@ -70,6 +72,7 @@ impl MuonOptimizer {
             MuonOptimizer::Standard(m) => m.set_lr(lr),
             MuonOptimizer::Quantized(qm) => qm.set_lr(lr),
             MuonOptimizer::GaLore(gm) => gm.set_lr(lr),
+            MuonOptimizer::GaLoreQuantized(gqm) => gqm.set_lr(lr),
         }
     }
 
@@ -97,6 +100,17 @@ impl MuonOptimizer {
                 let stats = gm.memory_stats();
                 OptimizerMemoryStats {
                     variant: "GaLore2 Muon",
+                    memory_reduction: stats.memory_reduction,
+                    details: format!(
+                        "Total: {}, Projected: {}",
+                        stats.total_params, stats.projected_params
+                    ),
+                }
+            }
+            MuonOptimizer::GaLoreQuantized(gqm) => {
+                let stats = gqm.memory_stats();
+                OptimizerMemoryStats {
+                    variant: "GaLore2 + 8-bit Muon",
                     memory_reduction: stats.memory_reduction,
                     details: format!(
                         "Total: {}, Projected: {}",
@@ -218,5 +232,28 @@ mod tests {
         opt.set_lr(0.01);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_optimizer_wrapper_galore_quantized() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let _w = vb.get_with_hints(
+            (256, 256),
+            "w",
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: 1.0,
+            },
+        )?;
+
+        let vars = varmap.all_vars();
+        let opt = MuonOptimizer::from_config(vars, 0.02, 0.95, 5, 0.0, true, true, 64, 200)?;
+
+        match opt {
+            MuonOptimizer::GaLoreQuantized(_) => Ok(()),
+            _ => panic!("Expected GaLoreQuantized variant"),
+        }
     }
 }

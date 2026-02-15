@@ -8,6 +8,7 @@
 //! 3. Transforming sparse GEMMs to dense operations
 
 use candle_core::{DType, IndexOp, Result, Tensor, D};
+use std::cmp::Ordering;
 
 /// Token filtering via cross-layer activation sparsity.
 ///
@@ -106,9 +107,31 @@ impl Collider {
     /// # Returns
     /// Binary mask [batch, seq_len]: 1 for kept tokens, 0 for filtered
     pub fn create_mask(&self, importance: &Tensor) -> Result<Tensor> {
-        // Tokens with importance > threshold are kept
-        let mask = importance.gt(self.threshold)?;
-        mask.to_dtype(DType::F32)
+        let (batch, seq_len) = importance.dims2()?;
+        let importance_rows = importance.to_vec2::<f32>()?;
+        let mut mask_flat = Vec::with_capacity(batch * seq_len);
+
+        for row in &importance_rows {
+            let keep_target = (((1.0 - self.sparsity_target.clamp(0.0, 1.0)) * row.len() as f64)
+                .round() as usize)
+                .clamp(1, row.len());
+
+            let mut sorted = row.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            let dyn_idx = row.len().saturating_sub(keep_target);
+            let dynamic_threshold = sorted[dyn_idx] as f64;
+            let effective_threshold = self.threshold.max(dynamic_threshold);
+
+            for &value in row {
+                mask_flat.push(if (value as f64) >= effective_threshold {
+                    1.0f32
+                } else {
+                    0.0f32
+                });
+            }
+        }
+
+        Tensor::from_vec(mask_flat, (batch, seq_len), importance.device())?.to_dtype(DType::F32)
     }
 
     /// Apply token filtering to activations.
@@ -228,6 +251,19 @@ mod tests {
         assert_eq!(mask_data[0][1], 1.0); // 0.6 > 0.5
         assert_eq!(mask_data[0][2], 0.0); // 0.4 < 0.5
         assert_eq!(mask_data[0][3], 1.0); // 0.8 > 0.5
+    }
+
+    #[test]
+    fn test_create_mask_respects_sparsity_target() {
+        let device = Device::Cpu;
+        let collider = Collider::new(0.0, 0.5); // keep top 50%
+
+        let importance = Tensor::new(&[[0.1f32, 0.2, 0.3, 0.4]], &device).unwrap();
+        let mask = collider.create_mask(&importance).unwrap();
+        let mask_data = mask.to_vec2::<f32>().unwrap();
+
+        // Keep top-2 (0.3, 0.4), filter lower half.
+        assert_eq!(mask_data[0], vec![0.0, 0.0, 1.0, 1.0]);
     }
 
     #[test]

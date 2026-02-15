@@ -5,6 +5,7 @@
 //! reducing memory by 75% with minimal impact on convergence.
 
 use candle_core::{backprop::GradStore, Result, Tensor, Var};
+use std::collections::HashMap;
 
 /// Quantization configuration for optimizer states
 #[derive(Debug, Clone)]
@@ -153,6 +154,66 @@ impl QuantizedMuon {
     pub fn step(&mut self, grads: &GradStore, clip_scale: f64) -> Result<()> {
         for (i, var) in self.vars.iter().enumerate() {
             let grad = match grads.get(var.as_tensor()) {
+                Some(g) => g,
+                None => continue,
+            };
+
+            let grad = (grad * clip_scale)?;
+
+            // Dequantize momentum buffer
+            let buf = self.momentum_buffers[i].to_tensor(var.device())?;
+
+            // EMA momentum: buf = beta * buf + (1 - beta) * grad
+            let buf_scaled = (&buf * self.beta)?;
+            let grad_scaled = (&grad * (1.0 - self.beta))?;
+            let new_buf = (&buf_scaled + &grad_scaled)?;
+
+            // Re-quantize and store
+            self.momentum_buffers[i].ema_update(&new_buf, 0.0, &self.quant_config)?;
+
+            let update = if var.as_tensor().dims().len() >= 2 {
+                // Nesterov: update = beta * buf + (1 - beta) * grad
+                let nest_grad = (&grad * (1.0 - self.beta))?;
+                let nest_buf = (&new_buf * self.beta)?;
+                let nesterov = (&nest_grad + &nest_buf)?;
+
+                // Reshape to 2D for orthogonalization
+                let orig_shape = nesterov.dims().to_vec();
+                let rows = orig_shape[0];
+                let cols: usize = orig_shape[1..].iter().product();
+                let nesterov_2d = nesterov.reshape((rows, cols))?;
+                let orth = super::muon::newton_schulz_orthogonalize(&nesterov_2d, self.ns_steps)?;
+                orth.reshape(orig_shape)?
+            } else {
+                // 1D: plain momentum
+                new_buf
+            };
+
+            // Weight decay (multiplicative)
+            if self.weight_decay > 0.0 {
+                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?;
+                var.set(&decayed)?;
+            }
+
+            // Apply update: w = w - lr * update
+            let scaled_update = (&update * self.lr)?;
+            let new_val = var.as_tensor().sub(&scaled_update)?;
+            var.set(&new_val)?;
+        }
+        Ok(())
+    }
+
+    /// Step with externally provided gradients keyed by tensor id.
+    ///
+    /// Used by gradient-transform wrappers (e.g. GaLore2) that need to override
+    /// the gradient tensor before the optimizer update.
+    pub fn step_with_grads(
+        &mut self,
+        grads_by_id: &HashMap<candle_core::TensorId, Tensor>,
+        clip_scale: f64,
+    ) -> Result<()> {
+        for (i, var) in self.vars.iter().enumerate() {
+            let grad = match grads_by_id.get(&var.as_tensor().id()) {
                 Some(g) => g,
                 None => continue,
             };

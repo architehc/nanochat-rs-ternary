@@ -7,7 +7,7 @@ pub mod schedule;
 pub mod wrapper;
 
 pub use fire::{FIREConfig, FIREReinitializer, ReinitStats};
-pub use galore2::{GaLore2Muon, MemoryStats as GaLoreMemoryStats};
+pub use galore2::{GaLore2Muon, GaLore2Quantized, MemoryStats as GaLoreMemoryStats};
 pub use lion::Lion;
 pub use muon::Muon;
 pub use muon_quantized::{QuantMemoryStats, QuantizedMuon};

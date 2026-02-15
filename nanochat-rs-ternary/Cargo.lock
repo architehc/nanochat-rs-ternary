@@ -2001,6 +2001,7 @@ dependencies = [
  "serde_json",
  "syn",
  "tempfile",
+ "tokenizers",
  "tokio",
 ]
 

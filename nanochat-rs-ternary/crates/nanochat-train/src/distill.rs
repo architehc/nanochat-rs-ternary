@@ -122,22 +122,69 @@ impl RemoteTeacherClient {
             return Err(candle_core::Error::Msg("Empty logits response".to_string()));
         }
 
-        let seq_len = logits_array[0]
+        let first_seq = logits_array[0]
             .as_array()
-            .ok_or_else(|| candle_core::Error::Msg("Invalid logits shape".to_string()))?
-            .len();
+            .ok_or_else(|| candle_core::Error::Msg("Invalid logits shape".to_string()))?;
+        if first_seq.is_empty() {
+            return Err(candle_core::Error::Msg(
+                "Invalid logits shape: empty sequence dimension".to_string(),
+            ));
+        }
+        let seq_len = first_seq.len();
 
-        let vocab_size = logits_array[0][0]
+        let first_vocab = logits_array[0][0]
             .as_array()
-            .ok_or_else(|| candle_core::Error::Msg("Invalid logits shape".to_string()))?
-            .len();
+            .ok_or_else(|| candle_core::Error::Msg("Invalid logits shape".to_string()))?;
+        if first_vocab.is_empty() {
+            return Err(candle_core::Error::Msg(
+                "Invalid logits shape: empty vocab dimension".to_string(),
+            ));
+        }
+        let vocab_size = first_vocab.len();
 
         // Flatten to 1D vec
         let mut logits_flat = Vec::with_capacity(batch_size * seq_len * vocab_size);
-        for batch_item in logits_array {
-            for seq_item in batch_item.as_array().unwrap() {
-                for val in seq_item.as_array().unwrap() {
-                    logits_flat.push(val.as_f64().unwrap() as f32);
+        for (batch_idx, batch_item) in logits_array.iter().enumerate() {
+            let seq_items = batch_item.as_array().ok_or_else(|| {
+                candle_core::Error::Msg(format!(
+                    "Invalid logits shape at batch index {}",
+                    batch_idx
+                ))
+            })?;
+            if seq_items.len() != seq_len {
+                return Err(candle_core::Error::Msg(format!(
+                    "Inconsistent seq_len at batch index {}: expected {}, got {}",
+                    batch_idx,
+                    seq_len,
+                    seq_items.len()
+                )));
+            }
+
+            for (seq_idx, seq_item) in seq_items.iter().enumerate() {
+                let vocab_items = seq_item.as_array().ok_or_else(|| {
+                    candle_core::Error::Msg(format!(
+                        "Invalid logits shape at batch {}, seq {}",
+                        batch_idx, seq_idx
+                    ))
+                })?;
+                if vocab_items.len() != vocab_size {
+                    return Err(candle_core::Error::Msg(format!(
+                        "Inconsistent vocab_size at batch {}, seq {}: expected {}, got {}",
+                        batch_idx,
+                        seq_idx,
+                        vocab_size,
+                        vocab_items.len()
+                    )));
+                }
+
+                for (v_idx, val) in vocab_items.iter().enumerate() {
+                    let f = val.as_f64().ok_or_else(|| {
+                        candle_core::Error::Msg(format!(
+                            "Non-numeric logit at batch {}, seq {}, vocab {}",
+                            batch_idx, seq_idx, v_idx
+                        ))
+                    })?;
+                    logits_flat.push(f as f32);
                 }
             }
         }

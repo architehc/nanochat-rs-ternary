@@ -7,6 +7,53 @@
 use candle_core::{backprop::GradStore, Result, Tensor, Var};
 use std::collections::HashMap;
 
+/// Interface required by GaLore2 wrappers.
+pub trait GaLoreOptimizer {
+    fn step(&mut self, grads: &GradStore, clip_scale: f64) -> Result<()>;
+    fn step_with_projected(
+        &mut self,
+        grads_by_id: &HashMap<candle_core::TensorId, Tensor>,
+        clip_scale: f64,
+    ) -> Result<()>;
+    fn set_lr(&mut self, lr: f64);
+}
+
+impl GaLoreOptimizer for super::Muon {
+    fn step(&mut self, grads: &GradStore, clip_scale: f64) -> Result<()> {
+        super::Muon::step(self, grads, clip_scale)
+    }
+
+    fn step_with_projected(
+        &mut self,
+        grads_by_id: &HashMap<candle_core::TensorId, Tensor>,
+        clip_scale: f64,
+    ) -> Result<()> {
+        self.step_with_grads(grads_by_id, clip_scale)
+    }
+
+    fn set_lr(&mut self, lr: f64) {
+        super::Muon::set_lr(self, lr);
+    }
+}
+
+impl GaLoreOptimizer for super::QuantizedMuon {
+    fn step(&mut self, grads: &GradStore, clip_scale: f64) -> Result<()> {
+        super::QuantizedMuon::step(self, grads, clip_scale)
+    }
+
+    fn step_with_projected(
+        &mut self,
+        grads_by_id: &HashMap<candle_core::TensorId, Tensor>,
+        clip_scale: f64,
+    ) -> Result<()> {
+        self.step_with_grads(grads_by_id, clip_scale)
+    }
+
+    fn set_lr(&mut self, lr: f64) {
+        super::QuantizedMuon::set_lr(self, lr);
+    }
+}
+
 /// Optimizer wrapper that applies GaLore2 gradient projection
 pub struct GaLore2<OPT> {
     base_optimizer: OPT,
@@ -248,6 +295,84 @@ impl<OPT> GaLore2<OPT> {
     fn should_update_projection(&self) -> bool {
         self.step.is_multiple_of(self.update_freq)
     }
+
+    /// Build transformed gradients for optimizer update.
+    ///
+    /// For variables with available projections, gradients are projected to
+    /// low-rank space and unprojected back to full-rank tensors, applying the
+    /// GaLore subspace filter before the base optimizer step.
+    fn build_projected_gradients(
+        &self,
+        grads: &GradStore,
+    ) -> Result<HashMap<candle_core::TensorId, Tensor>> {
+        let mut projected = HashMap::new();
+
+        for (var_idx, var) in self.vars.iter().enumerate() {
+            let grad = match grads.get(var.as_tensor()) {
+                Some(g) => g,
+                None => continue,
+            };
+
+            let dims = grad.dims().to_vec();
+            let grad_2d = if dims.len() > 2 {
+                let total_cols: usize = dims[1..].iter().product();
+                grad.reshape((dims[0], total_cols))?
+            } else {
+                grad.clone()
+            };
+
+            let transformed_2d = if self.projections.contains_key(&var_idx) {
+                let grad_proj = self.project_gradient(var_idx, &grad_2d)?;
+                self.unproject_gradient(var_idx, &grad_proj)?
+            } else {
+                grad_2d
+            };
+
+            let transformed = if dims.len() > 2 {
+                transformed_2d.reshape(dims)?
+            } else {
+                transformed_2d
+            };
+
+            projected.insert(var.as_tensor().id(), transformed);
+        }
+
+        Ok(projected)
+    }
+
+    fn estimate_memory_stats(&self) -> MemoryStats {
+        let mut total_params = 0;
+        let mut projected_params = 0;
+
+        for (var_idx, var) in self.vars.iter().enumerate() {
+            let dims = var.as_tensor().dims();
+            if dims.len() >= 2 {
+                let size: usize = dims.iter().product();
+                total_params += size;
+
+                if self.projections.contains_key(&var_idx) {
+                    let (rows, cols) = (dims[0], dims[1..].iter().product::<usize>());
+                    // Projected size: (rows * rank) + (rank * cols)
+                    let proj_size = (rows * self.rank) + (self.rank * cols);
+                    projected_params += proj_size;
+                } else {
+                    projected_params += size;
+                }
+            }
+        }
+
+        let reduction = if total_params > 0 {
+            1.0 - (projected_params as f64 / total_params as f64)
+        } else {
+            0.0
+        };
+
+        MemoryStats {
+            total_params,
+            projected_params,
+            memory_reduction: reduction,
+        }
+    }
 }
 
 /// GaLore2 wrapper for Muon optimizer
@@ -267,64 +392,62 @@ impl GaLore2Muon {
             self.galore.update_projections(grads)?;
         }
 
-        // Project gradients
-        let mut projected_grads = HashMap::new();
-        for (var_idx, var) in self.galore.vars.iter().enumerate() {
-            if let Some(grad) = grads.get(var.as_tensor()) {
-                let grad_proj = self.galore.project_gradient(var_idx, grad)?;
-                projected_grads.insert(var.as_tensor().id(), grad_proj);
-            }
-        }
-
-        // Create temporary GradStore with projected gradients
-        // Note: This is a simplified version. In practice, you'd need to properly
-        // integrate with candle's GradStore API
-
-        // For now, call base optimizer directly with original grads
-        // TODO: Properly handle projected gradients
-        self.galore.base_optimizer.step(grads, clip_scale)?;
+        // Apply projected/unprojected gradients in the optimizer step.
+        let projected_grads = self.galore.build_projected_gradients(grads)?;
+        self.galore
+            .base_optimizer
+            .step_with_projected(&projected_grads, clip_scale)?;
 
         self.galore.step += 1;
         Ok(())
     }
 
     pub fn set_lr(&mut self, lr: f64) {
-        self.galore.base_optimizer.set_lr(lr);
+        GaLoreOptimizer::set_lr(&mut self.galore.base_optimizer, lr);
     }
 
     /// Get memory savings statistics
     pub fn memory_stats(&self) -> MemoryStats {
-        let mut total_params = 0;
-        let mut projected_params = 0;
+        self.galore.estimate_memory_stats()
+    }
+}
 
-        for (var_idx, var) in self.galore.vars.iter().enumerate() {
-            let dims = var.as_tensor().dims();
-            if dims.len() >= 2 {
-                let size: usize = dims.iter().product();
-                total_params += size;
+/// GaLore2 wrapper for 8-bit Quantized Muon optimizer
+pub struct GaLore2Quantized {
+    galore: GaLore2<super::QuantizedMuon>,
+}
 
-                if self.galore.projections.contains_key(&var_idx) {
-                    let (rows, cols) = (dims[0], dims[1..].iter().product::<usize>());
-                    // Projected size: (rows * rank) + (rank * cols)
-                    let proj_size = (rows * self.galore.rank) + (self.galore.rank * cols);
-                    projected_params += proj_size;
-                } else {
-                    projected_params += size;
-                }
-            }
+impl GaLore2Quantized {
+    pub fn new(
+        qmuon: super::QuantizedMuon,
+        vars: Vec<Var>,
+        rank: usize,
+        update_freq: usize,
+    ) -> Result<Self> {
+        let galore = GaLore2::new(qmuon, vars, rank, update_freq, 1.0)?;
+        Ok(Self { galore })
+    }
+
+    pub fn step(&mut self, grads: &GradStore, clip_scale: f64) -> Result<()> {
+        if self.galore.should_update_projection() {
+            self.galore.update_projections(grads)?;
         }
 
-        let reduction = if total_params > 0 {
-            1.0 - (projected_params as f64 / total_params as f64)
-        } else {
-            0.0
-        };
+        let projected_grads = self.galore.build_projected_gradients(grads)?;
+        self.galore
+            .base_optimizer
+            .step_with_projected(&projected_grads, clip_scale)?;
 
-        MemoryStats {
-            total_params,
-            projected_params,
-            memory_reduction: reduction,
-        }
+        self.galore.step += 1;
+        Ok(())
+    }
+
+    pub fn set_lr(&mut self, lr: f64) {
+        GaLoreOptimizer::set_lr(&mut self.galore.base_optimizer, lr);
+    }
+
+    pub fn memory_stats(&self) -> MemoryStats {
+        self.galore.estimate_memory_stats()
     }
 }
 

@@ -71,27 +71,22 @@ lazy_static! {
 
 /// Register all metrics with the global registry.
 pub fn register_metrics() {
-    REGISTRY
-        .register(Box::new(INFERENCE_REQUESTS.clone()))
-        .unwrap();
-    REGISTRY
-        .register(Box::new(INFERENCE_ERRORS.clone()))
-        .unwrap();
-    REGISTRY
-        .register(Box::new(INFERENCE_LATENCY.clone()))
-        .unwrap();
-    REGISTRY
-        .register(Box::new(ACTIVE_REQUESTS.clone()))
-        .unwrap();
-    REGISTRY
-        .register(Box::new(MODEL_LOAD_TIME.clone()))
-        .unwrap();
-    REGISTRY
-        .register(Box::new(TOKENS_GENERATED.clone()))
-        .unwrap();
-    REGISTRY
-        .register(Box::new(TOKENS_PER_SECOND.clone()))
-        .unwrap();
+    let registrations = [
+        REGISTRY.register(Box::new(INFERENCE_REQUESTS.clone())),
+        REGISTRY.register(Box::new(INFERENCE_ERRORS.clone())),
+        REGISTRY.register(Box::new(INFERENCE_LATENCY.clone())),
+        REGISTRY.register(Box::new(ACTIVE_REQUESTS.clone())),
+        REGISTRY.register(Box::new(MODEL_LOAD_TIME.clone())),
+        REGISTRY.register(Box::new(TOKENS_GENERATED.clone())),
+        REGISTRY.register(Box::new(TOKENS_PER_SECOND.clone())),
+    ];
+
+    for result in registrations {
+        if let Err(err) = result {
+            // AlreadyRegistered on repeated init should not crash the server.
+            eprintln!("WARNING: metrics registration skipped: {}", err);
+        }
+    }
 }
 
 /// Render metrics in Prometheus text format.
@@ -99,8 +94,14 @@ pub fn render_metrics() -> String {
     let encoder = TextEncoder::new();
     let metric_families = REGISTRY.gather();
     let mut buffer = Vec::new();
-    encoder.encode(&metric_families, &mut buffer).unwrap();
-    String::from_utf8(buffer).unwrap()
+    if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
+        eprintln!("ERROR: failed to encode metrics: {}", err);
+        return "# metrics_encode_error 1\n".to_string();
+    }
+    String::from_utf8(buffer).unwrap_or_else(|err| {
+        eprintln!("ERROR: failed to render metrics as UTF-8: {}", err);
+        "# metrics_utf8_error 1\n".to_string()
+    })
 }
 
 /// RAII guard for tracking active requests.

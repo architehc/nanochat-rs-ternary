@@ -4,7 +4,7 @@
 
 ### CI/Build Status
 - ✅ **Formatting**: `cargo fmt --all --check` passes
-- ✅ **Tests**: 349 tests passing
+- ✅ **Tests**: 496 tests passing
 - ✅ **Clippy**: 0 warnings
 - ✅ **Build**: Clean release build
 
@@ -26,12 +26,12 @@
 - Config available: `d20-mtp`
 
 ### Collider Token Filtering
-**Status**: 🔧 **IMPLEMENTED BUT DISABLED**
+**Status**: 🔧 **PARTIALLY IMPLEMENTED (ENABLED MASKING)**
 
 - Complete implementation in `crates/nanochat-train/src/collider.rs`
-- Per-token loss computation works
-- Temporarily disabled due to performance (manual loops)
-- Needs vectorization optimization
+- Importance scoring and gradient masking are active in training
+- Sparse backward / sparse GEMM transform is still pending
+- Needs vectorization optimization for strong speedups
 
 ### Other E3 Features
 - ✅ **8-bit Muon**: Implemented and validated (`optim/muon_quantized.rs`)
@@ -82,7 +82,7 @@
 ### What's In Progress
 1. 🔧 Collider optimization (needs vectorization)
 2. 🔧 Large model support (needs bigger GPU)
-3. 🔧 Combined optimizer path (GaLore2 + 8-bit Muon)
+3. 🔧 GaLore2 validation/benchmarking (including combined 8-bit + GaLore path)
 
 ### What's Not Started
 1. ❌ Real dataset training
@@ -101,7 +101,8 @@
 - [ ] Optimize Collider (vectorize per-token loss)
 - [x] Validate 8-bit Muon optimizer (74% memory reduction confirmed)
 - [ ] Benchmark 8-bit on larger models (d20-e3-full when GPU available)
-- [ ] Implement GaLore2 + 8-bit combined optimizer path
+- [x] Implement GaLore2 + 8-bit combined optimizer path
+- [ ] Validate GaLore2 convergence and memory claims in end-to-end training
 - [ ] Add real dataset support
 
 ### Long-term (P2)

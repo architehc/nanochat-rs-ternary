@@ -43,19 +43,21 @@ if let Some(ref mtp) = self.mtp {
 
 ```rust
 // Collider integration in train_step
-let importance_mask = if let Some(ref collider) = self.collider {
-    Some(collider.compute_importance(&logits, target_ids)?)
+let collider_mask = if let Some(ref collider) = self.collider {
+    let importance = collider.compute_importance(&logits.detach(), target_ids)?;
+    Some(collider.create_mask(&importance)?)
 } else {
     None
 };
-// TODO: Apply importance mask to gradients for sparse backward
+let logits_for_loss = apply_collider_gradient_mask(&logits, collider_mask.as_ref().unwrap())?;
+// Sparse backward / sparse GEMM transformation is still pending.
 ```
 
 **Implementation Quality**:
 - Separate VarMap for MTP to avoid checkpoint conflicts
 - Backward-compatible (features can be toggled via config)
 - No breaking changes to existing code
-- All 492 workspace tests passing
+- All 496 workspace tests passing
 
 ---
 
@@ -160,8 +162,8 @@ All production model configs now include E3 optimizations:
 
 ### Workspace Tests
 ```
-Total Tests: 492
-Passed: 492
+Total Tests: 496
+Passed: 496
 Failed: 0
 Coverage: Comprehensive
 ```
@@ -329,7 +331,7 @@ tensorboard --logdir runs/
    - Auto-flush
 
 6. **✅ Comprehensive testing**
-   - 492 tests passing
+   - 496 tests passing
    - E2E validation successful
    - No regressions
 
