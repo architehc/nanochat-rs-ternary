@@ -9,3 +9,6 @@ target/
 checkpoints/
 models/
 server.log
+
+# Exported model artifacts
+exported_models/
