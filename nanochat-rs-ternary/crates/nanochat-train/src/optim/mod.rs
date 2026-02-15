@@ -8,8 +8,8 @@ pub mod wrapper;
 
 pub use fire::{FIREConfig, FIREReinitializer, ReinitStats};
 pub use galore2::{GaLore2Muon, GaLore2Quantized, MemoryStats as GaLoreMemoryStats};
-pub use lion::Lion;
-pub use muon::Muon;
-pub use muon_quantized::{QuantMemoryStats, QuantizedMuon};
+pub use lion::{Lion, LionState};
+pub use muon::{Muon, MuonState};
+pub use muon_quantized::{QuantMemoryStats, QuantizedMuon, QuantizedMuonState};
 pub use schedule::wsd_schedule;
-pub use wrapper::{MuonOptimizer, OptimizerMemoryStats};
+pub use wrapper::{MuonOptimizer, MuonOptimizerState, OptimizerMemoryStats};

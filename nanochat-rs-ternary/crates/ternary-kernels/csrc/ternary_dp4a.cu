@@ -117,7 +117,7 @@ int cuda_ternary_gemv_init(void) {
     return 0;
 }
 
-void cuda_ternary_gemv(
+int cuda_ternary_gemv(
     const uint8_t* d_data,
     const float*   d_scales,
     const int8_t*  d_x,
@@ -130,6 +130,13 @@ void cuda_ternary_gemv(
     dim3 block(32);
     ternary_gemv_dp4a_kernel<<<grid, block>>>(
         d_data, d_scales, d_x, act_scale, d_y, M, K, group_size);
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "cuda_ternary_gemv launch failed: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+    return 0;
 }
 
 void* cuda_alloc(size_t bytes) {

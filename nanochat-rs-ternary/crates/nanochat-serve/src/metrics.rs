@@ -9,84 +9,197 @@
 //! Metrics are exposed via GET /metrics endpoint.
 
 use lazy_static::lazy_static;
-use prometheus::{
-    register_counter, register_gauge, register_histogram, Counter, Encoder, Gauge, Histogram,
-    Registry, TextEncoder,
-};
+use prometheus::{Counter, Encoder, Gauge, Histogram, HistogramOpts, Opts, Registry, TextEncoder};
+use std::sync::Once;
+
+static METRICS_INIT: Once = Once::new();
+
+#[derive(Clone)]
+pub struct SafeCounter {
+    inner: Option<Counter>,
+}
+
+impl SafeCounter {
+    fn new(name: &str, help: &str) -> Self {
+        let inner = match Counter::with_opts(Opts::new(name, help)) {
+            Ok(counter) => Some(counter),
+            Err(err) => {
+                eprintln!("ERROR: failed to create counter {}: {}", name, err);
+                None
+            }
+        };
+        Self { inner }
+    }
+
+    fn register(&self, registry: &Registry) {
+        if let Some(metric) = &self.inner {
+            if let Err(err) = registry.register(Box::new(metric.clone())) {
+                eprintln!("WARNING: metrics registration skipped: {}", err);
+            }
+        }
+    }
+
+    pub fn inc(&self) {
+        if let Some(metric) = &self.inner {
+            metric.inc();
+        }
+    }
+
+    pub fn inc_by(&self, value: f64) {
+        if let Some(metric) = &self.inner {
+            metric.inc_by(value);
+        }
+    }
+
+    pub fn get(&self) -> f64 {
+        self.inner.as_ref().map_or(0.0, Counter::get)
+    }
+}
+
+#[derive(Clone)]
+pub struct SafeGauge {
+    inner: Option<Gauge>,
+}
+
+impl SafeGauge {
+    fn new(name: &str, help: &str) -> Self {
+        let inner = match Gauge::with_opts(Opts::new(name, help)) {
+            Ok(gauge) => Some(gauge),
+            Err(err) => {
+                eprintln!("ERROR: failed to create gauge {}: {}", name, err);
+                None
+            }
+        };
+        Self { inner }
+    }
+
+    fn register(&self, registry: &Registry) {
+        if let Some(metric) = &self.inner {
+            if let Err(err) = registry.register(Box::new(metric.clone())) {
+                eprintln!("WARNING: metrics registration skipped: {}", err);
+            }
+        }
+    }
+
+    pub fn inc(&self) {
+        if let Some(metric) = &self.inner {
+            metric.inc();
+        }
+    }
+
+    pub fn dec(&self) {
+        if let Some(metric) = &self.inner {
+            metric.dec();
+        }
+    }
+
+    pub fn set(&self, value: f64) {
+        if let Some(metric) = &self.inner {
+            metric.set(value);
+        }
+    }
+
+    pub fn get(&self) -> f64 {
+        self.inner.as_ref().map_or(0.0, Gauge::get)
+    }
+}
+
+#[derive(Clone)]
+pub struct SafeHistogram {
+    inner: Option<Histogram>,
+}
+
+impl SafeHistogram {
+    fn new(name: &str, help: &str, buckets: Vec<f64>) -> Self {
+        let opts = HistogramOpts::new(name, help).buckets(buckets);
+        let inner = match Histogram::with_opts(opts) {
+            Ok(histogram) => Some(histogram),
+            Err(err) => {
+                eprintln!("ERROR: failed to create histogram {}: {}", name, err);
+                None
+            }
+        };
+        Self { inner }
+    }
+
+    fn register(&self, registry: &Registry) {
+        if let Some(metric) = &self.inner {
+            if let Err(err) = registry.register(Box::new(metric.clone())) {
+                eprintln!("WARNING: metrics registration skipped: {}", err);
+            }
+        }
+    }
+
+    pub fn observe(&self, value: f64) {
+        if let Some(metric) = &self.inner {
+            metric.observe(value);
+        }
+    }
+
+    pub fn get_sample_count(&self) -> u64 {
+        self.inner.as_ref().map_or(0, Histogram::get_sample_count)
+    }
+}
 
 lazy_static! {
     /// Global metrics registry.
     pub static ref REGISTRY: Registry = Registry::new();
 
     /// Total number of inference requests.
-    pub static ref INFERENCE_REQUESTS: Counter = register_counter!(
+    pub static ref INFERENCE_REQUESTS: SafeCounter = SafeCounter::new(
         "nanochat_inference_requests_total",
         "Total number of inference requests"
-    )
-    .unwrap();
+    );
 
     /// Total number of failed requests.
-    pub static ref INFERENCE_ERRORS: Counter = register_counter!(
+    pub static ref INFERENCE_ERRORS: SafeCounter = SafeCounter::new(
         "nanochat_inference_errors_total",
         "Total number of failed inference requests"
-    )
-    .unwrap();
+    );
 
     /// Inference latency histogram in seconds.
-    pub static ref INFERENCE_LATENCY: Histogram = register_histogram!(
+    pub static ref INFERENCE_LATENCY: SafeHistogram = SafeHistogram::new(
         "nanochat_inference_latency_seconds",
         "Inference latency in seconds",
         vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
-    )
-    .unwrap();
+    );
 
     /// Number of currently active requests.
-    pub static ref ACTIVE_REQUESTS: Gauge = register_gauge!(
+    pub static ref ACTIVE_REQUESTS: SafeGauge = SafeGauge::new(
         "nanochat_active_requests",
         "Number of currently active inference requests"
-    )
-    .unwrap();
+    );
 
     /// Model load time in seconds.
-    pub static ref MODEL_LOAD_TIME: Gauge = register_gauge!(
+    pub static ref MODEL_LOAD_TIME: SafeGauge = SafeGauge::new(
         "nanochat_model_load_time_seconds",
         "Time taken to load model in seconds"
-    )
-    .unwrap();
+    );
 
     /// Total tokens generated.
-    pub static ref TOKENS_GENERATED: Counter = register_counter!(
+    pub static ref TOKENS_GENERATED: SafeCounter = SafeCounter::new(
         "nanochat_tokens_generated_total",
         "Total number of tokens generated"
-    )
-    .unwrap();
+    );
 
     /// Tokens per second (throughput).
-    pub static ref TOKENS_PER_SECOND: Gauge = register_gauge!(
+    pub static ref TOKENS_PER_SECOND: SafeGauge = SafeGauge::new(
         "nanochat_tokens_per_second",
         "Current tokens per second throughput"
-    )
-    .unwrap();
+    );
 }
 
 /// Register all metrics with the global registry.
 pub fn register_metrics() {
-    let registrations = [
-        REGISTRY.register(Box::new(INFERENCE_REQUESTS.clone())),
-        REGISTRY.register(Box::new(INFERENCE_ERRORS.clone())),
-        REGISTRY.register(Box::new(INFERENCE_LATENCY.clone())),
-        REGISTRY.register(Box::new(ACTIVE_REQUESTS.clone())),
-        REGISTRY.register(Box::new(MODEL_LOAD_TIME.clone())),
-        REGISTRY.register(Box::new(TOKENS_GENERATED.clone())),
-        REGISTRY.register(Box::new(TOKENS_PER_SECOND.clone())),
-    ];
-
-    for result in registrations {
-        if let Err(err) = result {
-            // AlreadyRegistered on repeated init should not crash the server.
-            eprintln!("WARNING: metrics registration skipped: {}", err);
-        }
-    }
+    METRICS_INIT.call_once(|| {
+        INFERENCE_REQUESTS.register(&REGISTRY);
+        INFERENCE_ERRORS.register(&REGISTRY);
+        INFERENCE_LATENCY.register(&REGISTRY);
+        ACTIVE_REQUESTS.register(&REGISTRY);
+        MODEL_LOAD_TIME.register(&REGISTRY);
+        TOKENS_GENERATED.register(&REGISTRY);
+        TOKENS_PER_SECOND.register(&REGISTRY);
+    });
 }
 
 /// Render metrics in Prometheus text format.

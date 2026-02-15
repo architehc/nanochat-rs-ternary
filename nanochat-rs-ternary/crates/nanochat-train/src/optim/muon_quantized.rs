@@ -5,10 +5,11 @@
 //! reducing memory by 75% with minimal impact on convergence.
 
 use candle_core::{backprop::GradStore, Result, Tensor, Var};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Quantization configuration for optimizer states
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuantConfig {
     /// Use block-wise quantization (128 elements per block)
     pub block_size: usize,
@@ -38,6 +39,24 @@ struct QuantizedState {
     shape: Vec<usize>,
     /// Block size for quantization
     block_size: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedBufferState {
+    pub values: Vec<i8>,
+    pub scales: Vec<f32>,
+    pub shape: Vec<usize>,
+    pub block_size: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedMuonState {
+    pub momentum_buffers: Vec<QuantizedBufferState>,
+    pub lr: f64,
+    pub beta: f64,
+    pub ns_steps: usize,
+    pub weight_decay: f64,
+    pub quant_config: QuantConfig,
 }
 
 impl QuantizedState {
@@ -265,6 +284,89 @@ impl QuantizedMuon {
 
     pub fn set_lr(&mut self, lr: f64) {
         self.lr = lr;
+    }
+
+    pub fn export_state(&self) -> QuantizedMuonState {
+        QuantizedMuonState {
+            momentum_buffers: self
+                .momentum_buffers
+                .iter()
+                .map(|state| QuantizedBufferState {
+                    values: state.values.clone(),
+                    scales: state.scales.clone(),
+                    shape: state.shape.clone(),
+                    block_size: state.block_size,
+                })
+                .collect(),
+            lr: self.lr,
+            beta: self.beta,
+            ns_steps: self.ns_steps,
+            weight_decay: self.weight_decay,
+            quant_config: self.quant_config.clone(),
+        }
+    }
+
+    pub fn import_state(&mut self, state: &QuantizedMuonState) -> Result<()> {
+        if state.momentum_buffers.len() != self.momentum_buffers.len() {
+            return Err(candle_core::Error::Msg(format!(
+                "Quantized Muon state mismatch: expected {} buffers, got {}",
+                self.momentum_buffers.len(),
+                state.momentum_buffers.len()
+            )));
+        }
+
+        let mut restored = Vec::with_capacity(state.momentum_buffers.len());
+        for (idx, snap) in state.momentum_buffers.iter().enumerate() {
+            if snap.block_size == 0 {
+                return Err(candle_core::Error::Msg(format!(
+                    "Quantized Muon state invalid block_size=0 at index {}",
+                    idx
+                )));
+            }
+
+            let expected_shape = self.vars[idx].as_tensor().dims().to_vec();
+            if snap.shape != expected_shape {
+                return Err(candle_core::Error::Msg(format!(
+                    "Quantized Muon shape mismatch at index {}: expected {:?}, got {:?}",
+                    idx, expected_shape, snap.shape
+                )));
+            }
+
+            let expected_len: usize = expected_shape.iter().product();
+            if snap.values.len() != expected_len {
+                return Err(candle_core::Error::Msg(format!(
+                    "Quantized Muon values length mismatch at index {}: expected {}, got {}",
+                    idx,
+                    expected_len,
+                    snap.values.len()
+                )));
+            }
+
+            let expected_scales = expected_len.div_ceil(snap.block_size);
+            if snap.scales.len() != expected_scales {
+                return Err(candle_core::Error::Msg(format!(
+                    "Quantized Muon scales length mismatch at index {}: expected {}, got {}",
+                    idx,
+                    expected_scales,
+                    snap.scales.len()
+                )));
+            }
+
+            restored.push(QuantizedState {
+                values: snap.values.clone(),
+                scales: snap.scales.clone(),
+                shape: snap.shape.clone(),
+                block_size: snap.block_size,
+            });
+        }
+
+        self.momentum_buffers = restored;
+        self.lr = state.lr;
+        self.beta = state.beta;
+        self.ns_steps = state.ns_steps;
+        self.weight_decay = state.weight_decay;
+        self.quant_config = state.quant_config.clone();
+        Ok(())
     }
 
     /// Get memory savings statistics

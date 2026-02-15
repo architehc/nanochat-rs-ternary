@@ -14,7 +14,18 @@ use crate::ffn::{FeedForward, FfnLayer, MoeExperts};
 use crate::norm::RMSNorm;
 use mhc_lite::MhcLiteN2;
 
+#[derive(Debug, Default)]
+struct BatchWorkspace {
+    attn_in_batch: Vec<f32>,
+    normed_batch: Vec<f32>,
+    attn_out_batch: Vec<f32>,
+    ffn_in_batch: Vec<f32>,
+    ffn_out_batch: Vec<f32>,
+    residual_tmp: Vec<f32>,
+}
+
 /// Attention layer variant -- standard MHA/GQA or DeltaNet recurrent.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum AttentionLayer {
     /// Standard multi-head attention with KV cache.
@@ -63,9 +74,71 @@ pub struct TransformerBlock {
     pub attention: AttentionLayer,
     pub ffn: FfnLayer,
     pub dim: usize,
+    batch_workspace: BatchWorkspace,
+}
+
+fn mhc_prepare_input_into(mhc: &MhcLiteN2, x: &[f32], dim_c: usize, out: &mut [f32]) {
+    let h_pre = mhc.h_pre();
+    let batch = x.len() / (2 * dim_c);
+    debug_assert_eq!(x.len(), batch * 2 * dim_c);
+    debug_assert_eq!(out.len(), batch * dim_c);
+
+    for b in 0..batch {
+        let s0 = &x[b * 2 * dim_c..b * 2 * dim_c + dim_c];
+        let s1 = &x[b * 2 * dim_c + dim_c..b * 2 * dim_c + 2 * dim_c];
+        let o = &mut out[b * dim_c..(b + 1) * dim_c];
+        for i in 0..dim_c {
+            o[i] = h_pre[0] * s0[i] + h_pre[1] * s1[i];
+        }
+    }
+}
+
+fn mhc_apply_into(mhc: &MhcLiteN2, x: &[f32], layer_output: &[f32], dim_c: usize, out: &mut [f32]) {
+    let h_res = mhc.h_res();
+    let h_post = mhc.h_post();
+    let batch = x.len() / (2 * dim_c);
+    debug_assert_eq!(x.len(), batch * 2 * dim_c);
+    debug_assert_eq!(layer_output.len(), batch * dim_c);
+    debug_assert_eq!(out.len(), batch * 2 * dim_c);
+
+    for b in 0..batch {
+        let s0 = &x[b * 2 * dim_c..b * 2 * dim_c + dim_c];
+        let s1 = &x[b * 2 * dim_c + dim_c..b * 2 * dim_c + 2 * dim_c];
+        let ly = &layer_output[b * dim_c..(b + 1) * dim_c];
+
+        let (o0, o1) = out[b * 2 * dim_c..b * 2 * dim_c + 2 * dim_c].split_at_mut(dim_c);
+
+        for i in 0..dim_c {
+            let s0_with_res = s0[i] + h_post[0] * ly[i];
+            let s1_with_res = s1[i] + h_post[1] * ly[i];
+            o0[i] = h_res[0][0] * s0_with_res + h_res[0][1] * s1_with_res;
+            o1[i] = h_res[1][0] * s0_with_res + h_res[1][1] * s1_with_res;
+        }
+    }
 }
 
 impl TransformerBlock {
+    pub(crate) fn from_parts(
+        mhc_attn: MhcLiteN2,
+        mhc_ffn: MhcLiteN2,
+        norm_attn: RMSNorm,
+        norm_ffn: RMSNorm,
+        attention: AttentionLayer,
+        ffn: FfnLayer,
+        dim: usize,
+    ) -> Self {
+        Self {
+            mhc_attn,
+            mhc_ffn,
+            norm_attn,
+            norm_ffn,
+            attention,
+            ffn,
+            dim,
+            batch_workspace: BatchWorkspace::default(),
+        }
+    }
+
     /// Create a block with standard attention and random weights (for testing).
     pub fn new_random(config: &ModelConfig) -> Self {
         let ffn = if config.n_experts.is_some() {
@@ -74,15 +147,15 @@ impl TransformerBlock {
             FfnLayer::Dense(Box::new(FeedForward::new_random(config)))
         };
 
-        Self {
-            mhc_attn: MhcLiteN2::new_identity(),
-            mhc_ffn: MhcLiteN2::new_identity(),
-            norm_attn: RMSNorm::new(config.dim),
-            norm_ffn: RMSNorm::new(config.dim),
-            attention: AttentionLayer::Standard(Attention::new_random(config)),
+        Self::from_parts(
+            MhcLiteN2::new_identity(),
+            MhcLiteN2::new_identity(),
+            RMSNorm::new(config.dim),
+            RMSNorm::new(config.dim),
+            AttentionLayer::Standard(Attention::new_random(config)),
             ffn,
-            dim: config.dim,
-        }
+            config.dim,
+        )
     }
 
     /// Create a block with DeltaNet attention and random weights (for testing).
@@ -93,15 +166,15 @@ impl TransformerBlock {
             FfnLayer::Dense(Box::new(FeedForward::new_random(config)))
         };
 
-        Self {
-            mhc_attn: MhcLiteN2::new_identity(),
-            mhc_ffn: MhcLiteN2::new_identity(),
-            norm_attn: RMSNorm::new(config.dim),
-            norm_ffn: RMSNorm::new(config.dim),
-            attention: AttentionLayer::DeltaNet(DeltaNetAttention::new_random(config)),
+        Self::from_parts(
+            MhcLiteN2::new_identity(),
+            MhcLiteN2::new_identity(),
+            RMSNorm::new(config.dim),
+            RMSNorm::new(config.dim),
+            AttentionLayer::DeltaNet(DeltaNetAttention::new_random(config)),
             ffn,
-            dim: config.dim,
-        }
+            config.dim,
+        )
     }
 
     /// Create the appropriate attention state for this block's attention type.
@@ -154,7 +227,7 @@ impl TransformerBlock {
             (AttentionLayer::DeltaNet(attn), AttentionState::Recurrent(state)) => {
                 attn.forward(&normed, state, &mut attn_out);
             }
-            _ => panic!("attention layer type and state type mismatch"),
+            _ => unreachable!("attention layer type and state type mismatch"),
         }
 
         // 4. mHC residual update
@@ -187,7 +260,7 @@ impl TransformerBlock {
     ///
     /// Modifies x_exp_batch in-place.
     pub fn forward_batch(
-        &self,
+        &mut self,
         x_exp_batch: &mut [f32],
         attn_state: &mut AttentionState,
         rope: &RopeFreqs,
@@ -198,78 +271,84 @@ impl TransformerBlock {
         let n_streams = x_exp_batch.len() / (seq_len * dim);
         let exp_dim = n_streams * dim;
         assert_eq!(x_exp_batch.len(), seq_len * exp_dim);
+        let batch_len = seq_len * dim;
+
+        let mut ws = std::mem::take(&mut self.batch_workspace);
+        ws.attn_in_batch.resize(batch_len, 0.0);
+        ws.normed_batch.resize(batch_len, 0.0);
+        ws.attn_out_batch.resize(batch_len, 0.0);
+        ws.ffn_in_batch.resize(batch_len, 0.0);
+        ws.ffn_out_batch.resize(batch_len, 0.0);
+        ws.residual_tmp.resize(exp_dim, 0.0);
 
         // === Attention sub-layer (batched) ===
         // 1. Prepare input for each token: mix streams -> single
-        let mut attn_in_batch = vec![0.0f32; seq_len * dim];
         for t in 0..seq_len {
             let x_exp = &x_exp_batch[t * exp_dim..(t + 1) * exp_dim];
-            let prepared = self.mhc_attn.prepare_input(x_exp, dim);
-            attn_in_batch[t * dim..(t + 1) * dim].copy_from_slice(&prepared);
+            let out = &mut ws.attn_in_batch[t * dim..(t + 1) * dim];
+            mhc_prepare_input_into(&self.mhc_attn, x_exp, dim, out);
         }
 
         // 2. RMSNorm batch
-        let mut normed_batch = vec![0.0f32; seq_len * dim];
         self.norm_attn
-            .forward_batch(&attn_in_batch, seq_len, &mut normed_batch);
+            .forward_batch(&ws.attn_in_batch, seq_len, &mut ws.normed_batch);
 
         // 3. Attention (dispatch based on layer type)
-        let mut attn_out_batch = vec![0.0f32; seq_len * dim];
         match (&self.attention, attn_state) {
             (AttentionLayer::Standard(attn), AttentionState::Kv(cache)) => {
                 attn.forward_batch(
-                    &normed_batch,
+                    &ws.normed_batch,
                     seq_len,
                     cache,
                     rope,
                     start_pos,
-                    &mut attn_out_batch,
+                    &mut ws.attn_out_batch,
                 );
             }
             (AttentionLayer::DeltaNet(attn), AttentionState::Recurrent(state)) => {
                 // DeltaNet processes tokens one at a time (recurrent)
                 for t in 0..seq_len {
-                    let normed = &normed_batch[t * dim..(t + 1) * dim];
-                    let out = &mut attn_out_batch[t * dim..(t + 1) * dim];
+                    let normed = &ws.normed_batch[t * dim..(t + 1) * dim];
+                    let out = &mut ws.attn_out_batch[t * dim..(t + 1) * dim];
                     attn.forward(normed, state, out);
                 }
             }
-            _ => panic!("attention layer type and state type mismatch"),
+            _ => unreachable!("attention layer type and state type mismatch"),
         }
 
         // 4. mHC residual update for each token
         for t in 0..seq_len {
             let x_exp = &x_exp_batch[t * exp_dim..(t + 1) * exp_dim];
-            let attn_out = &attn_out_batch[t * dim..(t + 1) * dim];
-            let x_new = self.mhc_attn.apply(x_exp, attn_out, dim);
-            x_exp_batch[t * exp_dim..(t + 1) * exp_dim].copy_from_slice(&x_new);
+            let attn_out = &ws.attn_out_batch[t * dim..(t + 1) * dim];
+            mhc_apply_into(&self.mhc_attn, x_exp, attn_out, dim, &mut ws.residual_tmp);
+            x_exp_batch[t * exp_dim..(t + 1) * exp_dim].copy_from_slice(&ws.residual_tmp);
         }
 
         // === FFN sub-layer (batched) ===
         // 1. Prepare input for each token
-        let mut ffn_in_batch = vec![0.0f32; seq_len * dim];
         for t in 0..seq_len {
             let x_exp = &x_exp_batch[t * exp_dim..(t + 1) * exp_dim];
-            let prepared = self.mhc_ffn.prepare_input(x_exp, dim);
-            ffn_in_batch[t * dim..(t + 1) * dim].copy_from_slice(&prepared);
+            let out = &mut ws.ffn_in_batch[t * dim..(t + 1) * dim];
+            mhc_prepare_input_into(&self.mhc_ffn, x_exp, dim, out);
         }
 
         // 2. RMSNorm batch
         self.norm_ffn
-            .forward_batch(&ffn_in_batch, seq_len, &mut normed_batch);
+            .forward_batch(&ws.ffn_in_batch, seq_len, &mut ws.normed_batch);
 
         // 3. FFN batch
-        let mut ffn_out_batch = vec![0.0f32; seq_len * dim];
         self.ffn
-            .forward_batch(&normed_batch, seq_len, &mut ffn_out_batch);
+            .forward_batch(&ws.normed_batch, seq_len, &mut ws.ffn_out_batch);
 
         // 4. mHC residual update for each token
         for t in 0..seq_len {
             let x_exp = &x_exp_batch[t * exp_dim..(t + 1) * exp_dim];
-            let ffn_out = &ffn_out_batch[t * dim..(t + 1) * dim];
-            let x_new = self.mhc_ffn.apply(x_exp, ffn_out, dim);
-            x_exp_batch[t * exp_dim..(t + 1) * exp_dim].copy_from_slice(&x_new);
+            let ffn_out = &ws.ffn_out_batch[t * dim..(t + 1) * dim];
+            mhc_apply_into(&self.mhc_ffn, x_exp, ffn_out, dim, &mut ws.residual_tmp);
+            x_exp_batch[t * exp_dim..(t + 1) * exp_dim].copy_from_slice(&ws.residual_tmp);
         }
+
+        self.batch_workspace = ws;
     }
 }
 

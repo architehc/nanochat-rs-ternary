@@ -18,7 +18,7 @@ extern "C" {
         m: i32,
         k: i32,
         group_size: i32,
-    );
+    ) -> i32;
     fn cuda_alloc(bytes: usize) -> *mut u8;
     fn cuda_free(ptr: *mut u8);
     fn cuda_memcpy_h2d(dst: *mut u8, src: *const u8, bytes: usize) -> i32;
@@ -57,6 +57,19 @@ impl GpuWeights {
     ///
     /// Uses row-major data + row-major scales for the dp4a kernel.
     pub fn from_planar(pw: &PlanarWeights) -> Self {
+        assert!(pw.rows > 0, "rows must be > 0");
+        assert!(pw.cols > 0, "cols must be > 0");
+        assert!(pw.group_size > 0, "group_size must be > 0");
+        assert!(pw.cols.is_multiple_of(4), "cols must be divisible by 4");
+        assert!(
+            pw.group_size.is_multiple_of(4),
+            "group_size must be divisible by 4"
+        );
+        assert!(
+            pw.cols.is_multiple_of(pw.group_size),
+            "cols must be divisible by group_size"
+        );
+
         init();
 
         let kp = pw.cols / 4;
@@ -147,7 +160,7 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
     assert_eq!(ret, 0, "H2D copy failed for x");
 
     // Launch kernel
-    unsafe {
+    let ret = unsafe {
         cuda_ternary_gemv(
             gw.d_data,
             gw.d_scales as *const f32,
@@ -157,8 +170,9 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
             gw.rows as i32,
             gw.cols as i32,
             gw.group_size as i32,
-        );
-    }
+        )
+    };
+    assert_eq!(ret, 0, "CUDA kernel launch failed");
 
     // Download y
     let ret = unsafe { cuda_memcpy_d2h(y.as_mut_ptr() as *mut u8, d_y as *const u8, y_bytes) };

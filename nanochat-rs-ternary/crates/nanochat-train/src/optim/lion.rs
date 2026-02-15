@@ -1,6 +1,9 @@
 //! Lion optimizer: sign-based update with EMA momentum.
 
 use candle_core::{backprop::GradStore, DType, Result, Tensor, Var};
+use serde::{Deserialize, Serialize};
+
+use super::muon::TensorState;
 
 /// Lion optimizer.
 ///
@@ -16,6 +19,15 @@ pub struct Lion {
     beta1: f64,
     beta2: f64,
     weight_decay: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LionState {
+    pub exp_avg: Vec<TensorState>,
+    pub lr: f64,
+    pub beta1: f64,
+    pub beta2: f64,
+    pub weight_decay: f64,
 }
 
 impl Lion {
@@ -71,6 +83,66 @@ impl Lion {
 
     pub fn set_lr(&mut self, lr: f64) {
         self.lr = lr;
+    }
+
+    pub fn export_state(&self) -> Result<LionState> {
+        let mut exp_avg = Vec::with_capacity(self.exp_avg.len());
+        for tensor in &self.exp_avg {
+            exp_avg.push(TensorState {
+                shape: tensor.dims().to_vec(),
+                data: tensor.flatten_all()?.to_vec1::<f32>()?,
+            });
+        }
+
+        Ok(LionState {
+            exp_avg,
+            lr: self.lr,
+            beta1: self.beta1,
+            beta2: self.beta2,
+            weight_decay: self.weight_decay,
+        })
+    }
+
+    pub fn import_state(&mut self, state: &LionState) -> Result<()> {
+        if state.exp_avg.len() != self.exp_avg.len() {
+            return Err(candle_core::Error::Msg(format!(
+                "Lion state mismatch: expected {} EMA tensors, got {}",
+                self.exp_avg.len(),
+                state.exp_avg.len()
+            )));
+        }
+
+        let mut restored = Vec::with_capacity(state.exp_avg.len());
+        for (idx, snap) in state.exp_avg.iter().enumerate() {
+            let expected_shape = self.vars[idx].as_tensor().dims().to_vec();
+            if snap.shape != expected_shape {
+                return Err(candle_core::Error::Msg(format!(
+                    "Lion state shape mismatch at index {}: expected {:?}, got {:?}",
+                    idx, expected_shape, snap.shape
+                )));
+            }
+            let expected_len: usize = expected_shape.iter().product();
+            if snap.data.len() != expected_len {
+                return Err(candle_core::Error::Msg(format!(
+                    "Lion state data length mismatch at index {}: expected {}, got {}",
+                    idx,
+                    expected_len,
+                    snap.data.len()
+                )));
+            }
+            restored.push(Tensor::from_vec(
+                snap.data.clone(),
+                snap.shape.as_slice(),
+                self.vars[idx].device(),
+            )?);
+        }
+
+        self.exp_avg = restored;
+        self.lr = state.lr;
+        self.beta1 = state.beta1;
+        self.beta2 = state.beta2;
+        self.weight_decay = state.weight_decay;
+        Ok(())
     }
 }
 
@@ -147,6 +219,36 @@ mod tests {
         for &v in &vals {
             assert!(v < 1.0, "Weight should decrease with decay: {}", v);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_lion_state_export_import_roundtrip() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let w = vb.get_with_hints(8, "w", candle_nn::Init::Const(1.0))?;
+
+        // Create a non-zero optimizer state.
+        let x = Tensor::randn(0.0f32, 1.0, (1, 8), &device)?;
+        let y = x.broadcast_mul(&w)?;
+        let loss = y.sum_all()?;
+        let grads = loss.backward()?;
+
+        let vars = varmap.all_vars();
+        let mut lion = Lion::new(vars.clone(), 1e-3, 0.9, 0.99, 0.0)?;
+        lion.step(&grads, 1.0)?;
+        let state = lion.export_state()?;
+
+        let mut restored = Lion::new(vars, 1e-4, 0.8, 0.95, 0.1)?;
+        restored.import_state(&state)?;
+        let restored_state = restored.export_state()?;
+
+        assert_eq!(restored_state.exp_avg.len(), state.exp_avg.len());
+        assert_eq!(restored_state.lr, state.lr);
+        assert_eq!(restored_state.beta1, state.beta1);
+        assert_eq!(restored_state.beta2, state.beta2);
+        assert_eq!(restored_state.weight_decay, state.weight_decay);
         Ok(())
     }
 }

@@ -88,7 +88,8 @@ enum AllocSource {
 pub struct AlignedVec<T: Copy + Default> {
     ptr: NonNull<T>,
     len: usize,
-    cap: usize,
+    cap_elems: usize,
+    alloc_bytes: usize,
     alloc_source: AllocSource,
 }
 
@@ -103,7 +104,8 @@ impl<T: Copy + Default> AlignedVec<T> {
             return Self {
                 ptr: NonNull::dangling(),
                 len: 0,
-                cap: 0,
+                cap_elems: 0,
+                alloc_bytes: 0,
                 alloc_source: AllocSource::Standard,
             };
         }
@@ -130,7 +132,8 @@ impl<T: Copy + Default> AlignedVec<T> {
         Self {
             ptr,
             len,
-            cap: len,
+            cap_elems: len,
+            alloc_bytes: size,
             alloc_source: AllocSource::Standard,
         }
     }
@@ -201,7 +204,8 @@ impl<T: Copy + Default> AlignedVec<T> {
             Self {
                 ptr,
                 len,
-                cap: size, // Store byte size for numa_free in Drop
+                cap_elems: len,
+                alloc_bytes: size,
                 alloc_source: AllocSource::Numa { node },
             }
         }
@@ -267,24 +271,25 @@ impl<T: Copy + Default> DerefMut for AlignedVec<T> {
 
 impl<T: Copy + Default> Drop for AlignedVec<T> {
     fn drop(&mut self) {
-        if self.cap == 0 {
+        if self.alloc_bytes == 0 {
             return;
         }
         match self.alloc_source {
             AllocSource::Standard => {
-                let size = std::mem::size_of::<T>() * self.cap;
-                let layout = Layout::from_size_align(size, 128).unwrap();
+                debug_assert_eq!(
+                    self.alloc_bytes,
+                    std::mem::size_of::<T>() * self.cap_elems,
+                    "standard allocation bookkeeping mismatch"
+                );
+                let layout = Layout::from_size_align(self.alloc_bytes, 128).unwrap();
                 unsafe {
                     alloc::dealloc(self.ptr.as_ptr() as *mut u8, layout);
                 }
             }
             #[cfg(all(target_os = "linux", has_numa))]
-            AllocSource::Numa { .. } => {
-                // For NUMA allocations, cap stores the byte size passed to numa_alloc_onnode
-                unsafe {
-                    numa_free(self.ptr.as_ptr() as *mut libc::c_void, self.cap);
-                }
-            }
+            AllocSource::Numa { .. } => unsafe {
+                numa_free(self.ptr.as_ptr() as *mut libc::c_void, self.alloc_bytes);
+            },
         }
     }
 }

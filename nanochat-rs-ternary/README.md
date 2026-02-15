@@ -7,10 +7,10 @@ coherent children's stories (perplexity 4.01 on TinyStories) and is served via
 an OpenAI-compatible HTTP API.
 
 ```
-Training (Python/PyTorch)  -->  Export (GGUF + mHC)  -->  Inference (Rust/AVX2)
-     ternary QAT + STE          107 MB model              OpenAI-compatible API
-     mHC-lite BvN residuals      880 B mHC params          SSE streaming
-     ~13.5K tok/s GPU            5.8x compression          14-32 GOPS CPU kernel
+Training (Rust/Candle)  -->  Export (GGUF + mHC)  -->  Inference (Rust/AVX2)
+    Muon/Lion optimizers       107 MB model              OpenAI-compatible API
+    mHC-lite BvN residuals      880 B mHC params          SSE streaming
+    Optional 8-bit/GaLore2      5.8x compression          14-32 GOPS CPU kernel
 ```
 
 ---
@@ -109,21 +109,19 @@ nanochat-rs-ternary/
 │   │       ├── block.rs                # Transformer block with mHC wiring
 │   │       └── model.rs                # Full model + GGUF loader
 │   │
+│   ├── nanochat-train/                 # Rust training + checkpoint/export CLI
+│   │   └── src/
+│   │       ├── main.rs                 # CLI: train / prepare-data / export
+│   │       ├── train.rs                # Trainer loop + checkpoint management
+│   │       ├── checkpoint.rs           # Checkpoint load/save (weights + metadata)
+│   │       └── optim/                  # Muon, 8-bit Muon, GaLore2, Lion
+│   │
 │   └── nanochat-serve/                 # HTTP inference server
 │       └── src/
 │           ├── main.rs                 # CLI entry point
 │           ├── server.rs               # Axum HTTP server + SSE streaming
 │           ├── engine.rs               # Generation engine + sampling
 │           └── api.rs                  # OpenAI-compatible request/response types
-│
-├── training/                           # PyTorch training pipeline
-│   ├── model.py                        # NanochatTernary model definition
-│   ├── train.py                        # Training loop (AdamW, WSD schedule)
-│   ├── ternary_qat.py                  # BitLinearSTE (quantization-aware training)
-│   ├── mhc_lite.py                     # mHC-lite module (BvN, exact DS)
-│   ├── export.py                       # PyTorch -> GGUF + mHC binary
-│   ├── evaluate.py                     # Validation perplexity + generation
-│   └── requirements.txt
 │
 ├── tests/                              # Integration tests
 │   ├── triangle_of_truth.rs            # Cross-validate kernel paths
@@ -136,7 +134,7 @@ nanochat-rs-ternary/
     └── mhc_overhead.rs                 # mHC compute overhead measurement
 ```
 
-**Codebase size:** ~8,400 lines Rust + ~2,700 lines Python + ~1,400 lines C
+**Codebase size:** Rust-first codebase with native C kernels for hot GEMV paths
 
 ---
 
@@ -145,7 +143,6 @@ nanochat-rs-ternary/
 ### Prerequisites
 
 - **Rust** 1.70+ (with `cargo`)
-- **Python** 3.9+ with PyTorch 2.0+ and CUDA (for training)
 - **x86_64 CPU** with AVX2 (for optimized inference; scalar fallback available)
 - GCC or Clang (for compiling C kernels)
 
@@ -167,8 +164,8 @@ cargo test --workspace
 
 ```bash
 cargo run --release -p nanochat-serve -- \
-  --model training/checkpoints/nanochat_125m.gguf \
-  --mhc training/checkpoints/nanochat_125m.mhc \
+  --model exported_models/nanochat_125m.gguf \
+  --mhc exported_models/nanochat_125m.mhc \
   --port 8080
 ```
 
@@ -224,47 +221,37 @@ curl -N http://localhost:8080/v1/chat/completions \
 
 ## Training
 
-### Requirements
-
-```bash
-cd training
-pip install -r requirements.txt
-# torch>=2.0, numpy, tqdm, datasets, tiktoken
-```
-
 ### Train from Scratch
 
 ```bash
-python train.py \
-  --config 125m \
-  --dataset tinystories \
-  --device cuda \
+cargo run --release -p nanochat-train -- train \
+  --config nano-125m \
+  --dataset synthetic \
   --epochs 1 \
   --batch_size 8 \
-  --grad_accum_steps 4 \
   --seq_len 256 \
-  --lr 3e-4 \
-  --mhc_lr 1e-3 \
-  --warmup_steps 500 \
-  --save_path checkpoints/nanochat_125m.pt \
-  --log_interval 50 \
-  --diag_interval 500
+  --checkpoint_dir checkpoints/nanochat_125m \
+  --checkpoint_interval 1000 \
+  --keep_last_checkpoints 3 \
+  --log_interval 50
 ```
 
 ### Export to GGUF
 
 ```bash
-python export.py \
-  --checkpoint checkpoints/nanochat_125m.pt \
-  --gguf checkpoints/nanochat_125m.gguf \
-  --mhc checkpoints/nanochat_125m.mhc \
-  --config 125m
+cargo run --release -p nanochat-train -- export \
+  --checkpoint checkpoints/nanochat_125m/final \
+  --gguf exported_models/nanochat_125m.gguf \
+  --mhc exported_models/nanochat_125m.mhc
 ```
 
 ### Evaluate
 
 ```bash
-python evaluate.py --checkpoint checkpoints/nanochat_125m.pt
+cargo run --release -p nanochat-eval --example benchmark_model -- \
+  --checkpoint checkpoints/nanochat_125m/final \
+  --n-samples 100 \
+  --output benchmark_results.json
 ```
 
 ### Training Configuration

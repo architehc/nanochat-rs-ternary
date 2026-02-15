@@ -706,13 +706,33 @@ static void select_kernel(void) {
 }
 
 // FIX 3: Lazy init — users don't need to call detect/select manually
-static volatile int gemv_initialized = 0;
+// 0 = uninitialized, 1 = initialization in progress, 2 = initialized
+static int gemv_initialized = 0;
 
 static void ensure_init(void) {
-    if (__builtin_expect(!gemv_initialized, 0)) {
+    int state = __atomic_load_n(&gemv_initialized, __ATOMIC_ACQUIRE);
+    if (__builtin_expect(state == 2, 1)) {
+        return;
+    }
+
+    int expected = 0;
+    if (__atomic_compare_exchange_n(
+            &gemv_initialized,
+            &expected,
+            1,
+            0,
+            __ATOMIC_ACQ_REL,
+            __ATOMIC_ACQUIRE)) {
         detect_cpu_features();
         select_kernel();
-        __atomic_store_n(&gemv_initialized, 1, __ATOMIC_RELEASE);
+        __atomic_store_n(&gemv_initialized, 2, __ATOMIC_RELEASE);
+        return;
+    }
+
+    while (__atomic_load_n(&gemv_initialized, __ATOMIC_ACQUIRE) != 2) {
+#if ARCH_X86_64
+        __builtin_ia32_pause();
+#endif
     }
 }
 

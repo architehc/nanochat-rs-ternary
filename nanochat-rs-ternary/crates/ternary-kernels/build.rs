@@ -29,6 +29,7 @@ fn main() {
     println!("cargo:rerun-if-changed=csrc/ternary_gemv_avx2.c");
     println!("cargo:rerun-if-changed=csrc/ternary_gemv_avx2.h");
     println!("cargo:rerun-if-changed=csrc/ternary_dp4a.cu");
+    println!("cargo:rerun-if-env-changed=CUDA_ARCH");
 
     // GPU kernel (optional — gate on CUDA toolkit presence)
     let cuda_path = if std::env::var("CUDA_PATH").is_ok() {
@@ -47,6 +48,7 @@ fn main() {
     let lib_path = format!("{}/libternary_dp4a.a", out_dir);
 
     // Compile CUDA kernel to object file
+    let cuda_arch = std::env::var("CUDA_ARCH").unwrap_or_else(|_| "sm_89".to_string());
     let status = Command::new(&nvcc)
         .args([
             "-c",
@@ -54,7 +56,7 @@ fn main() {
             "-o",
             &obj_path,
             "-O3",
-            "--gpu-architecture=sm_89",
+            &format!("--gpu-architecture={}", cuda_arch),
             "-Xcompiler",
             "-fPIC",
             "-DNDEBUG",

@@ -156,11 +156,28 @@ impl GgufFile {
     /// Get raw tensor data bytes for a given tensor descriptor.
     ///
     /// For Q1_58 tensors, returns packed bytes + f32 scales concatenated.
-    pub fn tensor_data(&self, tensor: &TensorDescriptor) -> &[u8] {
-        let start = self.data_offset + tensor.offset as usize;
+    pub fn tensor_data(&self, tensor: &TensorDescriptor) -> io::Result<&[u8]> {
+        let start = self
+            .data_offset
+            .checked_add(tensor.offset as usize)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "tensor offset overflow"))?;
         let byte_size = self.tensor_byte_size(tensor);
-        let end = start + byte_size;
-        &self._mmap[start..end.min(self._mmap.len())]
+        let end = start
+            .checked_add(byte_size)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "tensor size overflow"))?;
+        if end > self._mmap.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "tensor '{}' data range [{}..{}) exceeds file size {}",
+                    tensor.name,
+                    start,
+                    end,
+                    self._mmap.len()
+                ),
+            ));
+        }
+        Ok(&self._mmap[start..end])
     }
 
     fn tensor_byte_size(&self, tensor: &TensorDescriptor) -> usize {
@@ -211,7 +228,7 @@ impl GgufFile {
 
         let rows = tensor.dims[0] as usize;
         let cols = tensor.dims[1] as usize;
-        let packed_data = self.tensor_data(tensor);
+        let packed_data = self.tensor_data(tensor)?;
         let kp = cols / 4;
         let gprow = cols / group_size;
 
@@ -1160,7 +1177,7 @@ mod tests {
 
         let gguf = GgufFile::open(&path).unwrap();
         assert_eq!(gguf.tensors.len(), 1);
-        let data = gguf.tensor_data(&gguf.tensors[0]);
+        let data = gguf.tensor_data(&gguf.tensors[0]).unwrap();
         assert_eq!(data.len(), 8); // 4 * 2 bytes for F16
 
         std::fs::remove_file(&path).ok();
@@ -1189,7 +1206,7 @@ mod tests {
 
         let gguf = GgufFile::open(&path).unwrap();
         assert_eq!(gguf.tensors.len(), 1);
-        let data = gguf.tensor_data(&gguf.tensors[0]);
+        let data = gguf.tensor_data(&gguf.tensors[0]).unwrap();
         assert_eq!(data.len(), 4); // 4 * 1 byte for unknown dtype
 
         std::fs::remove_file(&path).ok();
@@ -1224,7 +1241,7 @@ mod tests {
         let gguf = GgufFile::open(&path).unwrap();
         assert_eq!(gguf.tensors.len(), 1);
         // Should compute size using default group_size=128
-        let data = gguf.tensor_data(&gguf.tensors[0]);
+        let data = gguf.tensor_data(&gguf.tensors[0]).unwrap();
         assert_eq!(data.len(), 128 + 16);
 
         std::fs::remove_file(&path).ok();
@@ -1263,7 +1280,11 @@ mod tests {
         let result = gguf.load_planar_weights("w", 128);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("too short"), "error: {}", err);
+        assert!(
+            err.contains("too short") || err.contains("exceeds file size"),
+            "error: {}",
+            err
+        );
 
         std::fs::remove_file(&path).ok();
     }
@@ -1276,7 +1297,7 @@ mod tests {
         writer.add_f32_tensor("norm", &[4], &[1.0, 2.0, 3.0, 4.0]);
         writer.write(&path).unwrap();
         let gguf = GgufFile::open(&path).unwrap();
-        let data = gguf.tensor_data(&gguf.tensors[0]);
+        let data = gguf.tensor_data(&gguf.tensors[0]).unwrap();
         // 4 F32 values = 16 bytes
         assert_eq!(data.len(), 16);
         std::fs::remove_file(&path).ok();

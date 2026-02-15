@@ -4,13 +4,15 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
+use axum::http::{HeaderMap, HeaderValue};
 use axum::response::sse::{Event, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use tower::limit::ConcurrencyLimitLayer;
 use tower_http::cors::CorsLayer;
 
 use crate::api::*;
@@ -34,6 +36,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/metrics", get(prometheus_metrics))
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
+        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(ConcurrencyLimitLayer::new(128))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -45,8 +49,15 @@ fn unix_timestamp_secs() -> u64 {
         .as_secs()
 }
 
-async fn chat_ui() -> Html<&'static str> {
-    Html(CHAT_HTML)
+async fn chat_ui() -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'",
+        ),
+    );
+    (headers, Html(CHAT_HTML))
 }
 
 async fn health() -> &'static str {

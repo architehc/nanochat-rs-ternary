@@ -181,16 +181,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Resume from checkpoint if specified
             let mut trainer = if let Some(ref ckpt_dir) = resume {
                 tracing::info!("Resuming from checkpoint: {}", ckpt_dir);
+                let trainer = nanochat_train::train::Trainer::from_checkpoint(ckpt_dir, device)?;
                 let meta_json = std::fs::read_to_string(format!("{}/meta.json", ckpt_dir))?;
                 let meta: nanochat_train::checkpoint::CheckpointMeta =
                     serde_json::from_str(&meta_json)?;
-
-                // Reconstruct model with same config
-                let mut trainer = nanochat_train::train::Trainer::new(meta.config, device)?;
-                trainer
-                    .varmap
-                    .load(format!("{}/model.safetensors", ckpt_dir))?;
-                trainer.global_step = meta.step;
                 tracing::info!("Resumed at step {} (loss={:.4})", meta.step, meta.loss);
                 trainer
             } else {

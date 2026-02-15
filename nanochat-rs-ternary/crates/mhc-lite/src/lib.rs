@@ -47,7 +47,7 @@ pub(crate) fn softmax_24(logits: &[f32; 24]) -> [f32; 24] {
         sum += *o;
     }
 
-    let inv_sum = 1.0 / sum;
+    let inv_sum = if sum > 0.0 { 1.0 / sum } else { 0.0 };
     for o in out.iter_mut() {
         *o *= inv_sum;
     }

@@ -10,6 +10,29 @@
 // Total learnable params per layer: 1 (res) + 2 (pre) + 2 (pre_bias) + 2 (post) + 2 (post_bias) = 9
 
 use crate::sigmoid;
+use std::fmt;
+
+/// Error while deserializing `MhcLiteN2` from bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum N2DecodeError {
+    TooShort { expected: usize, actual: usize },
+}
+
+impl fmt::Display for N2DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            N2DecodeError::TooShort { expected, actual } => {
+                write!(
+                    f,
+                    "N2 decode failed: expected at least {} bytes, got {} bytes",
+                    expected, actual
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for N2DecodeError {}
 
 #[derive(Clone, Debug)]
 pub struct MhcLiteN2 {
@@ -177,9 +200,12 @@ impl MhcLiteN2 {
     /// Deserialize N=2 parameters from 36 bytes (little-endian f32)
     ///
     /// Layout: [alpha_logit][pre_logits x2][pre_bias x2][post_logits x2][post_bias x2]
-    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, N2DecodeError> {
         if data.len() < 36 {
-            return None;
+            return Err(N2DecodeError::TooShort {
+                expected: 36,
+                actual: data.len(),
+            });
         }
         let f = |offset: usize| -> f32 {
             f32::from_le_bytes([
@@ -190,7 +216,7 @@ impl MhcLiteN2 {
             ])
         };
 
-        Some(Self {
+        Ok(Self {
             alpha_logit: f(0),
             pre_logits: [f(4), f(8)],
             pre_bias: [f(12), f(16)],
@@ -310,7 +336,7 @@ mod tests {
     #[test]
     fn test_n2_from_bytes_too_short() {
         let data = vec![0u8; 35]; // one byte short
-        assert!(MhcLiteN2::from_bytes(&data).is_none());
+        assert!(MhcLiteN2::from_bytes(&data).is_err());
     }
 
     #[test]

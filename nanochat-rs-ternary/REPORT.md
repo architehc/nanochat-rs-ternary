@@ -317,9 +317,9 @@ architecture and training setup are sound.
 
 | File | Path | Size |
 |------|------|------|
-| PyTorch checkpoint | `training/checkpoints/nanochat_125m.pt` | 1.9 GB |
-| GGUF weights | `training/checkpoints/nanochat_125m.gguf` | 107 MB |
-| mHC binary | `training/checkpoints/nanochat_125m.mhc` | 880 B |
+| Rust checkpoint dir | `checkpoints/nanochat_125m/final/` | model-dependent |
+| GGUF weights | `exported_models/nanochat_125m.gguf` | 107 MB |
+| mHC binary | `exported_models/nanochat_125m.mhc` | 880 B |
 
 ### Rust Codebase
 
@@ -342,27 +342,32 @@ Test coverage: 99.55% (1113/1118 lines).
 
 ### Training
 ```bash
-cd training
-python train.py \
-  --config 125m --dataset tinystories --device cuda \
-  --epochs 1 --batch_size 8 --grad_accum_steps 4 --seq_len 256 \
-  --lr 3e-4 --mhc_lr 1e-3 --warmup_steps 500 \
-  --save_path checkpoints/nanochat_125m.pt \
-  --log_interval 50 --diag_interval 500
+cargo run --release -p nanochat-train -- train \
+  --config nano-125m \
+  --dataset synthetic \
+  --epochs 1 \
+  --batch_size 8 \
+  --seq_len 256 \
+  --checkpoint_dir checkpoints/nanochat_125m \
+  --checkpoint_interval 1000 \
+  --keep_last_checkpoints 3 \
+  --log_interval 50
 ```
 
 ### Export
 ```bash
-python export.py \
-  --checkpoint checkpoints/nanochat_125m.pt \
-  --gguf checkpoints/nanochat_125m.gguf \
-  --mhc checkpoints/nanochat_125m.mhc \
-  --config 125m
+cargo run --release -p nanochat-train -- export \
+  --checkpoint checkpoints/nanochat_125m/final \
+  --gguf exported_models/nanochat_125m.gguf \
+  --mhc exported_models/nanochat_125m.mhc
 ```
 
 ### Evaluation
 ```bash
-python evaluate.py --checkpoint checkpoints/nanochat_125m.pt
+cargo run --release -p nanochat-eval --example benchmark_model -- \
+  --checkpoint checkpoints/nanochat_125m/final \
+  --n-samples 100 \
+  --output benchmark_results.json
 ```
 
 ### Rust Tests

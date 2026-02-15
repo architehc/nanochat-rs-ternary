@@ -51,6 +51,8 @@ pub struct KernelAutotuner {
     benchmark_iterations: usize,
 }
 
+const MAX_CACHE_ENTRIES: usize = 1024;
+
 impl KernelAutotuner {
     /// Create a new auto-tuner.
     pub fn new() -> Self {
@@ -77,6 +79,11 @@ impl KernelAutotuner {
 
         {
             let mut cache = self.cache.write().unwrap();
+            if cache.len() >= MAX_CACHE_ENTRIES {
+                if let Some(old_shape) = cache.keys().next().copied() {
+                    cache.remove(&old_shape);
+                }
+            }
             cache.insert(shape, choice);
         }
 

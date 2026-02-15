@@ -45,6 +45,61 @@ fn to_c_struct(pw: &PlanarWeights) -> PlanarWeightsC {
     }
 }
 
+fn validate_planar_for_ffi(pw: &PlanarWeights, x_len: usize, y_len: usize) {
+    assert_eq!(x_len, pw.cols, "x.len() != cols");
+    assert_eq!(y_len, pw.rows, "y.len() != rows");
+    assert!(pw.rows > 0, "rows must be > 0");
+    assert!(pw.cols > 0, "cols must be > 0");
+    assert!(pw.group_size > 0, "group_size must be > 0");
+    assert!(pw.cols.is_multiple_of(4), "cols must be divisible by 4");
+    assert!(
+        pw.group_size.is_multiple_of(4),
+        "group_size must be divisible by 4"
+    );
+    assert!(
+        pw.cols.is_multiple_of(pw.group_size),
+        "cols must be divisible by group_size"
+    );
+    assert!(
+        (pw.group_size / 4) <= 32,
+        "group_size={} exceeds kernel stack LUT limit (max 128)",
+        pw.group_size
+    );
+    assert!(
+        pw.rows_padded >= pw.rows,
+        "rows_padded must be >= rows ({} < {})",
+        pw.rows_padded,
+        pw.rows
+    );
+
+    let kp = pw.cols / 4;
+    let gprow = pw.cols / pw.group_size;
+    assert!(
+        pw.data.len() >= pw.rows * kp,
+        "row-major packed data too short: {} < {}",
+        pw.data.len(),
+        pw.rows * kp
+    );
+    assert!(
+        pw.scales_rm.len() >= pw.rows * gprow,
+        "row-major scales too short: {} < {}",
+        pw.scales_rm.len(),
+        pw.rows * gprow
+    );
+    assert!(
+        pw.data_colmaj.len() >= pw.rows_padded * kp,
+        "col-major packed data too short: {} < {}",
+        pw.data_colmaj.len(),
+        pw.rows_padded * kp
+    );
+    assert!(
+        pw.scales_gm.len() >= pw.rows_padded * gprow,
+        "group-major scales too short: {} < {}",
+        pw.scales_gm.len(),
+        pw.rows_padded * gprow
+    );
+}
+
 /// Check if AVX2 is available on this CPU.
 #[cfg(target_arch = "x86_64")]
 pub fn has_avx2() -> bool {
@@ -79,8 +134,7 @@ pub fn has_avx512() -> bool {
 /// # Panics
 /// Panics if dimensions don't match or alignment is wrong.
 pub fn gemv(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
-    assert_eq!(x.len(), pw.cols, "x.len() != cols");
-    assert_eq!(y.len(), pw.rows, "y.len() != rows");
+    validate_planar_for_ffi(pw, x.len(), y.len());
     assert!(
         (pw.data.as_ptr() as usize).is_multiple_of(128),
         "data not 128B aligned"
@@ -98,8 +152,7 @@ pub fn gemv(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
 
 /// Scalar reference GEMV for verification.
 pub fn gemv_scalar_ref(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
-    assert_eq!(x.len(), pw.cols);
-    assert_eq!(y.len(), pw.rows);
+    validate_planar_for_ffi(pw, x.len(), y.len());
 
     unsafe {
         gemv_dp4a_ref(
@@ -132,8 +185,7 @@ pub fn gemv_scalar_ref(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f3
 /// * `act_scale` - Activation scale factor
 /// * `y` - Output buffer [rows], caller-allocated
 pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
-    assert_eq!(x.len(), pw.cols, "x.len() != cols");
-    assert_eq!(y.len(), pw.rows, "y.len() != rows");
+    validate_planar_for_ffi(pw, x.len(), y.len());
 
     const PARALLEL_THRESHOLD: usize = 4096;
     const ROWS_PER_CHUNK: usize = 256;
@@ -150,6 +202,40 @@ pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]
         .for_each(|(chunk_idx, y_chunk)| {
             let row_start = chunk_idx * ROWS_PER_CHUNK;
             let chunk_rows = y_chunk.len();
+
+            let data_off = row_start * kp;
+            let data_end = data_off + chunk_rows * kp;
+            assert!(
+                data_end <= pw.data.len(),
+                "row-major packed slice out of bounds: {} > {}",
+                data_end,
+                pw.data.len()
+            );
+
+            let scales_rm_off = row_start * gprow;
+            let scales_rm_end = scales_rm_off + chunk_rows * gprow;
+            assert!(
+                scales_rm_end <= pw.scales_rm.len(),
+                "row-major scales slice out of bounds: {} > {}",
+                scales_rm_end,
+                pw.scales_rm.len()
+            );
+
+            let data_colmaj_end = row_start + (kp.saturating_sub(1)) * pw.rows_padded + chunk_rows;
+            assert!(
+                data_colmaj_end <= pw.data_colmaj.len(),
+                "col-major packed slice out of bounds: {} > {}",
+                data_colmaj_end,
+                pw.data_colmaj.len()
+            );
+
+            let scales_gm_end = row_start + (gprow.saturating_sub(1)) * pw.rows_padded + chunk_rows;
+            assert!(
+                scales_gm_end <= pw.scales_gm.len(),
+                "group-major scales slice out of bounds: {} > {}",
+                scales_gm_end,
+                pw.scales_gm.len()
+            );
 
             // Construct sub-PlanarWeightsC pointing into the parent's arrays.
             // Column-major and group-major arrays use rows_padded as stride,

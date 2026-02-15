@@ -295,15 +295,9 @@ impl NanochatModel {
             let mhc_attn = Self::extract_mhc_n2(&mhc_layers, layer_idx * 2)?;
             let mhc_ffn = Self::extract_mhc_n2(&mhc_layers, layer_idx * 2 + 1)?;
 
-            Ok(TransformerBlock {
-                mhc_attn,
-                mhc_ffn,
-                norm_attn,
-                norm_ffn,
-                attention,
-                ffn,
-                dim: config.dim,
-            })
+            Ok(TransformerBlock::from_parts(
+                mhc_attn, mhc_ffn, norm_attn, norm_ffn, attention, ffn, config.dim,
+            ))
         };
 
         // Load blocks based on architecture
@@ -670,7 +664,7 @@ impl NanochatModel {
 
         let vocab_size = tensor.dims[0] as usize;
         let dim = tensor.dims[1] as usize;
-        let data = gguf.tensor_data(tensor);
+        let data = gguf.tensor_data(tensor)?;
 
         let weight: Vec<f32> = match tensor.dtype {
             0 => {
@@ -723,7 +717,17 @@ impl NanochatModel {
                 )
             })?;
 
-        let data = gguf.tensor_data(tensor);
+        if tensor.dtype != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unsupported RMSNorm dtype for '{}': {} (expected F32=0)",
+                    name, tensor.dtype
+                ),
+            ));
+        }
+
+        let data = gguf.tensor_data(tensor)?;
         let weight: Vec<f32> = data
             .chunks_exact(4)
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
@@ -936,7 +940,7 @@ impl NanochatModel {
         if let Some(loop_cfg) = &self.config.loop_config {
             // LoopLM architecture
             // 3a. Local blocks before
-            for (i, block) in self.local_blocks_before.iter().enumerate() {
+            for (i, block) in self.local_blocks_before.iter_mut().enumerate() {
                 block.forward_batch(
                     &mut x_exp_all,
                     &mut self.local_states_before[i],
@@ -989,7 +993,7 @@ impl NanochatModel {
             }
 
             // 3c. Local blocks after
-            for (i, block) in self.local_blocks_after.iter().enumerate() {
+            for (i, block) in self.local_blocks_after.iter_mut().enumerate() {
                 block.forward_batch(
                     &mut x_exp_all,
                     &mut self.local_states_after[i],
@@ -1000,7 +1004,7 @@ impl NanochatModel {
             }
         } else {
             // Standard architecture
-            for (i, block) in self.blocks.iter().enumerate() {
+            for (i, block) in self.blocks.iter_mut().enumerate() {
                 block.forward_batch(
                     &mut x_exp_all,
                     &mut self.attn_states[i],

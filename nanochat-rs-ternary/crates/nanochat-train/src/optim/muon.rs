@@ -1,6 +1,7 @@
 //! Muon optimizer: Nesterov momentum + Newton-Schulz orthogonalization.
 
 use candle_core::{backprop::GradStore, DType, Result, Tensor, Var};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Newton-Schulz orthogonalization (quintic polynomial iteration).
@@ -59,6 +60,21 @@ pub struct Muon {
     beta: f64,
     ns_steps: usize,
     weight_decay: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TensorState {
+    pub shape: Vec<usize>,
+    pub data: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MuonState {
+    pub momentum_buffers: Vec<TensorState>,
+    pub lr: f64,
+    pub beta: f64,
+    pub ns_steps: usize,
+    pub weight_decay: f64,
 }
 
 impl Muon {
@@ -181,6 +197,66 @@ impl Muon {
 
     pub fn set_lr(&mut self, lr: f64) {
         self.lr = lr;
+    }
+
+    pub fn export_state(&self) -> Result<MuonState> {
+        let mut buffers = Vec::with_capacity(self.momentum_buffers.len());
+        for buf in &self.momentum_buffers {
+            buffers.push(TensorState {
+                shape: buf.dims().to_vec(),
+                data: buf.flatten_all()?.to_vec1::<f32>()?,
+            });
+        }
+
+        Ok(MuonState {
+            momentum_buffers: buffers,
+            lr: self.lr,
+            beta: self.beta,
+            ns_steps: self.ns_steps,
+            weight_decay: self.weight_decay,
+        })
+    }
+
+    pub fn import_state(&mut self, state: &MuonState) -> Result<()> {
+        if state.momentum_buffers.len() != self.momentum_buffers.len() {
+            return Err(candle_core::Error::Msg(format!(
+                "Muon state mismatch: expected {} momentum buffers, got {}",
+                self.momentum_buffers.len(),
+                state.momentum_buffers.len()
+            )));
+        }
+
+        let mut restored = Vec::with_capacity(state.momentum_buffers.len());
+        for (idx, snap) in state.momentum_buffers.iter().enumerate() {
+            let expected_shape = self.vars[idx].as_tensor().dims().to_vec();
+            if snap.shape != expected_shape {
+                return Err(candle_core::Error::Msg(format!(
+                    "Muon state shape mismatch at index {}: expected {:?}, got {:?}",
+                    idx, expected_shape, snap.shape
+                )));
+            }
+            let expected_len: usize = expected_shape.iter().product();
+            if snap.data.len() != expected_len {
+                return Err(candle_core::Error::Msg(format!(
+                    "Muon state data length mismatch at index {}: expected {}, got {}",
+                    idx,
+                    expected_len,
+                    snap.data.len()
+                )));
+            }
+            restored.push(Tensor::from_vec(
+                snap.data.clone(),
+                snap.shape.as_slice(),
+                self.vars[idx].device(),
+            )?);
+        }
+
+        self.momentum_buffers = restored;
+        self.lr = state.lr;
+        self.beta = state.beta;
+        self.ns_steps = state.ns_steps;
+        self.weight_decay = state.weight_decay;
+        Ok(())
     }
 }
 

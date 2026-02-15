@@ -15,6 +15,7 @@ use crate::n4::MhcLiteN4;
 /// Magic number: "mHC!" in little-endian
 pub const MHC_MAGIC: u32 = 0x6D484321;
 pub const MHC_VERSION: u32 = 1;
+const MAX_LAYERS: u32 = 10_000;
 
 /// File header for mHC binary format.
 #[derive(Debug, Clone)]
@@ -58,6 +59,12 @@ pub fn load_mhc_file<P: AsRef<Path>>(path: P) -> io::Result<(MhcFileHeader, Vec<
 
     file.read_exact(&mut buf4)?;
     let n_layers = u32::from_le_bytes(buf4);
+    if n_layers > MAX_LAYERS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("n_layers {} exceeds safety limit {}", n_layers, MAX_LAYERS),
+        ));
+    }
 
     file.read_exact(&mut buf4)?;
     let n_streams = u32::from_le_bytes(buf4);
@@ -87,14 +94,12 @@ pub fn load_mhc_file<P: AsRef<Path>>(path: P) -> io::Result<(MhcFileHeader, Vec<
         file.read_exact(&mut buf)?;
 
         let params = match n_streams {
-            2 => MhcLayerParams::N2(
-                MhcLiteN2::from_bytes(&buf)
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bad N2 data"))?,
-            ),
-            4 => MhcLayerParams::N4(
-                MhcLiteN4::from_bytes(&buf)
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bad N4 data"))?,
-            ),
+            2 => MhcLayerParams::N2(MhcLiteN2::from_bytes(&buf).map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("bad N2 data: {e}"))
+            })?),
+            4 => MhcLayerParams::N4(MhcLiteN4::from_bytes(&buf).map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("bad N4 data: {e}"))
+            })?),
             _ => unreachable!(),
         };
         layers.push(params);

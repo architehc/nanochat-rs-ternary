@@ -2,6 +2,7 @@
 
 use candle_core::{DType, Device, Result, Tensor, Var};
 use candle_nn::VarMap;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 use crate::collider::Collider;
@@ -9,7 +10,13 @@ use crate::config::TrainConfig;
 use crate::data::{DataLoader, Dataset};
 use crate::model::NanochatTrainModel;
 use crate::mtp::MultiTokenPrediction;
-use crate::optim::{wsd_schedule, Lion, MuonOptimizer};
+use crate::optim::{wsd_schedule, Lion, LionState, MuonOptimizer, MuonOptimizerState};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OptimizerCheckpointState {
+    muon: MuonOptimizerState,
+    lion: LionState,
+}
 
 /// Checkpoint management utilities
 mod checkpoint_manager {
@@ -151,6 +158,45 @@ pub struct Trainer {
 }
 
 impl Trainer {
+    fn save_optimizer_state(&self, checkpoint_dir: &str) -> Result<()> {
+        let state = OptimizerCheckpointState {
+            muon: self.muon.export_state()?,
+            lion: self.lion.export_state()?,
+        };
+        let json = serde_json::to_string_pretty(&state)
+            .map_err(|e| candle_core::Error::Msg(format!("optimizer state serialize: {}", e)))?;
+        let path = format!("{}/optimizer_state.json", checkpoint_dir);
+        std::fs::write(&path, json)
+            .map_err(|e| candle_core::Error::Msg(format!("optimizer state write {}: {}", path, e)))
+    }
+
+    fn load_optimizer_state(&mut self, checkpoint_dir: &str) -> Result<()> {
+        let path = format!("{}/optimizer_state.json", checkpoint_dir);
+        let json = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!(
+                    "  Optimizer state not found in checkpoint; using fresh optimizer buffers"
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(candle_core::Error::Msg(format!(
+                    "optimizer state read {}: {}",
+                    path, e
+                )));
+            }
+        };
+
+        let state: OptimizerCheckpointState = serde_json::from_str(&json).map_err(|e| {
+            candle_core::Error::Msg(format!("optimizer state parse {}: {}", path, e))
+        })?;
+        self.muon.import_state(&state.muon)?;
+        self.lion.import_state(&state.lion)?;
+        println!("  Optimizer state restored from {}", path);
+        Ok(())
+    }
+
     /// Create a new trainer from a saved checkpoint
     pub fn from_checkpoint(checkpoint_dir: &str, device: Device) -> Result<Self> {
         // Load checkpoint
@@ -251,7 +297,7 @@ impl Trainer {
             None
         };
 
-        Ok(Self {
+        let mut trainer = Self {
             model,
             varmap,
             muon,
@@ -263,7 +309,10 @@ impl Trainer {
             base_lr_lion,
             mtp,
             collider,
-        })
+        };
+
+        trainer.load_optimizer_state(checkpoint_dir)?;
+        Ok(trainer)
     }
 
     pub fn new(config: TrainConfig, device: Device) -> Result<Self> {
@@ -666,6 +715,7 @@ impl Trainer {
                             &path,
                         )
                         .map_err(|e| candle_core::Error::Msg(format!("checkpoint save: {}", e)))?;
+                        self.save_optimizer_state(&path)?;
 
                         // Report checkpoint size
                         if let Ok(size) = checkpoint_manager::dir_size(std::path::Path::new(&path))
@@ -719,6 +769,7 @@ impl Trainer {
                 &path,
             )
             .map_err(|e| candle_core::Error::Msg(format!("checkpoint save: {}", e)))?;
+            self.save_optimizer_state(&path)?;
             println!("Final checkpoint saved to {}", path);
         }
 

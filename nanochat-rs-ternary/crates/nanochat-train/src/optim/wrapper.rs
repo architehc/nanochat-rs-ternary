@@ -1,6 +1,7 @@
 //! Optimizer wrapper for conditional optimizer selection based on config.
 
 use candle_core::{backprop::GradStore, Result, Var};
+use serde::{Deserialize, Serialize};
 
 use super::{GaLore2Muon, GaLore2Quantized, Muon, QuantizedMuon};
 
@@ -14,6 +15,14 @@ pub enum MuonOptimizer {
     GaLore(GaLore2Muon),
     /// GaLore2 wrapper around 8-bit quantized Muon
     GaLoreQuantized(GaLore2Quantized),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MuonOptimizerState {
+    Standard(super::muon::MuonState),
+    Quantized(super::muon_quantized::QuantizedMuonState),
+    GaLore(super::galore2::GaLore2MuonState),
+    GaLoreQuantized(super::galore2::GaLore2QuantizedState),
 }
 
 impl MuonOptimizer {
@@ -118,6 +127,44 @@ impl MuonOptimizer {
                     ),
                 }
             }
+        }
+    }
+
+    pub fn export_state(&self) -> Result<MuonOptimizerState> {
+        match self {
+            MuonOptimizer::Standard(m) => Ok(MuonOptimizerState::Standard(m.export_state()?)),
+            MuonOptimizer::Quantized(qm) => Ok(MuonOptimizerState::Quantized(qm.export_state())),
+            MuonOptimizer::GaLore(gm) => Ok(MuonOptimizerState::GaLore(gm.export_state()?)),
+            MuonOptimizer::GaLoreQuantized(gqm) => {
+                Ok(MuonOptimizerState::GaLoreQuantized(gqm.export_state()?))
+            }
+        }
+    }
+
+    pub fn import_state(&mut self, state: &MuonOptimizerState) -> Result<()> {
+        match (self, state) {
+            (MuonOptimizer::Standard(m), MuonOptimizerState::Standard(s)) => m.import_state(s),
+            (MuonOptimizer::Quantized(qm), MuonOptimizerState::Quantized(s)) => qm.import_state(s),
+            (MuonOptimizer::GaLore(gm), MuonOptimizerState::GaLore(s)) => gm.import_state(s),
+            (MuonOptimizer::GaLoreQuantized(gqm), MuonOptimizerState::GaLoreQuantized(s)) => {
+                gqm.import_state(s)
+            }
+            (opt, state) => Err(candle_core::Error::Msg(format!(
+                "optimizer state variant mismatch: optimizer={}, state={}",
+                opt.memory_stats().variant,
+                state.variant_name()
+            ))),
+        }
+    }
+}
+
+impl MuonOptimizerState {
+    fn variant_name(&self) -> &'static str {
+        match self {
+            MuonOptimizerState::Standard(_) => "Standard Muon",
+            MuonOptimizerState::Quantized(_) => "8-bit Quantized Muon",
+            MuonOptimizerState::GaLore(_) => "GaLore2 Muon",
+            MuonOptimizerState::GaLoreQuantized(_) => "GaLore2 + 8-bit Muon",
         }
     }
 }
@@ -255,5 +302,39 @@ mod tests {
             MuonOptimizer::GaLoreQuantized(_) => Ok(()),
             _ => panic!("Expected GaLoreQuantized variant"),
         }
+    }
+
+    #[test]
+    fn test_optimizer_state_roundtrip() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let w = vb.get_with_hints(
+            (16, 8),
+            "w",
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: 1.0,
+            },
+        )?;
+
+        let vars = varmap.all_vars();
+        let mut opt =
+            MuonOptimizer::from_config(vars.clone(), 0.02, 0.95, 5, 0.0, true, true, 8, 2)?;
+
+        // Build a non-zero optimizer state.
+        let x = candle_core::Tensor::randn(0.0f32, 1.0, (1, 8), &device)?;
+        let y = x.matmul(&w.t()?)?;
+        let loss = y.sum_all()?;
+        let grads = loss.backward()?;
+        opt.step(&grads, 1.0)?;
+
+        let state = opt.export_state()?;
+        let mut restored = MuonOptimizer::from_config(vars, 0.01, 0.9, 3, 0.1, true, true, 8, 2)?;
+        restored.import_state(&state)?;
+        let restored_state = restored.export_state()?;
+
+        assert_eq!(state.variant_name(), restored_state.variant_name());
+        Ok(())
     }
 }

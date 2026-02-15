@@ -4,7 +4,8 @@
 //! Key insight: Project gradients to low-rank subspace before optimizer step,
 //! reducing memory from O(d²) to O(d·r) where r << d.
 
-use candle_core::{backprop::GradStore, Result, Tensor, Var};
+use candle_core::{backprop::GradStore, DType, Result, Tensor, Var};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Interface required by GaLore2 wrappers.
@@ -127,10 +128,11 @@ impl<OPT> GaLore2<OPT> {
     fn randomized_svd(&self, a: &Tensor, rank: usize) -> Result<(Tensor, Tensor, Tensor)> {
         let device = a.device();
         let dims = a.dims();
-        let (_m, n) = (dims[0], dims[1]);
+        let (m, n) = (dims[0], dims[1]);
 
         // Oversample by factor of 2 for accuracy
-        let l = (rank * 2).min(n);
+        let l = (rank * 2).min(n).min(m);
+        let target_rank = rank.min(l);
 
         // Random Gaussian matrix
         let omega = Tensor::randn(0.0f32, 1.0, (n, l), device)?;
@@ -138,23 +140,22 @@ impl<OPT> GaLore2<OPT> {
         // Y = A @ Omega (range approximation)
         let y = a.matmul(&omega)?;
 
-        // QR decomposition of Y to get orthonormal basis Q
-        // For now, use Gram-Schmidt (TODO: replace with proper QR)
+        // Orthogonalize Y to get an approximate range basis.
         let q = self.gram_schmidt(&y)?;
 
         // B = Q^T @ A (project A onto range of Q)
         let b = q.t()?.matmul(a)?;
 
         // Small SVD of B using power iteration
-        let (u_b, s, vt) = self.small_svd(&b, rank)?;
+        let (u_b, s, vt) = self.small_svd(&b, target_rank)?;
 
         // U = Q @ U_B
         let u = q.matmul(&u_b)?;
 
         // Extract top-k singular values and vectors
-        let u_k = u.narrow(1, 0, rank)?;
-        let s_k = s.narrow(0, 0, rank)?;
-        let vt_k = vt.narrow(0, 0, rank)?;
+        let u_k = u.narrow(1, 0, target_rank)?;
+        let s_k = s.narrow(0, 0, target_rank)?;
+        let vt_k = vt.narrow(0, 0, target_rank)?;
 
         Ok((u_k, s_k, vt_k.t()?))
     }
@@ -191,46 +192,89 @@ impl<OPT> GaLore2<OPT> {
         Tensor::cat(&q_cols, 1)
     }
 
-    /// Small SVD using power iteration (for randomized SVD's projected matrix)
+    /// Small SVD using orthogonal power iteration on A A^T (m x m).
+    ///
+    /// This avoids forming the much larger A^T A when n >> m and computes
+    /// distinct top-k singular triplets instead of repeating one vector.
     fn small_svd(&self, a: &Tensor, rank: usize) -> Result<(Tensor, Tensor, Tensor)> {
         let device = a.device();
         let dims = a.dims();
         let (m, n) = (dims[0], dims[1]);
         let k = rank.min(m).min(n);
-
-        // Simplified: use A^T @ A for right singular vectors
-        let ata = a.t()?.matmul(a)?;
-
-        // Power iteration for top eigenvector
-        let mut v = Tensor::randn(0.0f32, 1.0, (n, 1), device)?;
-        for _ in 0..20 {
-            v = ata.matmul(&v)?;
-            let norm = v.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
-            if norm > 1e-10 {
-                v = (&v / (norm as f64))?;
-            }
+        if k == 0 {
+            return Err(candle_core::Error::Msg(
+                "small_svd called with zero effective rank".to_string(),
+            ));
         }
 
-        // u = A @ v / |A @ v|
-        let u_unnorm = a.matmul(&v)?;
-        let u_norm = u_unnorm.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
-        let u = if u_norm > 1e-10 {
-            (&u_unnorm / (u_norm as f64))?
-        } else {
-            u_unnorm
-        };
+        // Work on the smaller symmetric matrix A A^T (m x m), where m is
+        // typically rank*2 after projection.
+        let aat = a.matmul(&a.t()?)?;
 
-        // sigma = u^T @ A @ v
-        let sigma = u.t()?.matmul(a)?.matmul(&v)?;
-        let sigma_val = sigma.squeeze(0)?.squeeze(0)?.to_scalar::<f32>()?;
+        let mut u_cols: Vec<Tensor> = Vec::with_capacity(k);
+        let mut s_vals: Vec<f32> = Vec::with_capacity(k);
+        let mut v_rows: Vec<Tensor> = Vec::with_capacity(k);
 
-        // For simplicity, return single singular triplet repeated k times
-        // (Full implementation would compute k eigenvectors)
-        let u_mat = u.broadcast_as((m, k))?;
-        let s_vec = Tensor::from_vec(vec![sigma_val; k], k, device)?;
-        let v_mat = v.t()?.broadcast_as((k, n))?;
+        for _ in 0..k {
+            let mut u = Tensor::randn(0.0f32, 1.0, (m, 1), device)?;
 
-        Ok((u_mat, s_vec, v_mat))
+            for _ in 0..24 {
+                u = aat.matmul(&u)?;
+                for prev in &u_cols {
+                    let coeff = prev.t()?.matmul(&u)?;
+                    let proj = prev.broadcast_mul(&coeff)?;
+                    u = u.sub(&proj)?;
+                }
+
+                let norm = u.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
+                if norm <= 1e-10 {
+                    break;
+                }
+                u = (&u / (norm as f64))?;
+            }
+
+            let norm = u.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
+            if norm <= 1e-10 {
+                break;
+            }
+            u = (&u / (norm as f64))?;
+
+            let lambda = u.t()?.matmul(&aat)?.matmul(&u)?.squeeze(0)?.squeeze(0)?;
+            let sigma = lambda.to_scalar::<f32>()?.max(0.0).sqrt();
+            if sigma <= 1e-8 {
+                break;
+            }
+
+            let mut v = a.t()?.matmul(&u)?;
+            v = (&v / (sigma as f64))?;
+            for prev in &v_rows {
+                let coeff = prev.matmul(&v)?;
+                let proj = prev.t()?.broadcast_mul(&coeff)?;
+                v = v.sub(&proj)?;
+            }
+            let v_norm = v.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
+            if v_norm > 1e-10 {
+                v = (&v / (v_norm as f64))?;
+            } else {
+                break;
+            }
+
+            u_cols.push(u);
+            s_vals.push(sigma);
+            v_rows.push(v.t()?);
+        }
+
+        while u_cols.len() < k {
+            u_cols.push(Tensor::zeros((m, 1), DType::F32, device)?);
+            s_vals.push(0.0);
+            v_rows.push(Tensor::zeros((1, n), DType::F32, device)?);
+        }
+
+        let u_mat = Tensor::cat(&u_cols, 1)?;
+        let s_vec = Tensor::from_vec(s_vals, k, device)?;
+        let vt_mat = Tensor::cat(&v_rows, 0)?;
+
+        Ok((u_mat, s_vec, vt_mat))
     }
 
     /// Project gradient to low-rank subspace: g_proj = Q^T @ g @ P
@@ -445,6 +489,12 @@ pub struct GaLore2Muon {
     galore: GaLore2<super::Muon>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GaLore2MuonState {
+    pub base: super::muon::MuonState,
+    pub step: usize,
+}
+
 impl GaLore2Muon {
     pub fn new(muon: super::Muon, vars: Vec<Var>, rank: usize, update_freq: usize) -> Result<Self> {
         let galore = GaLore2::new(muon, vars, rank, update_freq, 1.0)?;
@@ -476,11 +526,30 @@ impl GaLore2Muon {
     pub fn memory_stats(&self) -> MemoryStats {
         self.galore.estimate_memory_stats()
     }
+
+    pub fn export_state(&self) -> Result<GaLore2MuonState> {
+        Ok(GaLore2MuonState {
+            base: self.galore.base_optimizer.export_state()?,
+            step: self.galore.step,
+        })
+    }
+
+    pub fn import_state(&mut self, state: &GaLore2MuonState) -> Result<()> {
+        self.galore.base_optimizer.import_state(&state.base)?;
+        self.galore.step = state.step;
+        Ok(())
+    }
 }
 
 /// GaLore2 wrapper for 8-bit Quantized Muon optimizer
 pub struct GaLore2Quantized {
     galore: GaLore2<super::QuantizedMuon>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GaLore2QuantizedState {
+    pub base: super::muon_quantized::QuantizedMuonState,
+    pub step: usize,
 }
 
 impl GaLore2Quantized {
@@ -515,6 +584,19 @@ impl GaLore2Quantized {
 
     pub fn memory_stats(&self) -> MemoryStats {
         self.galore.estimate_memory_stats()
+    }
+
+    pub fn export_state(&self) -> Result<GaLore2QuantizedState> {
+        Ok(GaLore2QuantizedState {
+            base: self.galore.base_optimizer.export_state(),
+            step: self.galore.step,
+        })
+    }
+
+    pub fn import_state(&mut self, state: &GaLore2QuantizedState) -> Result<()> {
+        self.galore.base_optimizer.import_state(&state.base)?;
+        self.galore.step = state.step;
+        Ok(())
     }
 }
 
@@ -616,6 +698,34 @@ mod tests {
         let galore = GaLore2::new(muon, vars, 32, 0, 1.0)?;
         assert_eq!(galore.update_freq, 1);
         assert_eq!(galore.adaptive_check_freq, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_small_svd_returns_distinct_components() -> Result<()> {
+        let device = Device::Cpu;
+        let mut diag = vec![0.0f32; 36];
+        for i in 0..6 {
+            diag[i * 6 + i] = (6 - i) as f32;
+        }
+        let a = Tensor::from_vec(diag, (6, 6), &device)?;
+
+        let vars = Vec::new();
+        let muon = super::super::Muon::new(vars.clone(), 0.02, 0.95, 5, 0.0)?;
+        let galore = GaLore2::new(muon, vars, 3, 10, 1.0)?;
+        let (u, s, _vt) = galore.small_svd(&a, 3)?;
+
+        let s_vals = s.to_vec1::<f32>()?;
+        assert_eq!(s_vals.len(), 3);
+        assert!(s_vals[0] >= s_vals[1]);
+        assert!(s_vals[1] >= s_vals[2]);
+        assert!(s_vals[2] > 0.0);
+
+        // U columns should be approximately orthonormal.
+        let utu = u.t()?.matmul(&u)?;
+        let eye = Tensor::eye(3, DType::F32, &device)?;
+        let max_diff = (&utu - &eye)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(max_diff < 0.25, "U^T U max diff too large: {}", max_diff);
         Ok(())
     }
 }

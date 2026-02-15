@@ -11,6 +11,29 @@
 // Total learnable params per layer: 24 (res) + 4 (pre) + 4 (pre_bias) + 4 (post) + 4 (post_bias) = 40
 
 use crate::{sigmoid, softmax_24};
+use std::fmt;
+
+/// Error while deserializing `MhcLiteN4` from bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum N4DecodeError {
+    TooShort { expected: usize, actual: usize },
+}
+
+impl fmt::Display for N4DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            N4DecodeError::TooShort { expected, actual } => {
+                write!(
+                    f,
+                    "N4 decode failed: expected at least {} bytes, got {} bytes",
+                    expected, actual
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for N4DecodeError {}
 
 /// All 24 permutation matrices of S_4, stored as index arrays.
 /// perm[k] = [p0, p1, p2, p3] means row i maps to column perm[k][i].
@@ -209,9 +232,12 @@ impl MhcLiteN4 {
     ///
     /// Layout: [res_logits: 24*f32][pre_logits: 4*f32][pre_bias: 4*f32]
     ///         [post_logits: 4*f32][post_bias: 4*f32]
-    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, N4DecodeError> {
         if data.len() < 160 {
-            return None;
+            return Err(N4DecodeError::TooShort {
+                expected: 160,
+                actual: data.len(),
+            });
         }
         let f = |offset: usize| -> f32 {
             f32::from_le_bytes([
@@ -239,7 +265,7 @@ impl MhcLiteN4 {
             post_bias[i] = f(144 + i * 4);
         }
 
-        Some(Self {
+        Ok(Self {
             res_logits,
             pre_logits,
             pre_bias,
@@ -382,7 +408,7 @@ mod tests {
     #[test]
     fn test_n4_from_bytes_too_short() {
         let data = vec![0u8; 159]; // one byte short
-        assert!(MhcLiteN4::from_bytes(&data).is_none());
+        assert!(MhcLiteN4::from_bytes(&data).is_err());
     }
 
     #[test]
