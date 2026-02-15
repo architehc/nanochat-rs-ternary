@@ -386,28 +386,38 @@ impl Trainer {
     pub fn train_step(&mut self, input_ids: &Tensor, target_ids: &Tensor) -> Result<StepStats> {
         let step_start = Instant::now();
 
-        // Forward pass with hidden states (for MTP)
-        let (logits, hidden) = self.model.forward_with_hidden(input_ids)?;
+        // Forward pass to hidden states.
+        let hidden = self.model.forward_hidden_only(input_ids)?;
+        let (batch, seq_len, hidden_dim) = hidden.dims3()?;
+        let vocab = self.config.vocab_size;
 
-        // E3: Collider token filtering (35% faster backprop)
-        // Build a binary keep-mask once per step from detached logits.
+        // E3: Collider token filtering (sparse token path for LM head + loss).
+        // Build a binary keep-mask from detached logits to avoid autograd overhead.
         let collider_mask = if let Some(ref collider) = self.collider {
-            let importance = collider.compute_importance(&logits.detach(), target_ids)?;
+            let logits_detached = self.model.project_hidden_to_logits(&hidden.detach())?;
+            let importance = collider.compute_importance(&logits_detached, target_ids)?;
             Some(collider.create_mask(&importance)?)
         } else {
             None
         };
 
         // Primary cross-entropy loss with label smoothing.
-        // If Collider is enabled, dropped tokens keep their forward value but stop gradients.
-        let (batch, seq_len, vocab) = logits.dims3()?;
-        let logits_for_loss = if let Some(mask) = collider_mask.as_ref() {
-            apply_collider_gradient_mask(&logits, mask)?
+        // Collider path compacts to kept rows using gather/index_select so dropped rows are
+        // removed from dense LM-head/loss compute.
+        let (logits_flat, targets_flat) = if let Some(mask) = collider_mask.as_ref() {
+            let keep_indices = collider_kept_indices(mask)?;
+            let hidden_flat = hidden.reshape((batch * seq_len, hidden_dim))?;
+            let hidden_kept = hidden_flat.index_select(&keep_indices, 0)?;
+            let logits_kept = self.model.project_hidden_to_logits(&hidden_kept)?;
+            let targets_dense = target_ids.reshape(batch * seq_len)?;
+            let targets_kept = targets_dense.index_select(&keep_indices, 0)?;
+            (logits_kept, targets_kept)
         } else {
-            logits.clone()
+            let logits_dense = self.model.project_hidden_to_logits(&hidden)?;
+            let logits_flat = logits_dense.reshape((batch * seq_len, vocab))?;
+            let targets_flat = target_ids.reshape(batch * seq_len)?;
+            (logits_flat, targets_flat)
         };
-        let logits_flat = logits_for_loss.reshape((batch * seq_len, vocab))?;
-        let targets_flat = target_ids.reshape(batch * seq_len)?;
 
         // Label smoothing: smooth_targets = (1-eps)*one_hot + eps/V
         let label_smooth_eps = 0.1; // 10% smoothing
@@ -442,7 +452,13 @@ impl Trainer {
                 // So use logits[0:seq-shift] to predict targets[shift:seq]
                 let pred_len = seq_len - shift;
                 let mtp_pred_trimmed = mtp_logit.narrow(1, 0, pred_len)?;
-                let mtp_pred_flat = mtp_pred_trimmed.reshape((batch * pred_len, vocab))?;
+                let mtp_pred_for_loss = if let Some(mask) = collider_mask.as_ref() {
+                    let mask_trimmed = mask.narrow(1, 0, pred_len)?;
+                    apply_collider_gradient_mask(&mtp_pred_trimmed, &mask_trimmed)?
+                } else {
+                    mtp_pred_trimmed
+                };
+                let mtp_pred_flat = mtp_pred_for_loss.reshape((batch * pred_len, vocab))?;
 
                 // Target: shift by (i+1)
                 let target_shifted = target_ids.narrow(1, shift, pred_len)?;
@@ -500,9 +516,7 @@ impl Trainer {
 
         // Explicitly drop intermediate tensors to free GPU memory
         drop(loss);
-        drop(logits_for_loss);
         drop(collider_mask);
-        drop(logits);
         drop(logits_flat);
         drop(targets_flat);
         drop(grads);
@@ -726,6 +740,34 @@ fn apply_collider_gradient_mask(logits: &Tensor, mask: &Tensor) -> Result<Tensor
     &kept + &dropped_no_grad
 }
 
+/// Build flat token indices for kept Collider tokens.
+fn collider_kept_indices(mask: &Tensor) -> Result<Tensor> {
+    // One host transfer for the full mask (no per-token sync in loops).
+    let mask_vals = mask.flatten_all()?.to_vec1::<f32>()?;
+    let mut kept = Vec::with_capacity(mask_vals.len());
+    for (idx, &v) in mask_vals.iter().enumerate() {
+        if v >= 0.5 {
+            kept.push(idx as u32);
+        }
+    }
+
+    // Safety fallback: ensure at least one token remains selected.
+    if kept.is_empty() {
+        if let Some((best_idx, _)) = mask_vals
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        {
+            kept.push(best_idx as u32);
+        } else {
+            kept.push(0);
+        }
+    }
+
+    let kept_len = kept.len();
+    Tensor::from_vec(kept, kept_len, mask.device())
+}
+
 /// Compute total gradient norm across all variables.
 pub fn compute_grad_norm(grads: &candle_core::backprop::GradStore, varmap: &VarMap) -> Result<f64> {
     let mut total = 0.0f64;
@@ -814,6 +856,16 @@ mod tests {
     }
 
     #[test]
+    fn test_collider_kept_indices() -> Result<()> {
+        let device = Device::Cpu;
+        let mask = Tensor::new(&[[1.0f32, 0.0, 1.0], [0.0, 1.0, 0.0]], &device)?;
+        let indices = collider_kept_indices(&mask)?;
+        let idx = indices.to_vec1::<u32>()?;
+        assert_eq!(idx, vec![0, 2, 4]);
+        Ok(())
+    }
+
+    #[test]
     fn test_train_step_loss_finite() -> Result<()> {
         let device = Device::Cpu;
         let cfg = tiny_config();
@@ -829,6 +881,27 @@ mod tests {
             stats.loss
         );
         assert!(stats.grad_norm.is_finite(), "Grad norm should be finite");
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_step_with_collider_sparse_path() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = tiny_config();
+        cfg.use_collider = true;
+        cfg.collider_threshold = 0.3;
+        cfg.collider_sparsity = 0.5;
+        let mut trainer = Trainer::new(cfg, device)?;
+
+        let input_ids = Tensor::zeros((2, 8), DType::U32, &trainer.device)?;
+        let target_ids = Tensor::zeros((2, 8), DType::U32, &trainer.device)?;
+
+        let stats = trainer.train_step(&input_ids, &target_ids)?;
+        assert!(stats.loss.is_finite(), "Collider loss should be finite");
+        assert!(
+            stats.grad_norm.is_finite(),
+            "Collider grad norm should be finite"
+        );
         Ok(())
     }
 

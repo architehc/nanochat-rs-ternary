@@ -104,8 +104,8 @@ impl NanochatTrainModel {
         Ok(logits)
     }
 
-    /// Forward pass returning both logits and last hidden state (for MTP).
-    pub fn forward_with_hidden(&self, token_ids: &Tensor) -> Result<(Tensor, Tensor)> {
+    /// Forward pass returning the final hidden state before LM head.
+    pub fn forward_hidden_only(&self, token_ids: &Tensor) -> Result<Tensor> {
         let (_batch, seq_len) = token_ids.dims2()?;
 
         // 1. Embed
@@ -150,16 +150,20 @@ impl NanochatTrainModel {
         let x = MhcLiteN2Train::collapse_output(&x_exp, self.config.dim)?;
 
         // 6. Final norm
-        let hidden = self.norm_final.forward(&x)?;
+        self.norm_final.forward(&x)
+    }
 
-        // 7. LM head (handles 3D [batch, seq, dim] @ 2D [dim, vocab])
+    /// Project hidden states to logits via LM head.
+    ///
+    /// Supports both 3D hidden states `[batch, seq, dim]` and compact 2D hidden states `[n, dim]`.
+    pub fn project_hidden_to_logits(&self, hidden: &Tensor) -> Result<Tensor> {
         let lm_w = if self.config.weight_tied {
             self.tok_embed.embeddings().t()?
         } else {
             self.lm_head_weight.as_ref().unwrap().t()?
         };
         let x_dims = hidden.dims().to_vec();
-        let logits = if x_dims.len() == 3 {
+        if x_dims.len() == 3 {
             let (b, m, k) = (x_dims[0], x_dims[1], x_dims[2]);
             hidden
                 .reshape((b * m, k))?
@@ -167,8 +171,13 @@ impl NanochatTrainModel {
                 .reshape((b, m, ()))
         } else {
             hidden.matmul(&lm_w)
-        }?;
+        }
+    }
 
+    /// Forward pass returning both logits and last hidden state (for MTP).
+    pub fn forward_with_hidden(&self, token_ids: &Tensor) -> Result<(Tensor, Tensor)> {
+        let hidden = self.forward_hidden_only(token_ids)?;
+        let logits = self.project_hidden_to_logits(&hidden)?;
         Ok((logits, hidden))
     }
 
