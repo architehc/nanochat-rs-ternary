@@ -1,51 +1,46 @@
-# Nano 125M - Fast iteration, debugging, local testing
-# Training time: ~2 hours on single GPU
-# Memory: ~4GB GPU
-# Use case: Development, quick experiments, CI/CD testing
+# E3: GaLore 2 low-rank optimizer
+# Expected gain: 50-65% memory reduction, train 7B on 24GB GPU
 
 [model]
-name = "nanochat-nano-125m"
+name = "e3-galore2"
 vocab_size = 32000
-hidden_dim = 768
+hidden_dim = 1024
 num_layers = 12
 num_heads = 12
-num_kv_heads = 4  # GQA for efficiency
+num_kv_heads = 4
 ffn_mult = 3.5
 max_seq_len = 2048
 group_size = 128
 mhc_n_streams = 2
 
-# Ternary quantization
-use_bitlinear = true
-activation_bits = 8
-
 [training]
-total_steps = 50000
-batch_size = 8
+total_steps = 10000
+batch_size = 16
 seq_length = 2048
 learning_rate = 0.02
-warmup_steps = 2000
+warmup_steps = 1000
 weight_decay = 0.01
 grad_clip = 1.0
 entropy_weight = 0.01
 
-# E3 optimizations
+# E3 features
 use_mtp = true
 mtp_n_tokens = 4
 mtp_weight = 0.2
-
 use_collider = true
 collider_threshold = 0.3
 collider_sparsity = 0.35
-
 use_async_loader = true
 num_workers = 4
 prefetch_batches = 8
 
+# GaLore 2 low-rank optimizer
 optimizer_type = "muon"
 muon_momentum = 0.95
-lion_lr_mult = 0.005
-lion_weight_decay = 0.1
+use_8bit_optim = false
+use_galore = true
+galore_rank = 256
+galore_update_freq = 200
 
 schedule_type = "wsd"
 stable_ratio = 0.8

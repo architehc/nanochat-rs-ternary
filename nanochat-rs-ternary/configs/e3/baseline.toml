@@ -1,0 +1,44 @@
+# E3 Baseline: Standard Muon optimizer without E3 features
+# Use this as a baseline to measure E3 improvements
+
+[model]
+name = "e3-baseline"
+vocab_size = 32000
+hidden_dim = 1024
+num_layers = 12
+num_heads = 12
+num_kv_heads = 4
+ffn_mult = 3.5
+max_seq_len = 2048
+group_size = 128
+mhc_n_streams = 2
+
+[training]
+total_steps = 10000
+batch_size = 16
+seq_length = 2048
+learning_rate = 0.02
+warmup_steps = 1000
+weight_decay = 0.01
+grad_clip = 1.0
+entropy_weight = 0.01
+
+# E3 features DISABLED for baseline
+use_mtp = false
+use_collider = false
+use_async_loader = false
+
+# Standard optimizer
+optimizer_type = "muon"
+muon_momentum = 0.95
+use_8bit_optim = false
+use_galore = false
+
+schedule_type = "wsd"
+stable_ratio = 0.8
+min_lr_ratio = 0.1
+
+[hardware]
+target = "single_gpu"
+fp16 = true
+gradient_checkpointing = false

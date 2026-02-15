@@ -100,6 +100,12 @@ impl NanochatTrainModel {
 
     /// Forward: token_ids [batch, seq_len] -> logits [batch, seq_len, vocab_size]
     pub fn forward(&self, token_ids: &Tensor) -> Result<Tensor> {
+        let (logits, _hidden) = self.forward_with_hidden(token_ids)?;
+        Ok(logits)
+    }
+
+    /// Forward pass returning both logits and last hidden state (for MTP).
+    pub fn forward_with_hidden(&self, token_ids: &Tensor) -> Result<(Tensor, Tensor)> {
         let (_batch, seq_len) = token_ids.dims2()?;
 
         // 1. Embed
@@ -144,7 +150,7 @@ impl NanochatTrainModel {
         let x = MhcLiteN2Train::collapse_output(&x_exp, self.config.dim)?;
 
         // 6. Final norm
-        let x = self.norm_final.forward(&x)?;
+        let hidden = self.norm_final.forward(&x)?;
 
         // 7. LM head (handles 3D [batch, seq, dim] @ 2D [dim, vocab])
         let lm_w = if self.config.weight_tied {
@@ -152,13 +158,15 @@ impl NanochatTrainModel {
         } else {
             self.lm_head_weight.as_ref().unwrap().t()?
         };
-        let x_dims = x.dims().to_vec();
-        if x_dims.len() == 3 {
+        let x_dims = hidden.dims().to_vec();
+        let logits = if x_dims.len() == 3 {
             let (b, m, k) = (x_dims[0], x_dims[1], x_dims[2]);
-            x.reshape((b * m, k))?.matmul(&lm_w)?.reshape((b, m, ()))
+            hidden.reshape((b * m, k))?.matmul(&lm_w)?.reshape((b, m, ()))
         } else {
-            x.matmul(&lm_w)
-        }
+            hidden.matmul(&lm_w)
+        }?;
+
+        Ok((logits, hidden))
     }
 
     /// Forward with cross-entropy loss.

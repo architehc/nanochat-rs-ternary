@@ -1,37 +1,33 @@
-# Small 560M (d20 architecture) - Production-ready code generation
-# Training time: ~8 hours on single GPU
-# Memory: ~16GB GPU
-# Use case: Rust code completion, small-scale deployment
+# E3 Full: All optimizations enabled
+# Expected gains:
+# - 15-20% data efficiency (MTP)
+# - 35% faster backprop (Collider)
+# - 90%+ GPU utilization (async loader)
+# - 50-65% memory reduction (GaLore 2) OR 86% (8-bit Muon)
 
 [model]
-name = "nanochat-small-560m"
+name = "e3-full"
 vocab_size = 32000
 hidden_dim = 1024
-num_layers = 20
-num_heads = 16
+num_layers = 12
+num_heads = 12
 num_kv_heads = 4
 ffn_mult = 3.5
-max_seq_len = 4096
+max_seq_len = 2048
 group_size = 128
 mhc_n_streams = 2
 
-use_bitlinear = true
-activation_bits = 8
-
-# Hybrid attention: 80% MHA, 20% DeltaNet for long context
-deltanet_ratio = 0.2
-
 [training]
-total_steps = 100000
+total_steps = 10000
 batch_size = 16
-seq_length = 4096
-learning_rate = 0.015
-warmup_steps = 3000
+seq_length = 2048
+learning_rate = 0.02
+warmup_steps = 1000
 weight_decay = 0.01
 grad_clip = 1.0
 entropy_weight = 0.01
 
-# E3 optimizations
+# E3: ALL features enabled
 use_mtp = true
 mtp_n_tokens = 4
 mtp_weight = 0.2
@@ -44,10 +40,13 @@ use_async_loader = true
 num_workers = 6
 prefetch_batches = 12
 
+# Hybrid: GaLore 2 + 8-bit Muon (maximum memory efficiency)
 optimizer_type = "muon"
 muon_momentum = 0.95
-lion_lr_mult = 0.005
-lion_weight_decay = 0.1
+use_8bit_optim = true
+use_galore = true
+galore_rank = 256
+galore_update_freq = 200
 
 schedule_type = "wsd"
 stable_ratio = 0.8

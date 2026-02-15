@@ -39,7 +39,13 @@ entropy_weight = 0.01
 
 # E3 optimizations
 use_mtp = true
-mtp_n_future_tokens = 4
+mtp_n_tokens = 4
+mtp_weight = 0.2
+
+use_collider = true
+collider_threshold = 0.3
+collider_sparsity = 0.35
+
 use_async_loader = true
 num_workers = 8
 prefetch_batches = 16
@@ -51,7 +57,7 @@ lion_lr_mult = 0.003
 lion_weight_decay = 0.1
 
 # 8-bit Muon for memory efficiency
-use_8bit_muon = true
+use_8bit_optim = true
 
 schedule_type = "wsd"
 stable_ratio = 0.8
