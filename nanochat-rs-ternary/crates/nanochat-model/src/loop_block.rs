@@ -54,6 +54,7 @@ impl SharedLoopBlock {
     ///
     /// This is typically called when loading a model from GGUF, not constructed from scratch.
     /// For testing, use `new_empty()` to create with zero-initialized weights.
+    #[allow(clippy::too_many_arguments)] // Constructor needs all layer components from GGUF
     pub fn new(
         wq: BitLinear,
         wk: BitLinear,
@@ -378,6 +379,7 @@ impl SharedLoopBlock {
             }
 
             // Weighted sum over V (only causal positions)
+            #[allow(clippy::needless_range_loop)] // Index needed for v_base calculation and scores access
             for t in 0..causal_len {
                 let v_base = t * (self.n_kv_heads * self.head_dim) + kv_offset;
                 let weight = scores[t];
