@@ -2,7 +2,7 @@
 # Production 8-hour GPU training job for nanochat-rs-ternary
 #
 # Hardware target: NVIDIA RTX PRO 6000 Blackwell (96GB)
-# Estimated throughput: ~500 steps/minute → 240,000 steps in 8 hours
+# Preset target: d20-e3-full (50,000 steps)
 #
 # Features enabled:
 # - TensorBoard logging for real-time monitoring
@@ -21,8 +21,9 @@ RUNS_DIR="${WORKSPACE_DIR}/runs/${EXPERIMENT_NAME}"
 CHECKPOINTS_DIR="${RUNS_DIR}/checkpoints"
 TENSORBOARD_DIR="${RUNS_DIR}/tensorboard"
 
-# Training hyperparameters (8 hours = 480 minutes * 500 steps/min = 240,000 steps)
-TOTAL_STEPS=240000
+# Training hyperparameters
+# Keep this aligned with TrainConfig::d20_e3_full().total_steps
+TOTAL_STEPS=50000
 CHECKPOINT_INTERVAL=10000
 LOG_INTERVAL=100
 N_SAMPLES=5000000
@@ -67,21 +68,24 @@ RUST_LOG=info target/release/nanochat-train train \
     --config "${TRAIN_CONFIG}" \
     --dataset synthetic \
     --n-samples "${N_SAMPLES}" \
+    --log-interval "${LOG_INTERVAL}" \
+    --checkpoint-interval "${CHECKPOINT_INTERVAL}" \
     --device cuda \
     --checkpoint-dir "${CHECKPOINTS_DIR}" \
     2>&1 | tee "${RUNS_DIR}/training.log"
 
 # Save final checkpoint
 echo "Training complete. Saving final model..."
-FINAL_GGUF="${CHECKPOINTS_DIR}/final_step_${TOTAL_STEPS}.gguf"
-FINAL_MHC="${CHECKPOINTS_DIR}/final_step_${TOTAL_STEPS}.mhc"
+FINAL_CHECKPOINT="${CHECKPOINTS_DIR}/final/model.safetensors"
+FINAL_GGUF="${CHECKPOINTS_DIR}/final.gguf"
+FINAL_MHC="${CHECKPOINTS_DIR}/final.mhc"
 
 # Export to GGUF for inference
-if [ -f "${CHECKPOINTS_DIR}/checkpoint_${TOTAL_STEPS}.safetensors" ]; then
+if [ -f "${FINAL_CHECKPOINT}" ]; then
     echo "Exporting to GGUF + MHC format..."
     cargo run --release -p nanochat-train -- \
         export \
-        --checkpoint "${CHECKPOINTS_DIR}/checkpoint_${TOTAL_STEPS}.safetensors" \
+        --checkpoint "${FINAL_CHECKPOINT}" \
         --gguf "${FINAL_GGUF}" \
         --mhc "${FINAL_MHC}"
 
@@ -106,8 +110,8 @@ Configuration:
 - Log interval: ${LOG_INTERVAL}
 
 Features Enabled:
-- Multi-Token Prediction (4 future tokens)
-- Async Data Loader (4 workers, 8 prefetch)
+- Multi-Token Prediction (3 future tokens)
+- Async Data Loader (6 workers, 12 prefetch)
 - TensorBoard Logging
 - Muon + Lion Hybrid Optimizer
 - WSD Learning Rate Schedule

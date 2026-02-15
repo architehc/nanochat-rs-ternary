@@ -34,9 +34,9 @@
 - Needs vectorization optimization
 
 ### Other E3 Features
-- ⚠️ **8-bit Muon**: Not yet implemented
-- ⚠️ **GaLore2**: Not yet implemented  
-- ⚠️ **Async Loader**: Not yet implemented
+- ✅ **8-bit Muon**: Implemented (`optim/muon_quantized.rs`)
+- ✅ **GaLore2**: Implemented (`optim/galore2.rs`)
+- ✅ **Async Loader**: Implemented (`data/async_loader.rs`)
 
 ## 📊 Benchmark Results
 
@@ -63,21 +63,21 @@
 1. ✅ Full training pipeline (Rust-native)
 2. ✅ GPU training with CUDA
 3. ✅ MTP integration (validated)
-4. ✅ Baseline models (d20, nano-125m, nano-1b)
+4. ✅ Preset models (d20, d20-e3-full, nano-125m, nano-1b, medium-3b)
 5. ✅ Production training scripts
 6. ✅ Checkpoint save/load
 7. ✅ Synthetic dataset generation
+8. ✅ GGUF + mHC export
 
 ### What's In Progress
 1. 🔧 Collider optimization (needs vectorization)
 2. 🔧 Large model support (needs bigger GPU)
-3. 🔧 Additional E3 features (8-bit Muon, GaLore2)
+3. 🔧 Combined optimizer path (GaLore2 + 8-bit Muon)
 
 ### What's Not Started
 1. ❌ Real dataset training
-2. ❌ GGUF export functionality
-3. ❌ Inference server improvements
-4. ❌ Production model training (8+ hours)
+2. ❌ Inference server improvements
+3. ❌ Production model training (8+ hours)
 
 ## 🚀 Next Steps
 
@@ -89,8 +89,8 @@
 
 ### Short-term (P1)
 - [ ] Optimize Collider (vectorize per-token loss)
-- [ ] Implement 8-bit Muon optimizer
-- [ ] Implement GaLore2
+- [ ] Improve 8-bit Muon convergence benchmarking
+- [ ] Implement GaLore2 + 8-bit combined optimizer path
 - [ ] Add real dataset support
 
 ### Long-term (P2)

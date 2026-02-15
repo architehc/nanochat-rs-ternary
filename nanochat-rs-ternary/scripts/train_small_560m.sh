@@ -1,6 +1,6 @@
 #!/bin/bash
 # Train Small 560M model (d20 architecture) - Production code generation
-# Duration: ~8 hours | Memory: 16GB GPU | Steps: 100K
+# Duration: ~8 hours | Memory: 16GB GPU | Steps: 50K
 
 set -euo pipefail
 
@@ -12,7 +12,7 @@ mkdir -p "${RUNS_DIR}"
 cd "${WORKSPACE_DIR}"
 
 echo "Starting Small 560M (d20) training: ${EXPERIMENT_NAME}"
-echo "Target: 100K steps (~8 hours)"
+echo "Target: 50K steps (~8 hours)"
 echo "Features: Hybrid attention (80% MHA, 20% DeltaNet)"
 echo ""
 
@@ -37,6 +37,6 @@ echo "Training complete! Model saved to: ${RUNS_DIR}"
 echo ""
 echo "To export to GGUF:"
 echo "  cargo run --release -p nanochat-train -- export \\"
-echo "    --checkpoint ${RUNS_DIR}/final.safetensors \\"
+echo "    --checkpoint ${RUNS_DIR}/checkpoints/final/model.safetensors \\"
 echo "    --gguf models/nanochat-560m.gguf \\"
 echo "    --mhc models/nanochat-560m.mhc"
