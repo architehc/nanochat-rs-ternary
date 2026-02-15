@@ -38,6 +38,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+fn unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 async fn chat_ui() -> Html<&'static str> {
     Html(CHAT_HTML)
 }
@@ -107,7 +114,10 @@ async fn non_stream_completion(
         let vs = state.vocab_size;
         let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
 
-        let mut engine = state.engine.lock().unwrap();
+        let mut engine = state
+            .engine
+            .lock()
+            .map_err(|e| format!("Engine lock poisoned: {}", e))?;
         let output_ids = engine.generate(&token_ids, &params);
         let output_len = output_ids.len();
 
@@ -135,10 +145,7 @@ async fn non_stream_completion(
             return Json(ChatCompletionResponse {
                 id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
                 object: "chat.completion".to_string(),
-                created: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
+                created: unix_timestamp_secs(),
                 model: model_name,
                 choices: vec![ChatChoice {
                     index: 0,
@@ -158,10 +165,7 @@ async fn non_stream_completion(
             return Json(ChatCompletionResponse {
                 id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
                 object: "chat.completion".to_string(),
-                created: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
+                created: unix_timestamp_secs(),
                 model: model_name,
                 choices: vec![ChatChoice {
                     index: 0,
@@ -176,10 +180,7 @@ async fn non_stream_completion(
         }
     };
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = unix_timestamp_secs();
 
     // Track generated tokens
     metrics::TOKENS_GENERATED.inc_by(completion_tokens as f64);
@@ -236,10 +237,7 @@ async fn stream_completion(
 
         // Validate prompt length before streaming
         if prompt_ids.len() >= max_seq_len {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+            let now = unix_timestamp_secs();
             let error_chunk = ChatCompletionChunk {
                 id: req_id,
                 object: "chat.completion.chunk".to_string(),
@@ -259,8 +257,11 @@ async fn stream_completion(
                 }],
             };
             metrics::INFERENCE_ERRORS.inc();
-            let json = serde_json::to_string(&error_chunk).unwrap();
-            let _ = tx.blocking_send(Ok(Event::default().data(json)));
+            if let Ok(json) = serde_json::to_string(&error_chunk) {
+                let _ = tx.blocking_send(Ok(Event::default().data(json)));
+            } else {
+                eprintln!("ERROR: Failed to serialize prompt-length error chunk");
+            }
             // Send [DONE] even on error path for OpenAI compatibility
             let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
             return;
@@ -269,10 +270,7 @@ async fn stream_completion(
         let vs = state.vocab_size;
         let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_timestamp_secs();
 
         // Send initial chunk with role
         let initial = ChatCompletionChunk {
@@ -289,10 +287,43 @@ async fn stream_completion(
                 finish_reason: None,
             }],
         };
-        let json = serde_json::to_string(&initial).unwrap();
-        let _ = tx.blocking_send(Ok(Event::default().data(json)));
+        if let Ok(json) = serde_json::to_string(&initial) {
+            let _ = tx.blocking_send(Ok(Event::default().data(json)));
+        } else {
+            metrics::INFERENCE_ERRORS.inc();
+            eprintln!("ERROR: Failed to serialize initial streaming chunk");
+            let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+            return;
+        }
 
-        let mut engine = state.engine.lock().unwrap();
+        let mut engine = match state.engine.lock() {
+            Ok(engine) => engine,
+            Err(err) => {
+                metrics::INFERENCE_ERRORS.inc();
+                let now = unix_timestamp_secs();
+                let error_chunk = ChatCompletionChunk {
+                    id: req_id.clone(),
+                    object: "chat.completion.chunk".to_string(),
+                    created: now,
+                    model: model.clone(),
+                    choices: vec![ChunkChoice {
+                        index: 0,
+                        delta: ChunkDelta {
+                            role: Some(Role::Assistant),
+                            content: Some(format!("Error: internal engine lock failure ({})", err)),
+                        },
+                        finish_reason: Some("error".to_string()),
+                    }],
+                };
+                if let Ok(json) = serde_json::to_string(&error_chunk) {
+                    let _ = tx.blocking_send(Ok(Event::default().data(json)));
+                } else {
+                    eprintln!("ERROR: Failed to serialize engine-lock error chunk");
+                }
+                let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+                return;
+            }
+        };
 
         let mut token_count = 0usize;
         let mut had_degraded = false;
@@ -328,8 +359,14 @@ async fn stream_completion(
                 }],
             };
 
-            let json = serde_json::to_string(&chunk).unwrap();
-            tx.blocking_send(Ok(Event::default().data(json))).is_ok()
+            match serde_json::to_string(&chunk) {
+                Ok(json) => tx.blocking_send(Ok(Event::default().data(json))).is_ok(),
+                Err(err) => {
+                    metrics::INFERENCE_ERRORS.inc();
+                    eprintln!("ERROR: Failed to serialize streaming chunk: {}", err);
+                    false
+                }
+            }
         });
 
         // Log if any degraded outputs occurred

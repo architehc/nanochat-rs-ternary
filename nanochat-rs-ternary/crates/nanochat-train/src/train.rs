@@ -389,9 +389,24 @@ impl Trainer {
         // Forward pass with hidden states (for MTP)
         let (logits, hidden) = self.model.forward_with_hidden(input_ids)?;
 
-        // Primary cross-entropy loss with label smoothing
+        // E3: Collider token filtering (35% faster backprop)
+        // Build a binary keep-mask once per step from detached logits.
+        let collider_mask = if let Some(ref collider) = self.collider {
+            let importance = collider.compute_importance(&logits.detach(), target_ids)?;
+            Some(collider.create_mask(&importance)?)
+        } else {
+            None
+        };
+
+        // Primary cross-entropy loss with label smoothing.
+        // If Collider is enabled, dropped tokens keep their forward value but stop gradients.
         let (batch, seq_len, vocab) = logits.dims3()?;
-        let logits_flat = logits.reshape((batch * seq_len, vocab))?;
+        let logits_for_loss = if let Some(mask) = collider_mask.as_ref() {
+            apply_collider_gradient_mask(&logits, mask)?
+        } else {
+            logits.clone()
+        };
+        let logits_flat = logits_for_loss.reshape((batch * seq_len, vocab))?;
         let targets_flat = target_ids.reshape(batch * seq_len)?;
 
         // Label smoothing: smooth_targets = (1-eps)*one_hot + eps/V
@@ -447,21 +462,8 @@ impl Trainer {
             }
         }
 
-        // E3: Collider token filtering (35% faster backprop)
-        // Compute importance scores before backward pass
-        let importance_mask = if let Some(ref collider) = self.collider {
-            Some(collider.compute_importance(&logits, target_ids)?)
-        } else {
-            None
-        };
-
         // Backward pass
         let grads = loss.backward()?;
-
-        // E3: Apply Collider filtering to gradients (if enabled)
-        // Note: Full backward filtering requires custom autograd implementation
-        // For now, importance scores are computed for future use
-        // TODO: Implement sparse gradient masking based on importance_mask
 
         // Compute gradient norm for clipping
         let grad_norm = compute_grad_norm(&grads, &self.varmap)?;
@@ -470,9 +472,6 @@ impl Trainer {
         } else {
             1.0
         };
-
-        // Drop importance mask to free memory
-        drop(importance_mask);
 
         // Optimizer steps
         self.muon.step(&grads, clip_scale)?;
@@ -501,6 +500,8 @@ impl Trainer {
 
         // Explicitly drop intermediate tensors to free GPU memory
         drop(loss);
+        drop(logits_for_loss);
+        drop(collider_mask);
         drop(logits);
         drop(logits_flat);
         drop(targets_flat);
@@ -713,6 +714,18 @@ impl Trainer {
     }
 }
 
+/// Apply Collider token mask to logits such that masked tokens keep forward values
+/// but contribute zero gradient in backward.
+fn apply_collider_gradient_mask(logits: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    let (batch, seq_len, vocab) = logits.dims3()?;
+    let expanded_mask = mask.unsqueeze(2)?.broadcast_as((batch, seq_len, vocab))?;
+    let inv_mask = Tensor::ones_like(&expanded_mask)?.sub(&expanded_mask)?;
+
+    let kept = logits.mul(&expanded_mask)?;
+    let dropped_no_grad = logits.detach().mul(&inv_mask)?;
+    &kept + &dropped_no_grad
+}
+
 /// Compute total gradient norm across all variables.
 pub fn compute_grad_norm(grads: &candle_core::backprop::GradStore, varmap: &VarMap) -> Result<f64> {
     let mut total = 0.0f64;
@@ -772,6 +785,32 @@ mod tests {
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
         }
+    }
+
+    #[test]
+    fn test_collider_gradient_mask_zeroes_masked_token_grads() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let logits = vb.get_with_hints((1, 2, 2), "logits", candle_nn::Init::Const(1.0))?;
+
+        let mask = Tensor::new(&[[1.0f32, 0.0]], &device)?;
+        let masked_logits = apply_collider_gradient_mask(&logits, &mask)?;
+        let loss = masked_logits.sum_all()?;
+        let grads = loss.backward()?;
+        let grad = grads
+            .get(&logits)
+            .ok_or_else(|| candle_core::Error::Msg("missing logits grad".to_string()))?;
+        let vals = grad.to_vec3::<f32>()?;
+
+        // First token kept => gradients flow.
+        assert!((vals[0][0][0] - 1.0).abs() < 1e-6);
+        assert!((vals[0][0][1] - 1.0).abs() < 1e-6);
+        // Second token masked => gradients are zero.
+        assert!(vals[0][1][0].abs() < 1e-6);
+        assert!(vals[0][1][1].abs() < 1e-6);
+
+        Ok(())
     }
 
     #[test]
