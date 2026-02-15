@@ -1,7 +1,7 @@
 //! Main evaluation harness that coordinates dataset loading, model querying, and metric calculation.
 
 use crate::datasets::CodeProblem;
-use crate::executor::{CodeExecutor, ExecutionResult};
+use crate::executor::CodeExecutor;
 use crate::metrics::{EvalMetrics, PassAtK, ProblemResult};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};

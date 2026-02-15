@@ -138,7 +138,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut cfg = match config.as_str() {
                 "d20" => nanochat_train::config::TrainConfig::d20(),
-                "d20-e3" | "d20_e3" | "d20-e3-full" | "d20_e3_full" => nanochat_train::config::TrainConfig::d20_e3_full(),
+                "d20-e3" | "d20_e3" | "d20-e3-full" | "d20_e3_full" => {
+                    nanochat_train::config::TrainConfig::d20_e3_full()
+                }
                 "nano-125m" | "nano_125m" => nanochat_train::config::TrainConfig::nano_125m(),
                 "nano-1b" | "nano_1b" => nanochat_train::config::TrainConfig::nano_1b(),
                 "tiny-cpu" | "tiny_cpu" => nanochat_train::config::TrainConfig::tiny_cpu(),

@@ -3,7 +3,6 @@
 //! This is the inference-optimized version of SharedLoopBlock, using
 //! quantized ternary weights instead of training-mode floating point.
 
-
 use crate::attention::KvCache;
 use crate::bitlinear::BitLinear;
 use crate::config::ModelConfig;
@@ -379,7 +378,8 @@ impl SharedLoopBlock {
             }
 
             // Weighted sum over V (only causal positions)
-            #[allow(clippy::needless_range_loop)] // Index needed for v_base calculation and scores access
+            #[allow(clippy::needless_range_loop)]
+            // Index needed for v_base calculation and scores access
             for t in 0..causal_len {
                 let v_base = t * (self.n_kv_heads * self.head_dim) + kv_offset;
                 let weight = scores[t];
@@ -574,7 +574,7 @@ mod tests {
             .unwrap();
 
         // Second iteration uses global state
-        let (x2, global_state2) = block
+        let (_x2, global_state2) = block
             .forward(&x1, Some(&global_state1), &mut kv_cache, false, None)
             .unwrap();
 
@@ -584,6 +584,5 @@ mod tests {
 
         // Both iterations should complete without error
         // (With non-zero weights, states would differ, but zero weights produce zero outputs)
-        assert!(true, "Global state mixing mechanism works");
     }
 }

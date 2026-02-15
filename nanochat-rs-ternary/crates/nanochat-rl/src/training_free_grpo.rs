@@ -12,8 +12,8 @@
 //! - Memory-efficient (stores token priors, not gradients)
 //! - Compatible with any reward function
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 /// Experience from a successful rollout
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,12 +91,12 @@ pub struct GRPOConfig {
 impl Default for GRPOConfig {
     fn default() -> Self {
         Self {
-            group_size: 8,                      // 8 rollouts per prompt
-            max_library_size: 10000,            // 10K experiences max
-            max_experience_age: 86400 * 7,      // 1 week
-            min_advantage_threshold: 0.0,       // Only store positive advantage
-            sampling_temperature: 1.0,          // Neutral temperature
-            use_advantage_weighting: true,      // Weight by advantage
+            group_size: 8,                 // 8 rollouts per prompt
+            max_library_size: 10000,       // 10K experiences max
+            max_experience_age: 86400 * 7, // 1 week
+            min_advantage_threshold: 0.0,  // Only store positive advantage
+            sampling_temperature: 1.0,     // Neutral temperature
+            use_advantage_weighting: true, // Weight by advantage
         }
     }
 }
@@ -160,11 +160,7 @@ impl TrainingFreeGRPO {
             let advantage = reward - mean_reward;
 
             if advantage > self.config.min_advantage_threshold {
-                let experience = Experience::new(
-                    prompt.clone(),
-                    response.clone(),
-                    advantage,
-                );
+                let experience = Experience::new(prompt.clone(), response.clone(), advantage);
 
                 self.experience_library.push(experience);
                 self.total_experiences_stored += 1;
@@ -184,9 +180,8 @@ impl TrainingFreeGRPO {
         let initial_size = self.experience_library.len();
 
         // Remove stale experiences
-        self.experience_library.retain(|exp| {
-            !exp.is_stale(self.config.max_experience_age)
-        });
+        self.experience_library
+            .retain(|exp| !exp.is_stale(self.config.max_experience_age));
 
         let after_age_prune = self.experience_library.len();
         self.total_experiences_pruned += initial_size - after_age_prune;
@@ -194,13 +189,13 @@ impl TrainingFreeGRPO {
         // If still too large, keep top experiences by advantage
         if self.experience_library.len() > self.config.max_library_size {
             // Sort by advantage (descending)
-            self.experience_library.sort_by(|a, b| {
-                b.advantage.partial_cmp(&a.advantage).unwrap()
-            });
+            self.experience_library
+                .sort_by(|a, b| b.advantage.partial_cmp(&a.advantage).unwrap());
 
             // Truncate to max size
             let to_remove = self.experience_library.len() - self.config.max_library_size;
-            self.experience_library.truncate(self.config.max_library_size);
+            self.experience_library
+                .truncate(self.config.max_library_size);
             self.total_experiences_pruned += to_remove;
         }
     }
@@ -224,7 +219,8 @@ impl TrainingFreeGRPO {
         let mut rng = rand::thread_rng();
 
         // Compute weights: exp(advantage / temperature)
-        let weights: Vec<f64> = self.experience_library
+        let weights: Vec<f64> = self
+            .experience_library
             .iter()
             .map(|exp| (exp.advantage / self.config.sampling_temperature).exp())
             .collect();
@@ -255,18 +251,23 @@ impl TrainingFreeGRPO {
     /// Get statistics about the experience library
     pub fn stats(&self) -> GRPOStats {
         let avg_advantage = if !self.experience_library.is_empty() {
-            self.experience_library.iter().map(|e| e.advantage).sum::<f64>()
+            self.experience_library
+                .iter()
+                .map(|e| e.advantage)
+                .sum::<f64>()
                 / self.experience_library.len() as f64
         } else {
             0.0
         };
 
-        let max_advantage = self.experience_library
+        let max_advantage = self
+            .experience_library
             .iter()
             .map(|e| e.advantage)
             .fold(f64::NEG_INFINITY, f64::max);
 
-        let min_advantage = self.experience_library
+        let min_advantage = self
+            .experience_library
             .iter()
             .map(|e| e.advantage)
             .fold(f64::INFINITY, f64::min);
@@ -419,10 +420,7 @@ mod tests {
 
         // Add 20 experiences (should prune to 10)
         for i in 0..20 {
-            let rollouts = vec![
-                (format!("prompt{}", i), "response".to_string());
-                8
-            ];
+            let rollouts = vec![(format!("prompt{}", i), "response".to_string()); 8];
             let rewards = vec![0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.6];
             grpo.add_rollout_group(rollouts, rewards);
         }
@@ -436,10 +434,7 @@ mod tests {
         let mut grpo = TrainingFreeGRPO::new();
 
         // Add some experiences
-        let rollouts = vec![
-            ("test".to_string(), "response".to_string());
-            8
-        ];
+        let rollouts = vec![("test".to_string(), "response".to_string()); 8];
         let rewards = vec![0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.6];
         grpo.add_rollout_group(rollouts, rewards);
 
@@ -452,10 +447,7 @@ mod tests {
     fn test_grpo_stats() {
         let mut grpo = TrainingFreeGRPO::new();
 
-        let rollouts = vec![
-            ("test".to_string(), "response".to_string());
-            8
-        ];
+        let rollouts = vec![("test".to_string(), "response".to_string()); 8];
         let rewards = vec![0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.6];
         grpo.add_rollout_group(rollouts, rewards);
 
@@ -486,7 +478,7 @@ mod tests {
         let test_exps = grpo.get_experiences_for_prompt("test_prompt");
         let other_exps = grpo.get_experiences_for_prompt("other_prompt");
 
-        assert!(test_exps.len() > 0);
+        assert!(!test_exps.is_empty());
         // other_exps might be empty if below mean, just check it's a valid vec
         let _ = other_exps.len();
     }
@@ -495,10 +487,7 @@ mod tests {
     fn test_save_load() {
         let mut grpo = TrainingFreeGRPO::new();
 
-        let rollouts = vec![
-            ("test".to_string(), "response".to_string());
-            8
-        ];
+        let rollouts = vec![("test".to_string(), "response".to_string()); 8];
         let rewards = vec![0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.6];
         grpo.add_rollout_group(rollouts, rewards);
 

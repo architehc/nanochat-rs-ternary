@@ -22,7 +22,7 @@ use std::io::Write;
 pub struct RLTrainer {
     config: RLConfig,
     compiler: CompilerFeedback,
-    grpo: GrpoTrainer,
+    _grpo: GrpoTrainer,
     qwen: Option<QwenClient>,
     iteration: usize,
 }
@@ -42,7 +42,7 @@ impl RLTrainer {
         Ok(Self {
             config,
             compiler,
-            grpo,
+            _grpo: grpo,
             qwen,
             iteration: 0,
         })
@@ -90,7 +90,7 @@ impl RLTrainer {
 
                 for sample_idx in 0..self.config.n_samples {
                     // Generate code (TODO: use actual model)
-                    let code = self.generate_code(&prompt)?;
+                    let code = self.generate_code(prompt)?;
                     println!("  Sample {}: {} chars", sample_idx + 1, code.len());
 
                     // Evaluate with compiler

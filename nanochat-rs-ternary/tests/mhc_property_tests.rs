@@ -143,6 +143,7 @@ fn n4_identity_is_doubly_stochastic() {
 fn n4_1000_random_logits_all_doubly_stochastic() {
     for seed in 0..1000 {
         let mut logits = [0.0f32; 24];
+        #[allow(clippy::needless_range_loop)] // Index needed for deterministic test data generation
         for i in 0..24 {
             logits[i] = ((seed * 24 + i) as f32 * 0.7).sin() * 5.0;
         }
@@ -176,6 +177,7 @@ fn n4_composite_gain_bounded_64_layers() {
     let mut matrices = Vec::new();
     for seed in 0..64 {
         let mut logits = [0.0f32; 24];
+        #[allow(clippy::needless_range_loop)] // Index needed for deterministic test data generation
         for i in 0..24 {
             logits[i] = ((seed * 24 + i) as f32 * 0.7).sin() * 3.0;
         }
@@ -197,6 +199,7 @@ fn n4_composite_gain_bounded_256_layers() {
     let mut matrices = Vec::new();
     for seed in 0..256 {
         let mut logits = [0.0f32; 24];
+        #[allow(clippy::needless_range_loop)] // Index needed for deterministic test data generation
         for i in 0..24 {
             logits[i] = ((seed * 24 + i) as f32 * 1.13).cos() * 8.0;
         }
@@ -236,6 +239,7 @@ fn n4_expand_collapse_preserves_data() {
 fn n4_h_pre_h_post_are_nonnegative() {
     for seed in 0..100 {
         let mut logits = [0.0f32; 24];
+        #[allow(clippy::needless_range_loop)] // Index needed for deterministic test data generation
         for i in 0..24 {
             logits[i] = ((seed * 24 + i) as f32 * 0.37).sin() * 10.0;
         }
@@ -299,6 +303,7 @@ fn n2_serialize_roundtrip_preserves_values() {
 fn n4_serialize_roundtrip_preserves_values() {
     for seed in 0..100 {
         let mut res_logits = [0.0f32; 24];
+        #[allow(clippy::needless_range_loop)] // Index needed for deterministic test data generation
         for i in 0..24 {
             res_logits[i] = ((seed * 24 + i) as f32 * 0.7).sin() * 5.0;
         }

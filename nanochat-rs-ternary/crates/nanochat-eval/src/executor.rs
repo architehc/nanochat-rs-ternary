@@ -111,7 +111,7 @@ impl CodeExecutor {
 
         // Execute with timeout
         let timeout = Duration::from_secs(self.timeout_secs);
-        let mut child = Command::new(&self.python_cmd)
+        let child = Command::new(&self.python_cmd)
             .arg("-c")
             .arg(&program)
             .stdout(Stdio::piped())

@@ -6,6 +6,7 @@ use candle_nn::VarBuilder;
 use nanochat_train::{checkpoint::load_checkpoint, model::NanochatTrainModel};
 use tokenizers::Tokenizer;
 
+#[allow(dead_code)]
 fn tensor_stats(tensor: &Tensor, name: &str) -> Result<()> {
     let data = tensor.flatten_all()?.to_vec1::<f32>()?;
     let mean = data.iter().sum::<f32>() / data.len() as f32;

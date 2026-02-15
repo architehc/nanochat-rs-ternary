@@ -69,7 +69,7 @@ impl HumanEvalDataset {
 
     /// Load from standard HumanEval URL (downloads if not cached).
     pub async fn load_from_url() -> Result<Self, anyhow::Error> {
-        const HUMANEVAL_URL: &str =
+        const _HUMANEVAL_URL: &str =
             "https://raw.githubusercontent.com/openai/human-eval/master/data/HumanEval.jsonl.gz";
 
         // TODO: Download and cache

@@ -36,7 +36,7 @@ fn main() -> Result<()> {
         let pos_logits = logits.get(0)?.get(pos)?; // [10]
         let pos_logits_vec = pos_logits.to_vec1::<f32>()?;
 
-        let (predicted_token, max_logit) = pos_logits_vec
+        let (predicted_token, _max_logit) = pos_logits_vec
             .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())

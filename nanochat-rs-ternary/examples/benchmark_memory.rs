@@ -20,9 +20,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.use_galore = false;
     config.galore_rank = 128;
     config.galore_update_freq = 200;
-    config.total_steps = 10;  // Just init, don't train
+    config.total_steps = 10; // Just init, don't train
 
-    println!("Model size: ~{}M parameters", config.param_count_estimate() / 1_000_000);
+    println!(
+        "Model size: ~{}M parameters",
+        config.param_count_estimate() / 1_000_000
+    );
     println!("Batch size: {}", config.batch_size);
     println!("Max sequence length: {}\n", config.max_seq_len);
 
@@ -39,7 +42,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.use_galore = true;
     let galore_mem = measure_memory(&config, &device)?;
     println!("   Memory: {:.2} MB", galore_mem);
-    println!("   Reduction: {:.1}%\n", 100.0 * (1.0 - galore_mem / baseline_mem));
+    println!(
+        "   Reduction: {:.1}%\n",
+        100.0 * (1.0 - galore_mem / baseline_mem)
+    );
 
     // 8-bit only
     println!("3. 8-bit Muon only (no GaLore)");
@@ -47,7 +53,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.use_galore = false;
     let quant_mem = measure_memory(&config, &device)?;
     println!("   Memory: {:.2} MB", quant_mem);
-    println!("   Reduction: {:.1}%\n", 100.0 * (1.0 - quant_mem / baseline_mem));
+    println!(
+        "   Reduction: {:.1}%\n",
+        100.0 * (1.0 - quant_mem / baseline_mem)
+    );
 
     // Both (best)
     println!("4. GaLore 2 + 8-bit Muon (best)");
@@ -55,16 +64,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.use_galore = true;
     let best_mem = measure_memory(&config, &device)?;
     println!("   Memory: {:.2} MB", best_mem);
-    println!("   Reduction: {:.1}%\n", 100.0 * (1.0 - best_mem / baseline_mem));
+    println!(
+        "   Reduction: {:.1}%\n",
+        100.0 * (1.0 - best_mem / baseline_mem)
+    );
 
     // Summary
     println!("=== Summary ===");
     println!("Baseline:           {:.2} MB (100.0%)", baseline_mem);
-    println!("GaLore only:        {:.2} MB ({:.1}%)", galore_mem, 100.0 * galore_mem / baseline_mem);
-    println!("8-bit only:         {:.2} MB ({:.1}%)", quant_mem, 100.0 * quant_mem / baseline_mem);
-    println!("GaLore + 8-bit:     {:.2} MB ({:.1}%)", best_mem, 100.0 * best_mem / baseline_mem);
+    println!(
+        "GaLore only:        {:.2} MB ({:.1}%)",
+        galore_mem,
+        100.0 * galore_mem / baseline_mem
+    );
+    println!(
+        "8-bit only:         {:.2} MB ({:.1}%)",
+        quant_mem,
+        100.0 * quant_mem / baseline_mem
+    );
+    println!(
+        "GaLore + 8-bit:     {:.2} MB ({:.1}%)",
+        best_mem,
+        100.0 * best_mem / baseline_mem
+    );
     println!("\n✓ Target: >50% reduction");
-    println!("✓ Achieved: {:.1}% reduction", 100.0 * (1.0 - best_mem / baseline_mem));
+    println!(
+        "✓ Achieved: {:.1}% reduction",
+        100.0 * (1.0 - best_mem / baseline_mem)
+    );
 
     if best_mem / baseline_mem < 0.5 {
         println!("\n✅ SUCCESS: Memory reduction target met!");
@@ -75,7 +102,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn measure_memory(config: &TrainConfig, device: &candle_core::Device) -> Result<f64, Box<dyn std::error::Error>> {
+fn measure_memory(
+    config: &TrainConfig,
+    device: &candle_core::Device,
+) -> Result<f64, Box<dyn std::error::Error>> {
     // Initialize trainer (allocates model + optimizer state)
     let trainer = Trainer::new(config.clone(), device.clone())?;
 

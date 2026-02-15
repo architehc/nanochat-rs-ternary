@@ -196,7 +196,10 @@ impl Trainer {
         let mem_stats = muon.memory_stats();
         println!("\n🔧 Resumed with optimizer: {}", mem_stats.variant);
         if mem_stats.memory_reduction > 0.0 {
-            println!("  Memory reduction: {:.1}%", mem_stats.memory_reduction * 100.0);
+            println!(
+                "  Memory reduction: {:.1}%",
+                mem_stats.memory_reduction * 100.0
+            );
         }
 
         let lion = Lion::new(
@@ -263,7 +266,10 @@ impl Trainer {
         println!("\n🔧 Optimizer Configuration:");
         println!("  Muon variant: {}", mem_stats.variant);
         if mem_stats.memory_reduction > 0.0 {
-            println!("  Memory reduction: {:.1}%", mem_stats.memory_reduction * 100.0);
+            println!(
+                "  Memory reduction: {:.1}%",
+                mem_stats.memory_reduction * 100.0
+            );
             println!("  Details: {}", mem_stats.details);
         }
         if config.use_galore {

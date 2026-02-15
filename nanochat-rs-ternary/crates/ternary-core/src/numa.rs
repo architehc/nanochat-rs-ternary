@@ -56,7 +56,13 @@ impl NumaAllocator {
             #[cfg(target_arch = "x86_64")]
             {
                 // Use getcpu syscall
-                if libc::syscall(libc::SYS_getcpu, &mut cpu, &mut node, std::ptr::null_mut::<libc::c_void>()) == 0 {
+                if libc::syscall(
+                    libc::SYS_getcpu,
+                    &mut cpu,
+                    &mut node,
+                    std::ptr::null_mut::<libc::c_void>(),
+                ) == 0
+                {
                     return node as i32;
                 }
             }
@@ -106,7 +112,7 @@ impl NumaAllocator {
                     237, // SYS_mbind on x86_64
                     ptr,
                     size,
-                    2,                                 // MPOL_BIND
+                    2, // MPOL_BIND
                     &mut nodemask as *mut _ as *mut libc::c_void,
                     maxnode,
                     1 | 2, // MPOL_MF_STRICT | MPOL_MF_MOVE

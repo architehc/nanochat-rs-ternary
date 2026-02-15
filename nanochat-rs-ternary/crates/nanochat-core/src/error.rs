@@ -24,9 +24,7 @@ pub enum NanoChatError {
     ModelCollapse { entropy: f64, step: usize },
 
     /// CUDA out of memory error with context.
-    #[error(
-        "CUDA out of memory: requested={requested_gb:.2}GB, available={available_gb:.2}GB"
-    )]
+    #[error("CUDA out of memory: requested={requested_gb:.2}GB, available={available_gb:.2}GB")]
     CudaOutOfMemory {
         requested_gb: f64,
         available_gb: f64,

@@ -14,7 +14,6 @@
 //! - Naturally normalized (zero mean, unit variance)
 //! - Encourages diversity through group comparison
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

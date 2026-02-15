@@ -7,10 +7,10 @@
 //! - Lock-free queues for minimal contention
 
 use candle_core::{Device, Result, Tensor};
-use std::sync::Arc;
+use crossbeam_channel::{bounded, Receiver, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use crossbeam_channel::{bounded, Sender, Receiver};
 
 use super::dataset::Dataset;
 
@@ -105,13 +105,7 @@ impl AsyncDataLoader {
 
             let handle = thread::spawn(move || {
                 Self::worker_loop(
-                    worker_id,
-                    n_workers,
-                    dataset,
-                    indices,
-                    batch_size,
-                    batch_tx,
-                    shutdown,
+                    worker_id, n_workers, dataset, indices, batch_size, batch_tx, shutdown,
                 );
             });
 
@@ -238,12 +232,11 @@ mod tests {
         let device = Device::Cpu;
 
         let _loader = AsyncDataLoader::new(
-            dataset,
-            8,      // batch_size
-            false,  // shuffle
-            42,     // seed
-            2,      // n_workers
-            4,      // prefetch_size
+            dataset, 8,     // batch_size
+            false, // shuffle
+            42,    // seed
+            2,     // n_workers
+            4,     // prefetch_size
             device,
         );
 
@@ -255,15 +248,7 @@ mod tests {
         let dataset = Arc::new(SyntheticDataset::new(100, 16, 20, 42));
         let device = Device::Cpu;
 
-        let mut loader = AsyncDataLoader::new(
-            dataset,
-            8,
-            false,
-            42,
-            2,
-            4,
-            device,
-        );
+        let mut loader = AsyncDataLoader::new(dataset, 8, false, 42, 2, 4, device);
 
         let mut count = 0;
         let mut total_samples = 0;
@@ -288,12 +273,8 @@ mod tests {
         let device = Device::Cpu;
 
         let mut loader = AsyncDataLoader::new(
-            dataset,
-            4,
-            false,
-            42,
-            4,      // 4 workers
-            8,      // prefetch 8 batches
+            dataset, 4, false, 42, 4, // 4 workers
+            8, // prefetch 8 batches
             device,
         );
 
@@ -315,15 +296,7 @@ mod tests {
         let dataset = Arc::new(SyntheticDataset::new(100, 16, 1000, 42));
         let device = Device::Cpu;
 
-        let mut loader = AsyncDataLoader::new(
-            dataset,
-            8,
-            false,
-            42,
-            4,
-            8,
-            device,
-        );
+        let mut loader = AsyncDataLoader::new(dataset, 8, false, 42, 4, 8, device);
 
         // Get a few batches
         for _ in 0..5 {

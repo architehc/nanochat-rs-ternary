@@ -13,12 +13,12 @@ use crate::n2::MhcLiteN2;
 #[derive(Debug, Clone)]
 pub struct LayerStats {
     pub layer_idx: usize,
-    pub alpha: f32,                    // N=2: mixing parameter
-    pub entropy: f32,                  // Entropy of H_res distribution
-    pub orthogonality_error: f32,      // ||H^T H - I||_F
-    pub composite_gain: f32,           // Max eigenvalue magnitude
-    pub pre_balance: f32,              // Balance of pre-projection (0=perfect, 1=worst)
-    pub post_balance: f32,             // Balance of post-projection
+    pub alpha: f32,               // N=2: mixing parameter
+    pub entropy: f32,             // Entropy of H_res distribution
+    pub orthogonality_error: f32, // ||H^T H - I||_F
+    pub composite_gain: f32,      // Max eigenvalue magnitude
+    pub pre_balance: f32,         // Balance of pre-projection (0=perfect, 1=worst)
+    pub post_balance: f32,        // Balance of post-projection
 }
 
 impl LayerStats {
@@ -55,7 +55,7 @@ impl LayerStats {
 #[derive(Debug, Clone)]
 pub struct ModelAnalysis {
     pub layer_stats: Vec<LayerStats>,
-    pub total_composite_gain: f32,      // Product of all H_res matrices
+    pub total_composite_gain: f32, // Product of all H_res matrices
     pub avg_entropy: f32,
     pub avg_orthogonality_error: f32,
     pub unhealthy_layers: Vec<usize>,
@@ -78,12 +78,27 @@ impl ModelAnalysis {
 
         // Summary
         report.push_str(&format!("Total layers: {}\n", self.layer_stats.len()));
-        report.push_str(&format!("Unhealthy layers: {}\n", self.unhealthy_layers.len()));
-        report.push_str(&format!("Composite gain: {:.4}\n", self.total_composite_gain));
+        report.push_str(&format!(
+            "Unhealthy layers: {}\n",
+            self.unhealthy_layers.len()
+        ));
+        report.push_str(&format!(
+            "Composite gain: {:.4}\n",
+            self.total_composite_gain
+        ));
         report.push_str(&format!("Avg entropy: {:.4}\n", self.avg_entropy));
-        report.push_str(&format!("Avg orthogonality error: {:.6}\n", self.avg_orthogonality_error));
-        report.push_str(&format!("Overall status: {}\n\n",
-            if self.is_healthy() { "✓ HEALTHY" } else { "⚠ NEEDS ATTENTION" }));
+        report.push_str(&format!(
+            "Avg orthogonality error: {:.6}\n",
+            self.avg_orthogonality_error
+        ));
+        report.push_str(&format!(
+            "Overall status: {}\n\n",
+            if self.is_healthy() {
+                "✓ HEALTHY"
+            } else {
+                "⚠ NEEDS ATTENTION"
+            }
+        ));
 
         // Per-layer details
         report.push_str("Layer-wise breakdown:\n");
@@ -165,7 +180,11 @@ impl MhcAnalyzer {
 
         // Average metrics
         let avg_entropy = layer_stats.iter().map(|s| s.entropy).sum::<f32>() / layers.len() as f32;
-        let avg_orthogonality_error = layer_stats.iter().map(|s| s.orthogonality_error).sum::<f32>() / layers.len() as f32;
+        let avg_orthogonality_error = layer_stats
+            .iter()
+            .map(|s| s.orthogonality_error)
+            .sum::<f32>()
+            / layers.len() as f32;
 
         // Find unhealthy layers
         let unhealthy_layers: Vec<usize> = layer_stats
@@ -289,7 +308,7 @@ impl AdaptiveInit {
     /// Identity-biased initialization (recommended for most cases)
     pub fn identity_biased() -> MhcLiteN2 {
         MhcLiteN2 {
-            alpha_logit: 2.0,  // sigmoid(2.0) ≈ 0.88, strong identity bias
+            alpha_logit: 2.0, // sigmoid(2.0) ≈ 0.88, strong identity bias
             pre_logits: [0.0, 0.0],
             pre_bias: [0.5, 0.5],
             post_logits: [0.0, 0.0],
@@ -300,7 +319,7 @@ impl AdaptiveInit {
     /// Balanced initialization (50/50 identity/swap)
     pub fn balanced() -> MhcLiteN2 {
         MhcLiteN2 {
-            alpha_logit: 0.0,  // sigmoid(0.0) = 0.5
+            alpha_logit: 0.0, // sigmoid(0.0) = 0.5
             pre_logits: [0.0, 0.0],
             pre_bias: [0.5, 0.5],
             post_logits: [0.0, 0.0],
@@ -311,8 +330,8 @@ impl AdaptiveInit {
     /// High-entropy initialization (maximum mixing)
     pub fn high_entropy() -> MhcLiteN2 {
         MhcLiteN2 {
-            alpha_logit: 0.0,  // Balanced = highest entropy for N=2
-            pre_logits: [0.1, -0.1],  // Slight variation
+            alpha_logit: 0.0,        // Balanced = highest entropy for N=2
+            pre_logits: [0.1, -0.1], // Slight variation
             pre_bias: [0.5, 0.5],
             post_logits: [0.1, -0.1],
             post_bias: [0.5, 0.5],
@@ -346,8 +365,10 @@ mod tests {
         let stats = MhcAnalyzer::analyze_n2_layer(&layer, 0);
 
         // Debug: print actual values
-        eprintln!("Identity stats: alpha={:.3}, entropy={:.3}, ortho_err={:.6}, gain={:.3}",
-                  stats.alpha, stats.entropy, stats.orthogonality_error, stats.composite_gain);
+        eprintln!(
+            "Identity stats: alpha={:.3}, entropy={:.3}, ortho_err={:.6}, gain={:.3}",
+            stats.alpha, stats.entropy, stats.orthogonality_error, stats.composite_gain
+        );
         eprintln!("Health status: {}", stats.health_status());
 
         // Identity layer should be healthy
@@ -361,13 +382,15 @@ mod tests {
         let stats = MhcAnalyzer::analyze_n2_layer(&layer, 0);
 
         // Debug output
-        eprintln!("Balanced stats: alpha={:.3}, entropy={:.3}, ortho_err={:.6}, gain={:.3}",
-                  stats.alpha, stats.entropy, stats.orthogonality_error, stats.composite_gain);
+        eprintln!(
+            "Balanced stats: alpha={:.3}, entropy={:.3}, ortho_err={:.6}, gain={:.3}",
+            stats.alpha, stats.entropy, stats.orthogonality_error, stats.composite_gain
+        );
 
         // Balanced layer should be healthy
         assert!(stats.is_healthy());
         assert!((stats.alpha - 0.5).abs() < 0.1); // Near 0.5
-        // Note: Entropy check removed from is_healthy()
+                                                  // Note: Entropy check removed from is_healthy()
     }
 
     #[test]
@@ -380,8 +403,12 @@ mod tests {
 
         let analysis = MhcAnalyzer::analyze_model_n2(&layers);
 
-        eprintln!("Model analysis: composite_gain={:.3}, unhealthy={}/{}",
-                  analysis.total_composite_gain, analysis.unhealthy_layers.len(), layers.len());
+        eprintln!(
+            "Model analysis: composite_gain={:.3}, unhealthy={}/{}",
+            analysis.total_composite_gain,
+            analysis.unhealthy_layers.len(),
+            layers.len()
+        );
         eprintln!("{}", analysis.report());
 
         assert_eq!(analysis.layer_stats.len(), 3);

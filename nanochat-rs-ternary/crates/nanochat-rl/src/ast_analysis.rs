@@ -3,10 +3,10 @@
 //! This module uses the syn crate to parse Rust code and extract detailed
 //! metrics about code structure, complexity, and idiomatic patterns.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use syn::visit::Visit;
-use syn::{Expr, File, Item, Pat, Stmt, UseTree};
+use syn::{Expr, File, Item, Pat, Stmt};
 
 /// Comprehensive AST metrics for a code sample
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ pub struct ComplexityMetrics {
     pub loc: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StructureMetrics {
     /// Number of functions
     pub n_functions: usize,
@@ -90,7 +90,7 @@ pub struct QualityMetrics {
     pub n_panics: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IdiomMetrics {
     /// Uses iterator methods (.map, .filter, .collect, etc.)
     pub uses_iterators: bool,
@@ -143,7 +143,7 @@ pub fn analyze_ast(code: &str) -> Result<AstMetrics> {
 
 /// AST visitor that collects metrics
 struct MetricsVisitor<'a> {
-    code: &'a str,
+    _code: &'a str,
     complexity: ComplexityMetrics,
     structure: StructureMetrics,
     quality: QualityMetrics,
@@ -164,7 +164,7 @@ impl<'a> MetricsVisitor<'a> {
             .count();
 
         Self {
-            code,
+            _code: code,
             complexity: ComplexityMetrics {
                 cyclomatic: 1, // Base complexity
                 max_nesting: 0,
@@ -334,19 +334,6 @@ impl Default for ComplexityMetrics {
     }
 }
 
-impl Default for StructureMetrics {
-    fn default() -> Self {
-        Self {
-            n_functions: 0,
-            n_structs: 0,
-            n_enums: 0,
-            n_traits: 0,
-            n_impls: 0,
-            n_modules: 0,
-            n_uses: 0,
-        }
-    }
-}
 
 impl Default for QualityMetrics {
     fn default() -> Self {
@@ -362,18 +349,6 @@ impl Default for QualityMetrics {
     }
 }
 
-impl Default for IdiomMetrics {
-    fn default() -> Self {
-        Self {
-            uses_iterators: false,
-            uses_pattern_matching: false,
-            uses_destructuring: false,
-            uses_closures: false,
-            uses_method_chaining: false,
-            uses_turbofish: false,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

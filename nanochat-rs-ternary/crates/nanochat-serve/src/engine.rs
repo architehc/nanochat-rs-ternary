@@ -154,10 +154,11 @@ impl InferenceEngine {
                 None
             };
 
+            let degraded = self.model.last_forward_was_degraded();
             let should_continue = on_token(GeneratedToken {
                 token_id: next_token,
                 finish_reason: finish_reason.clone(),
-                degraded: false, // Will be set to true in next iteration if needed
+                degraded,
             });
 
             if !should_continue || is_eot || at_limit {
@@ -441,10 +442,7 @@ pub fn sample_token(logits: &[f32], params: &SamplingParams, rng: &mut dyn RngCo
     if params.top_p < 1.0 {
         let mut sorted: Vec<(usize, f32)> = probs.iter().cloned().enumerate().collect();
         // Safe comparison handling NaN
-        sorted.sort_unstable_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Less)
-        });
+        sorted.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Less));
         let mut cumsum = 0.0;
         let mut cutoff_idx = sorted.len();
         for (i, &(_, p)) in sorted.iter().enumerate() {

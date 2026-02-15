@@ -119,13 +119,7 @@ pub struct QuantizedMuon {
 }
 
 impl QuantizedMuon {
-    pub fn new(
-        vars: Vec<Var>,
-        lr: f64,
-        beta: f64,
-        ns_steps: usize,
-        wd: f64,
-    ) -> Result<Self> {
+    pub fn new(vars: Vec<Var>, lr: f64, beta: f64, ns_steps: usize, wd: f64) -> Result<Self> {
         Self::new_with_config(vars, lr, beta, ns_steps, wd, QuantConfig::default())
     }
 
@@ -251,7 +245,7 @@ pub struct QuantMemoryStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{Device, DType};
+    use candle_core::{DType, Device};
     use candle_nn::VarMap;
 
     #[test]
@@ -286,7 +280,10 @@ mod tests {
         let w = vb.get_with_hints(
             (16, 8),
             "w",
-            candle_nn::Init::Randn { mean: 0.0, stdev: 1.0 },
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: 1.0,
+            },
         )?;
 
         let orig = w.to_vec2::<f32>()?;
@@ -308,7 +305,10 @@ mod tests {
             .zip(updated.iter().flatten())
             .any(|(a, b)| (a - b).abs() > 1e-10);
 
-        assert!(changed, "Parameters should have changed after quantized step");
+        assert!(
+            changed,
+            "Parameters should have changed after quantized step"
+        );
         Ok(())
     }
 
@@ -322,12 +322,18 @@ mod tests {
         let _w1 = vb.get_with_hints(
             (4096, 4096),
             "w1",
-            candle_nn::Init::Randn { mean: 0.0, stdev: 1.0 },
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: 1.0,
+            },
         )?;
         let _w2 = vb.get_with_hints(
             (4096, 11008),
             "w2",
-            candle_nn::Init::Randn { mean: 0.0, stdev: 1.0 },
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: 1.0,
+            },
         )?;
 
         let vars = varmap.all_vars();
@@ -339,7 +345,10 @@ mod tests {
         println!("INT8+scales: {} MB", stats.total_quantized / 1024 / 1024);
 
         // Should get ~75% reduction (4x smaller INT8, plus small overhead for scales)
-        assert!(stats.memory_reduction > 0.70, "Expected >70% memory reduction");
+        assert!(
+            stats.memory_reduction > 0.70,
+            "Expected >70% memory reduction"
+        );
         Ok(())
     }
 

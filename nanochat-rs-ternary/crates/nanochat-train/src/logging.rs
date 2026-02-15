@@ -12,12 +12,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 /// Outputs JSON-formatted logs for production monitoring.
 pub fn init_logging() {
     tracing_subscriber::registry()
-        .with(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                // Default: info for our crates, warn for dependencies
-                "info,nanochat_train=info,nanochat_model=info,nanochat_core=info".into()
-            }),
-        )
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            // Default: info for our crates, warn for dependencies
+            "info,nanochat_train=info,nanochat_model=info,nanochat_core=info".into()
+        }))
         .with(tracing_subscriber::fmt::layer().json())
         .init();
 
@@ -141,7 +139,10 @@ pub fn log_training_step(step: usize, metrics: &TrainingMetrics) {
     // Debug-level additional info
     debug!(
         step = step,
-        loss_breakdown = format!("CE: {:.4}, Entropy: {:.4}", metrics.ce_loss, metrics.entropy),
+        loss_breakdown = format!(
+            "CE: {:.4}, Entropy: {:.4}",
+            metrics.ce_loss, metrics.entropy
+        ),
         "Training diagnostics"
     );
 }
@@ -196,8 +197,7 @@ mod tests {
 
     #[test]
     fn test_metrics_creation() {
-        let metrics = TrainingMetrics::new(2.5, 2.3, 6.5, 0.001, 1.2, 5000.0)
-            .with_mhc_gain(0.98);
+        let metrics = TrainingMetrics::new(2.5, 2.3, 6.5, 0.001, 1.2, 5000.0).with_mhc_gain(0.98);
 
         assert_eq!(metrics.loss, 2.5);
         assert_eq!(metrics.entropy, 6.5);

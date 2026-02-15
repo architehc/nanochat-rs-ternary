@@ -244,7 +244,7 @@ fn main() -> Result<()> {
             let input = Tensor::new(gen_tokens.as_slice(), &device)?.unsqueeze(0)?;
             let logits = model.forward(&input)?;
             let last_logits = logits.get(0)?.get(gen_tokens.len() - 1)?;
-            let scaled = (last_logits / *temp as f64)?;
+            let scaled = (last_logits / *temp)?;
             let logits_vec = scaled.to_vec1::<f32>()?;
 
             let (next_token, _) = logits_vec

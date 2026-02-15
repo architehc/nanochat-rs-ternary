@@ -231,11 +231,14 @@ impl<OPT> GaLore2<OPT> {
             // Compute SVD: grad ≈ Q @ S @ P^T
             let (q, _s, p) = self.randomized_svd(&grad_2d, self.rank)?;
 
-            self.projections.insert(var_idx, ProjectionPair {
-                p,
-                q,
-                last_updated: self.step,
-            });
+            self.projections.insert(
+                var_idx,
+                ProjectionPair {
+                    p,
+                    q,
+                    last_updated: self.step,
+                },
+            );
         }
 
         Ok(())
@@ -253,12 +256,7 @@ pub struct GaLore2Muon {
 }
 
 impl GaLore2Muon {
-    pub fn new(
-        muon: super::Muon,
-        vars: Vec<Var>,
-        rank: usize,
-        update_freq: usize,
-    ) -> Result<Self> {
+    pub fn new(muon: super::Muon, vars: Vec<Var>, rank: usize, update_freq: usize) -> Result<Self> {
         let galore = GaLore2::new(muon, vars, rank, update_freq, 1.0)?;
         Ok(Self { galore })
     }
@@ -340,7 +338,7 @@ pub struct MemoryStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{Device, DType};
+    use candle_core::{DType, Device};
     use candle_nn::VarMap;
 
     #[test]
@@ -353,7 +351,10 @@ mod tests {
         let _w = vb.get_with_hints(
             (128, 128),
             "w",
-            candle_nn::Init::Randn { mean: 0.0, stdev: 1.0 },
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: 1.0,
+            },
         )?;
 
         let vars = varmap.all_vars();
@@ -362,7 +363,10 @@ mod tests {
 
         // Just verify construction works
         let stats = galore.memory_stats();
-        println!("GaLore2 initialized: reduction={:.1}%", stats.memory_reduction * 100.0);
+        println!(
+            "GaLore2 initialized: reduction={:.1}%",
+            stats.memory_reduction * 100.0
+        );
 
         Ok(())
     }
@@ -384,7 +388,11 @@ mod tests {
         let identity = Tensor::eye(n, DType::F32, &device)?;
         let diff = (&qtq - &identity)?.abs()?.max_all()?.to_scalar::<f32>()?;
 
-        assert!(diff < 0.1, "Q^T @ Q should be approximately I, max diff: {}", diff);
+        assert!(
+            diff < 0.1,
+            "Q^T @ Q should be approximately I, max diff: {}",
+            diff
+        );
         Ok(())
     }
 }

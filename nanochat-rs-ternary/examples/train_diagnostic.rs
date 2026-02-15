@@ -132,7 +132,7 @@ fn main() -> Result<()> {
 
     let loader = DataLoader::new(&dataset, 1, true, 42, &device);
 
-    for (batch_idx, batch_result) in loader.enumerate() {
+    for batch_result in loader {
         if trainer.global_step >= config.total_steps {
             break;
         }

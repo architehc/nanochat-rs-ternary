@@ -10,6 +10,6 @@ pub use fire::{FIREConfig, FIREReinitializer, ReinitStats};
 pub use galore2::{GaLore2Muon, MemoryStats as GaLoreMemoryStats};
 pub use lion::Lion;
 pub use muon::Muon;
-pub use muon_quantized::{QuantizedMuon, QuantMemoryStats};
+pub use muon_quantized::{QuantMemoryStats, QuantizedMuon};
 pub use schedule::wsd_schedule;
 pub use wrapper::{MuonOptimizer, OptimizerMemoryStats};

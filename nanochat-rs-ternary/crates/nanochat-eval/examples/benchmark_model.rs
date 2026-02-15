@@ -337,12 +337,10 @@ fn main() -> Result<()> {
             if compile_result.success {
                 compile_success += 1;
                 total_compile_success += 1;
-            } else {
-                if let Some(err) = compile_result.errors.first() {
-                    let err_msg = format!("{}: {}", err.level, err.message);
-                    prompt_errors.push(err_msg.clone());
-                    all_compile_errors.push(err_msg);
-                }
+            } else if let Some(err) = compile_result.errors.first() {
+                let err_msg = format!("{}: {}", err.level, err.message);
+                prompt_errors.push(err_msg.clone());
+                all_compile_errors.push(err_msg);
             }
 
             prompt_lines += lines as f64;

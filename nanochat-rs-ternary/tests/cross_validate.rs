@@ -72,7 +72,7 @@ fn load_npy_f32(path: &str) -> Vec<f32> {
     // Parse raw data as f32 little-endian
     let raw = &data[data_start..];
     assert!(
-        raw.len() % 4 == 0,
+        raw.len().is_multiple_of(4),
         "data section length {} not a multiple of 4",
         raw.len()
     );

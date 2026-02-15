@@ -345,7 +345,7 @@ mod tests {
         assert!(c80.n_active_experts.unwrap() <= c80.n_experts.unwrap());
 
         // ffn_dim should be aligned for both
-        assert!(c25.ffn_dim() % c25.group_size == 0);
-        assert!(c80.ffn_dim() % c80.group_size == 0);
+        assert!(c25.ffn_dim().is_multiple_of(c25.group_size));
+        assert!(c80.ffn_dim().is_multiple_of(c80.group_size));
     }
 }

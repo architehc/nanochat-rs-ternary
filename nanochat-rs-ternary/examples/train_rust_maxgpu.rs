@@ -285,8 +285,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Calculate epochs
-    let steps_per_epoch = (dataset.len() + args.batch_size - 1) / args.batch_size;
-    let epochs = (args.total_steps + steps_per_epoch - 1) / steps_per_epoch;
+    let steps_per_epoch = dataset.len().div_ceil(args.batch_size);
+    let epochs = args.total_steps.div_ceil(steps_per_epoch);
     println!(
         "Training for {} epochs ({} steps per epoch)\n",
         epochs, steps_per_epoch

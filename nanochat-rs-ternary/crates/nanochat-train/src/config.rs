@@ -312,10 +312,10 @@ impl TrainConfig {
             lr: 0.02,
             mhc_lr: 1e-4,
             weight_decay: 0.0,
-            batch_size: 8,           // 8 × 2048 = 16K tokens/batch
-            grad_accum_steps: 4,      // Effective: 65K tokens
+            batch_size: 8,       // 8 × 2048 = 16K tokens/batch
+            grad_accum_steps: 4, // Effective: 65K tokens
             warmup_steps: 2000,
-            total_steps: 50_000,      // 3.25B tokens total
+            total_steps: 50_000, // 3.25B tokens total
             decay_start_frac: 0.8,
             grad_clip: 1.0,
             ns_steps: 3,

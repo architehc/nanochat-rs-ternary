@@ -538,7 +538,7 @@ mod tests {
         let c = ModelConfig::d20();
         assert_eq!(c.head_dim(), 64);
         assert_eq!(c.n_rep(), 1);
-        assert!(c.ffn_dim() % c.group_size == 0);
+        assert!(c.ffn_dim().is_multiple_of(c.group_size));
     }
 
     #[test]
@@ -546,7 +546,7 @@ mod tests {
         let c = ModelConfig::nano_7b();
         assert_eq!(c.head_dim(), 128);
         assert_eq!(c.n_rep(), 4); // GQA: 32 heads, 8 KV heads
-        assert!(c.ffn_dim() % c.group_size == 0);
+        assert!(c.ffn_dim().is_multiple_of(c.group_size));
     }
 
     #[test]

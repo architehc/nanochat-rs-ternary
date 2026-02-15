@@ -9,7 +9,7 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use rustyline::DefaultEditor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -129,8 +129,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn load_model(
-    model_path: &PathBuf,
-    mhc_path: &PathBuf,
+    model_path: &Path,
+    mhc_path: &Path,
 ) -> anyhow::Result<nanochat_model::model::NanochatModel> {
     println!("{}", "Loading model...".yellow());
     let start = Instant::now();
@@ -141,11 +141,7 @@ fn load_model(
     )?;
 
     let elapsed = start.elapsed();
-    println!(
-        "{} Loaded in {:.2}s",
-        "✓".green(),
-        elapsed.as_secs_f32()
-    );
+    println!("{} Loaded in {:.2}s", "✓".green(), elapsed.as_secs_f32());
     println!(
         "  {} dim={}, layers={}, heads={}, vocab={}",
         "Model:".cyan(),
@@ -160,15 +156,18 @@ fn load_model(
 }
 
 fn interactive_chat(
-    model_path: &PathBuf,
-    mhc_path: &PathBuf,
+    model_path: &Path,
+    mhc_path: &Path,
     max_tokens: usize,
     _temperature: f32,
 ) -> anyhow::Result<()> {
     let mut model = load_model(model_path, mhc_path)?;
 
     println!("{}", "Interactive Chat Mode".bold().cyan());
-    println!("{}", "Type 'exit' or 'quit' to exit, 'clear' to reset context\n".dimmed());
+    println!(
+        "{}",
+        "Type 'exit' or 'quit' to exit, 'clear' to reset context\n".dimmed()
+    );
 
     let mut rl = DefaultEditor::new()?;
     let mut context: Vec<u32> = Vec::new();
@@ -266,8 +265,8 @@ fn interactive_chat(
 }
 
 fn generate_code(
-    model_path: &PathBuf,
-    mhc_path: &PathBuf,
+    model_path: &Path,
+    mhc_path: &Path,
     prompt: &str,
     max_tokens: usize,
     _temperature: f32,
@@ -320,8 +319,8 @@ fn generate_code(
 }
 
 fn run_benchmark(
-    model_path: &PathBuf,
-    mhc_path: &PathBuf,
+    model_path: &Path,
+    mhc_path: &Path,
     n_samples: usize,
     seq_len: usize,
 ) -> anyhow::Result<()> {
@@ -367,7 +366,7 @@ fn run_benchmark(
     Ok(())
 }
 
-fn show_model_info(model_path: &PathBuf, mhc_path: &PathBuf) -> anyhow::Result<()> {
+fn show_model_info(model_path: &Path, mhc_path: &Path) -> anyhow::Result<()> {
     let model = load_model(model_path, mhc_path)?;
 
     println!("{}", "Model Information".bold().cyan());

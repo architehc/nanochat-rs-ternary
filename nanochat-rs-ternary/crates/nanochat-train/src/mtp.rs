@@ -64,11 +64,7 @@ impl MultiTokenPrediction {
     }
 
     /// Compute MTP loss with weighted auxiliary losses.
-    pub fn compute_loss(
-        &self,
-        predictions: &[Tensor],
-        targets: &[Tensor],
-    ) -> Result<MTPLoss> {
+    pub fn compute_loss(&self, predictions: &[Tensor], targets: &[Tensor]) -> Result<MTPLoss> {
         let mut total_loss = 0.0;
         let mut primary_loss = 0.0;
         let mut aux_loss = 0.0;

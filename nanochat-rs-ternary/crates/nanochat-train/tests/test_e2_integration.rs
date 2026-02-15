@@ -40,16 +40,23 @@ fn test_8bit_optimizer_initialization() {
         config.use_galore,
         config.galore_rank,
         config.galore_update_freq,
-    ).expect("Failed to create optimizer");
+    )
+    .expect("Failed to create optimizer");
 
     // Check that we got the quantized variant
     let stats = opt.memory_stats();
     assert_eq!(stats.variant, "8-bit Quantized Muon");
-    assert!(stats.memory_reduction > 0.7, "Expected >70% memory reduction");
+    assert!(
+        stats.memory_reduction > 0.7,
+        "Expected >70% memory reduction"
+    );
 
     println!("✅ 8-bit optimizer initialized successfully");
     println!("   Variant: {}", stats.variant);
-    println!("   Memory reduction: {:.1}%", stats.memory_reduction * 100.0);
+    println!(
+        "   Memory reduction: {:.1}%",
+        stats.memory_reduction * 100.0
+    );
 }
 
 #[test]
@@ -87,7 +94,8 @@ fn test_galore_optimizer_initialization() {
         config.use_galore,
         config.galore_rank,
         config.galore_update_freq,
-    ).expect("Failed to create optimizer");
+    )
+    .expect("Failed to create optimizer");
 
     // Check that we got the GaLore variant
     let stats = opt.memory_stats();
@@ -97,7 +105,10 @@ fn test_galore_optimizer_initialization() {
 
     println!("✅ GaLore optimizer initialized successfully");
     println!("   Variant: {}", stats.variant);
-    println!("   Memory reduction: {:.1}%", stats.memory_reduction * 100.0);
+    println!(
+        "   Memory reduction: {:.1}%",
+        stats.memory_reduction * 100.0
+    );
     println!("   Details: {}", stats.details);
 }
 
@@ -134,12 +145,16 @@ fn test_baseline_optimizer_initialization() {
         config.use_galore,
         config.galore_rank,
         config.galore_update_freq,
-    ).expect("Failed to create optimizer");
+    )
+    .expect("Failed to create optimizer");
 
     // Check that we got the standard variant
     let stats = opt.memory_stats();
     assert_eq!(stats.variant, "Standard Muon");
-    assert_eq!(stats.memory_reduction, 0.0, "Baseline should have no reduction");
+    assert_eq!(
+        stats.memory_reduction, 0.0,
+        "Baseline should have no reduction"
+    );
 
     println!("✅ Baseline optimizer initialized successfully");
     println!("   Variant: {}", stats.variant);

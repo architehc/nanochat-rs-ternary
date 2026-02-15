@@ -75,6 +75,7 @@ fn bench_mhc_n4_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("mhc_n4");
 
     let mut logits = [0.0f32; 24];
+    #[allow(clippy::needless_range_loop)] // Index needed for deterministic data generation
     for i in 0..24 {
         logits[i] = (i as f32 * 0.7).sin() * 3.0;
     }
@@ -136,7 +137,8 @@ fn bench_mhc_verification(c: &mut Criterion) {
     let matrices: Vec<_> = (0..64)
         .map(|seed| {
             let mut logits = [0.0f32; 24];
-            for i in 0..24 {
+            #[allow(clippy::needless_range_loop)] // Index needed for deterministic data generation
+    for i in 0..24 {
                 logits[i] = ((seed * 24 + i) as f32 * 0.7).sin() * 3.0;
             }
             let mhc = MhcLiteN4::from_weights(logits, [0.0; 4], [0.5; 4], [0.0; 4], [0.5; 4]);
@@ -170,6 +172,7 @@ fn bench_mhc_vs_gemv(c: &mut Criterion) {
     // mHC N=4 full layer overhead (h_res + prepare + apply)
     let dim = 4096;
     let mut logits = [0.0f32; 24];
+    #[allow(clippy::needless_range_loop)] // Index needed for deterministic data generation
     for i in 0..24 {
         logits[i] = (i as f32 * 0.7).sin() * 3.0;
     }

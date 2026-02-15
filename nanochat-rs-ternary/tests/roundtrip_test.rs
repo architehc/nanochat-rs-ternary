@@ -246,6 +246,7 @@ fn roundtrip_mhc_n4() {
     let layers: Vec<MhcLayerParams> = (0..12)
         .map(|layer_idx| {
             let mut res_logits = [0.0f32; 24];
+            #[allow(clippy::needless_range_loop)] // Index needed for deterministic test data generation
             for i in 0..24 {
                 res_logits[i] = ((layer_idx * 24 + i) as f32 * 0.7).sin() * 3.0;
             }

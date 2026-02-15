@@ -56,14 +56,17 @@ async fn main() -> Result<()> {
 
     // Create RL configuration
     let mut config = RLConfig::default();
-    config.base_checkpoint = args.checkpoint;
-    config.n_iterations = args.iterations;
-    config.n_samples = args.n_samples;
-    config.batch_size = args.batch_size;
-    config.device = args.device;
-    config.qwen_endpoint = args.qwen_endpoint;
-    config.grpo.learning_rate = args.lr;
-    config.grpo.kl_coef = args.kl_coef;
+    #[allow(clippy::field_reassign_with_default)]
+    {
+        config.base_checkpoint = args.checkpoint;
+        config.n_iterations = args.iterations;
+        config.n_samples = args.n_samples;
+        config.batch_size = args.batch_size;
+        config.device = args.device;
+        config.qwen_endpoint = args.qwen_endpoint;
+        config.grpo.learning_rate = args.lr;
+        config.grpo.kl_coef = args.kl_coef;
+    }
 
     // Create trainer
     let mut trainer = RLTrainer::new(config)?;

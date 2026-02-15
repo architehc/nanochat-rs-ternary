@@ -870,7 +870,9 @@ impl NanochatModel {
                     }
                 }
             } else {
-                eprintln!("ERROR: loop_kv_cache not initialized for LoopLM model, skipping loop block");
+                eprintln!(
+                    "ERROR: loop_kv_cache not initialized for LoopLM model, skipping loop block"
+                );
                 // Mark as degraded and continue without loop block
                 self.last_forward_degraded.set(true);
             }
@@ -978,7 +980,9 @@ impl NanochatModel {
                         }
                     }
                 } else {
-                    eprintln!("ERROR: loop_kv_cache not initialized for LoopLM batched forward, skipping");
+                    eprintln!(
+                        "ERROR: loop_kv_cache not initialized for LoopLM batched forward, skipping"
+                    );
                     // Mark as degraded and continue without loop block
                     self.last_forward_degraded.set(true);
                 }
@@ -1263,11 +1267,11 @@ mod tests {
         model.reset_caches();
 
         // Prefill
-        let _logits1 = model.forward_sequence(&vec![10, 20]);
+        let _logits1 = model.forward_sequence(&[10, 20]);
         // Decode step 1
-        let _logits2 = model.forward_sequence(&vec![30]);
+        let _logits2 = model.forward_sequence(&[30]);
         // Decode step 2
-        let _logits3 = model.forward_sequence(&vec![40]);
+        let _logits3 = model.forward_sequence(&[40]);
     }
 
     #[test]
@@ -1275,7 +1279,7 @@ mod tests {
         let mut model = make_test_model();
 
         // Forward with some tokens
-        let _logits1 = model.forward_sequence(&vec![1, 2, 3]);
+        let _logits1 = model.forward_sequence(&[1, 2, 3]);
 
         // Reset
         model.reset_caches();
@@ -1745,13 +1749,13 @@ mod tests {
         let mut model = NanochatModel::new_random(config.clone());
 
         // Forward pass 1
-        let _logits1 = model.forward_sequence(&vec![1, 2, 3]);
+        let _logits1 = model.forward_sequence(&[1, 2, 3]);
 
         // Reset
         model.reset_caches();
 
         // Forward pass 2 - should work without errors
-        let _logits2 = model.forward_sequence(&vec![10, 20, 30]);
+        let _logits2 = model.forward_sequence(&[10, 20, 30]);
     }
 
     #[test]
@@ -1763,7 +1767,7 @@ mod tests {
         // Verify RoPE frequencies were created with correct theta
         assert!((model.rope.max_seq_len as f32 - config.max_seq_len as f32).abs() < 1.0);
         // Just verify model can forward
-        let _logits = model.forward_sequence(&vec![1, 2, 3]);
+        let _logits = model.forward_sequence(&[1, 2, 3]);
     }
 
     #[test]
@@ -1773,11 +1777,11 @@ mod tests {
         let mut model = NanochatModel::new_random(config);
 
         // First run
-        let logits1 = model.forward_sequence(&vec![1, 2, 3]);
+        let logits1 = model.forward_sequence(&[1, 2, 3]);
 
         // Reset and run again
         model.reset_caches();
-        let logits2 = model.forward_sequence(&vec![1, 2, 3]);
+        let logits2 = model.forward_sequence(&[1, 2, 3]);
 
         // Should produce identical results after reset
         for i in 0..logits1.len() {

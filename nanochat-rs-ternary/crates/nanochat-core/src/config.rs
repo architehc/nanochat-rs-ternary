@@ -160,9 +160,7 @@ impl TrainingConfig {
             ));
         }
         if self.grad_clip <= 0.0 {
-            return Err(NanoChatError::InvalidConfig(
-                "grad_clip must be > 0".into(),
-            ));
+            return Err(NanoChatError::InvalidConfig("grad_clip must be > 0".into()));
         }
         Ok(())
     }
