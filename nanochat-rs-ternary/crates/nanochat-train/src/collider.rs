@@ -7,7 +7,7 @@
 //! 2. Filtering out low-importance tokens during backward pass
 //! 3. Transforming sparse GEMMs to dense operations
 
-use candle_core::{DType, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Result, Tensor, D};
 use std::cmp::Ordering;
 
 /// Token filtering via cross-layer activation sparsity.
@@ -79,24 +79,20 @@ impl Collider {
     /// Compute per-token cross-entropy loss (not reduced).
     fn per_token_cross_entropy(&self, log_probs: &Tensor, targets: &Tensor) -> Result<Tensor> {
         let (batch_size, seq_len, _vocab_size) = log_probs.dims3()?;
-
-        // Gather log probabilities for the target tokens
-        // For each position, get log_prob[target_id]
-        let mut losses = Vec::new();
-
-        for b in 0..batch_size {
-            for s in 0..seq_len {
-                let log_prob_row = log_probs.i((b, s))?; // [vocab]
-                let target_id = targets.i((b, s))?.to_scalar::<u32>()? as usize;
-                let neg_log_prob = log_prob_row.i(target_id)?.neg()?;
-                losses.push(neg_log_prob.to_scalar::<f32>()?);
-            }
+        let (target_batch, target_seq) = targets.dims2()?;
+        if batch_size != target_batch || seq_len != target_seq {
+            return Err(candle_core::Error::Msg(format!(
+                "Target shape mismatch: logits=[{}, {}, _], targets=[{}, {}]",
+                batch_size, seq_len, target_batch, target_seq
+            )));
         }
 
-        // Convert back to tensor and reshape
-        let losses_tensor = Tensor::from_vec(losses, (batch_size, seq_len), log_probs.device())?;
+        // Vectorized path: gather target log-probabilities in one op on device.
+        // log_probs: [B, S, V], target_ids: [B, S, 1] -> selected: [B, S, 1].
+        let target_ids = targets.to_dtype(DType::U32)?.unsqueeze(2)?;
+        let selected = log_probs.gather(&target_ids, D::Minus1)?;
 
-        Ok(losses_tensor)
+        selected.squeeze(2)?.neg()
     }
 
     /// Create binary mask for important tokens.

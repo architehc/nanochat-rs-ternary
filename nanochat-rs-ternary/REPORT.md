@@ -331,7 +331,8 @@ architecture and training setup are sound.
 | nanochat-model | 32 | All passing |
 | nanochat-serve | 17 | All passing |
 | Integration tests | 48 | All passing |
-| **Total** | **228** | **All passing** |
+| Additional workspace crates/tests | 268 | All passing |
+| **Total** | **496 passing (+1 ignored)** | **All passing** |
 
 Test coverage: 99.55% (1113/1118 lines).
 

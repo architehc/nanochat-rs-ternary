@@ -27,7 +27,7 @@ This is **completely different** from the broken training where loss was 3.29 bu
 ### ✅ Issue #1 (High): Workspace Build Health - COMPLETELY FIXED
 
 **Status**:
-- ✅ All 444 **workspace tests** pass (`cargo test --workspace`)
+- ✅ All 496 **workspace tests** pass (`cargo test --workspace`) (+1 ignored)
 - ✅ e2e_generate test fixed and passing (12/12 tests)
 - ✅ mHC parity test passing (2/2 tests)
 - ✅ export_roundtrip test stabilized (3/3 tests passing)
@@ -72,11 +72,11 @@ This is **completely different** from the broken training where loss was 3.29 bu
 
 | Category | Tests | Status |
 |----------|-------|--------|
-| Workspace tests (all crates) | 444 | ✅ ALL PASS |
-| mHC parity | 2 | ✅ ALL PASS (included in 444) |
-| e2e generation | 12 | ✅ ALL PASS (included in 444) |
-| Export roundtrip | 3 | ✅ ALL PASS (included in 444) |
-| **Total passing** | **444** | **100%** |
+| Workspace tests (all crates) | 496 passing (+1 ignored) | ✅ ALL PASS |
+| mHC parity | 2 | ✅ ALL PASS (included in 496) |
+| e2e generation | 12 | ✅ ALL PASS (included in 496) |
+| Export roundtrip | 3 | ✅ ALL PASS (included in 496) |
+| **Total passing** | **496** | **100%** |
 
 **Note on export_roundtrip**: Test stabilized with relaxed threshold for random weights. Random initialization causes variable correlation, but test now passes consistently. With trained weights, correlation is stable and strong (>0.8).
 
@@ -97,7 +97,7 @@ This is **completely different** from the broken training where loss was 3.29 bu
 ✅ **mHC train/inference parity** - Exact match (max_diff < 1e-5)
 ✅ **Training loop** - Stops at exactly total_steps
 ✅ **Model learning** - Loss decreasing properly (178 → 3.29)
-✅ **Core libraries** - All 444 tests pass
+✅ **Core libraries** - All 496 tests pass
 ✅ **mHC semantics** - Correct apply() order prevents identity bypass
 ✅ **Export roundtrip** - Positive correlation with stable runs
 ✅ **UX messaging** - Accurate config/param counts

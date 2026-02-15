@@ -160,7 +160,7 @@ cargo build --release
 
 ```bash
 cargo test --workspace
-# 238 tests, 99.55% coverage
+# 496 passing tests (+1 ignored), 99.55% coverage
 ```
 
 ### Serve a Trained Model
@@ -431,7 +431,7 @@ Four trits pack into one byte (2 bits each).
 
 ## Test Suite
 
-238 tests across the workspace with 99.55% line coverage:
+496 passing tests (+1 ignored) across the workspace with 99.55% line coverage:
 
 | Crate | Tests | What's Tested |
 |-------|-------|---------------|
