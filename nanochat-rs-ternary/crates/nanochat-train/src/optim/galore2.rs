@@ -725,7 +725,7 @@ mod tests {
         let utu = u.t()?.matmul(&u)?;
         let eye = Tensor::eye(3, DType::F32, &device)?;
         let max_diff = (&utu - &eye)?.abs()?.max_all()?.to_scalar::<f32>()?;
-        assert!(max_diff < 0.25, "U^T U max diff too large: {}", max_diff);
+        assert!(max_diff < 1e-3, "U^T U max diff too large: {}", max_diff);
         Ok(())
     }
 }

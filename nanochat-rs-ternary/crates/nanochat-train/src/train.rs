@@ -1,6 +1,6 @@
 //! Training loop: Trainer struct with Muon + Lion optimizer split.
 
-use candle_core::{DType, Device, Result, Tensor, Var};
+use candle_core::{DType, Device, Result, Tensor, Var, D};
 use candle_nn::VarMap;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -165,37 +165,53 @@ impl Trainer {
             muon: self.muon.export_state()?,
             lion: self.lion.export_state()?,
         };
-        let json = serde_json::to_string_pretty(&state)
+        let bytes = bincode::serialize(&state)
             .map_err(|e| candle_core::Error::Msg(format!("optimizer state serialize: {}", e)))?;
-        let path = format!("{}/optimizer_state.json", checkpoint_dir);
-        std::fs::write(&path, json)
+        let path = format!("{}/optimizer_state.bin", checkpoint_dir);
+        std::fs::write(&path, bytes)
             .map_err(|e| candle_core::Error::Msg(format!("optimizer state write {}: {}", path, e)))
     }
 
     fn load_optimizer_state(&mut self, checkpoint_dir: &str) -> Result<()> {
-        let path = format!("{}/optimizer_state.json", checkpoint_dir);
-        let json = match std::fs::read_to_string(&path) {
-            Ok(raw) => raw,
+        let bin_path = format!("{}/optimizer_state.bin", checkpoint_dir);
+        let state = match std::fs::read(&bin_path) {
+            Ok(raw) => bincode::deserialize::<OptimizerCheckpointState>(&raw).map_err(|e| {
+                candle_core::Error::Msg(format!("optimizer state parse {}: {}", bin_path, e))
+            })?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                println!(
-                    "  Optimizer state not found in checkpoint; using fresh optimizer buffers"
-                );
-                return Ok(());
+                let json_path = format!("{}/optimizer_state.json", checkpoint_dir);
+                match std::fs::read_to_string(&json_path) {
+                    Ok(raw_json) => serde_json::from_str::<OptimizerCheckpointState>(&raw_json)
+                        .map_err(|err| {
+                            candle_core::Error::Msg(format!(
+                                "optimizer state parse {}: {}",
+                                json_path, err
+                            ))
+                        })?,
+                    Err(json_err) if json_err.kind() == std::io::ErrorKind::NotFound => {
+                        tracing::info!(
+                            "Optimizer state not found in checkpoint; using fresh optimizer buffers"
+                        );
+                        return Ok(());
+                    }
+                    Err(json_err) => {
+                        return Err(candle_core::Error::Msg(format!(
+                            "optimizer state read {}: {}",
+                            json_path, json_err
+                        )));
+                    }
+                }
             }
             Err(e) => {
                 return Err(candle_core::Error::Msg(format!(
                     "optimizer state read {}: {}",
-                    path, e
+                    bin_path, e
                 )));
             }
         };
-
-        let state: OptimizerCheckpointState = serde_json::from_str(&json).map_err(|e| {
-            candle_core::Error::Msg(format!("optimizer state parse {}: {}", path, e))
-        })?;
         self.muon.import_state(&state.muon)?;
         self.lion.import_state(&state.lion)?;
-        println!("  Optimizer state restored from {}", path);
+        tracing::info!("Optimizer state restored from {}", bin_path);
         Ok(())
     }
 
@@ -515,7 +531,10 @@ impl Trainer {
         let label_smooth_eps = 0.1; // 10% smoothing
         let ce_loss = candle_nn::loss::cross_entropy(&logits_flat, &targets_flat)?;
         let log_probs_for_smoothing = candle_nn::ops::log_softmax(&logits_flat, 1)?;
-        let uniform_loss = log_probs_for_smoothing.mean_all()?.neg()?;
+        // Compute uniform term per example first, then average across examples.
+        // This matches label smoothing semantics explicitly.
+        let uniform_per_example = log_probs_for_smoothing.mean(D::Minus1)?.neg()?;
+        let uniform_loss = uniform_per_example.mean_all()?;
         let ce_scaled = (ce_loss * (1.0 - label_smooth_eps))?;
         let uniform_scaled = (uniform_loss * label_smooth_eps)?;
         let mut loss = (ce_scaled + uniform_scaled)?;
@@ -563,7 +582,7 @@ impl Trainer {
             // Compute MTP loss
             if !mtp_preds_flat.is_empty() {
                 let mtp_loss_result = mtp.compute_loss(&mtp_preds_flat, &mtp_targets_flat)?;
-                let mtp_weighted = mtp_loss_result.auxiliary * (self.config.mtp_weight as f32);
+                let mtp_weighted = mtp_loss_result.total * (self.config.mtp_weight as f32);
                 // Create scalar tensor (shape []) to match main loss
                 let mtp_tensor = Tensor::new(mtp_weighted, &self.device)?;
                 loss = (loss + mtp_tensor)?;

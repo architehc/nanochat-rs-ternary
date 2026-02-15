@@ -108,6 +108,7 @@ impl QuantizedState {
     }
 
     /// In-place update with EMA: self = beta * self + (1 - beta) * new
+    #[cfg(test)]
     fn ema_update(&mut self, new: &Tensor, beta: f64, config: &QuantConfig) -> Result<()> {
         // Dequantize current state
         let current = self.to_tensor(new.device())?;
@@ -122,6 +123,14 @@ impl QuantizedState {
         self.values = new_state.values;
         self.scales = new_state.scales;
 
+        Ok(())
+    }
+
+    /// Re-quantize state directly from a tensor (no additional EMA step).
+    fn assign_from_tensor(&mut self, new: &Tensor, config: &QuantConfig) -> Result<()> {
+        let new_state = Self::from_tensor(new, config)?;
+        self.values = new_state.values;
+        self.scales = new_state.scales;
         Ok(())
     }
 }
@@ -187,8 +196,8 @@ impl QuantizedMuon {
             let grad_scaled = (&grad * (1.0 - self.beta))?;
             let new_buf = (&buf_scaled + &grad_scaled)?;
 
-            // Re-quantize and store
-            self.momentum_buffers[i].ema_update(&new_buf, 0.0, &self.quant_config)?;
+            // Re-quantize and store updated momentum buffer.
+            self.momentum_buffers[i].assign_from_tensor(&new_buf, &self.quant_config)?;
 
             let update = if var.as_tensor().dims().len() >= 2 {
                 // Nesterov: update = beta * buf + (1 - beta) * grad
@@ -247,8 +256,8 @@ impl QuantizedMuon {
             let grad_scaled = (&grad * (1.0 - self.beta))?;
             let new_buf = (&buf_scaled + &grad_scaled)?;
 
-            // Re-quantize and store
-            self.momentum_buffers[i].ema_update(&new_buf, 0.0, &self.quant_config)?;
+            // Re-quantize and store updated momentum buffer.
+            self.momentum_buffers[i].assign_from_tensor(&new_buf, &self.quant_config)?;
 
             let update = if var.as_tensor().dims().len() >= 2 {
                 // Nesterov: update = beta * buf + (1 - beta) * grad

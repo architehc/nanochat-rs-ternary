@@ -70,9 +70,9 @@ impl DeltaNetAttention {
     /// Create DeltaNet attention with random weights (for testing).
     pub fn new_random(config: &ModelConfig) -> Self {
         let dim = config.dim;
-        let hd = config.head_dim();
+        let hd = config.deltanet_qk_head_dim();
         let gs = config.group_size;
-        let n_heads = config.n_heads;
+        let n_heads = config.deltanet_qk_heads.unwrap_or(config.n_heads);
 
         Self {
             wq: BitLinear::from_float(&random_weights(dim, dim, 20), dim, dim, gs),
@@ -174,7 +174,13 @@ fn sigmoid(x: f32) -> f32 {
 #[inline]
 fn l2_normalize(v: &mut [f32]) {
     let norm_sq: f32 = v.iter().map(|&x| x * x).sum();
-    let norm = norm_sq.sqrt().max(1e-6);
+    if norm_sq <= 1e-12 {
+        for x in v.iter_mut() {
+            *x = 0.0;
+        }
+        return;
+    }
+    let norm = norm_sq.sqrt();
     let inv_norm = 1.0 / norm;
     for x in v.iter_mut() {
         *x *= inv_norm;

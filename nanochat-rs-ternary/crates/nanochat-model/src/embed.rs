@@ -40,9 +40,13 @@ impl Embedding {
 
     /// Look up a single token embedding.
     pub fn forward_token(&self, token_id: u32, out: &mut [f32]) {
-        assert!((token_id as usize) < self.vocab_size);
         assert_eq!(out.len(), self.dim);
-        let offset = token_id as usize * self.dim;
+        let token_idx = token_id as usize;
+        if token_idx >= self.vocab_size {
+            out.fill(0.0);
+            return;
+        }
+        let offset = token_idx * self.dim;
         out.copy_from_slice(&self.weight[offset..offset + self.dim]);
     }
 
@@ -88,6 +92,14 @@ mod tests {
         let mut out = vec![0.0; 3];
         emb.forward_token(2, &mut out);
         assert_eq!(out, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_embedding_lookup_oob_returns_zero() {
+        let emb = Embedding::new_random(4, 3, 42);
+        let mut out = vec![9.0; 3];
+        emb.forward_token(99, &mut out);
+        assert_eq!(out, vec![0.0, 0.0, 0.0]);
     }
 
     #[test]

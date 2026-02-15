@@ -207,15 +207,13 @@ impl SharedLoopBlock {
 
         // 4. Determine token position for causal masking
         // If not provided, infer from cache (autoregressive mode)
-        let pos = token_pos.unwrap_or_else(|| {
-            if append_kv {
-                // About to add new token at position kv_cache.len
-                kv_cache.len
-            } else {
-                // Re-processing last token in cache (loop iteration > 0)
-                kv_cache.len.saturating_sub(1)
-            }
-        });
+        let pos = match token_pos {
+            Some(pos) => pos,
+            None if append_kv => kv_cache.len,
+            None => kv_cache.len.checked_sub(1).ok_or_else(|| {
+                "append_kv=false requires a non-empty KV cache or explicit token_pos".to_string()
+            })?,
+        };
 
         // 5. Append to KV cache if requested
         if append_kv {
@@ -374,7 +372,7 @@ impl SharedLoopBlock {
                 sum += *score;
             }
             for score in &mut scores {
-                *score /= sum;
+                *score = if sum > 0.0 { *score / sum } else { 0.0 };
             }
 
             // Weighted sum over V (only causal positions)

@@ -392,18 +392,39 @@ impl ModelConfig {
 
     /// Head dimension for standard attention
     pub fn head_dim(&self) -> usize {
+        assert!(self.n_heads > 0, "n_heads must be > 0");
+        assert!(
+            self.dim.is_multiple_of(self.n_heads),
+            "dim ({}) must be divisible by n_heads ({})",
+            self.dim,
+            self.n_heads
+        );
         self.dim / self.n_heads
     }
 
     /// Head dimension for DeltaNet V heads
     pub fn deltanet_v_head_dim(&self) -> usize {
         let v_heads = self.deltanet_v_heads.unwrap_or(self.n_heads);
+        assert!(v_heads > 0, "deltanet_v_heads must be > 0");
+        assert!(
+            self.dim.is_multiple_of(v_heads),
+            "dim ({}) must be divisible by deltanet_v_heads ({})",
+            self.dim,
+            v_heads
+        );
         self.dim / v_heads
     }
 
     /// Head dimension for DeltaNet QK heads
     pub fn deltanet_qk_head_dim(&self) -> usize {
         let qk_heads = self.deltanet_qk_heads.unwrap_or(self.n_heads);
+        assert!(qk_heads > 0, "deltanet_qk_heads must be > 0");
+        assert!(
+            self.dim.is_multiple_of(qk_heads),
+            "dim ({}) must be divisible by deltanet_qk_heads ({})",
+            self.dim,
+            qk_heads
+        );
         self.dim / qk_heads
     }
 
@@ -420,6 +441,13 @@ impl ModelConfig {
 
     /// Number of KV head repetitions for GQA
     pub fn n_rep(&self) -> usize {
+        assert!(self.n_kv_heads > 0, "n_kv_heads must be > 0");
+        assert!(
+            self.n_heads.is_multiple_of(self.n_kv_heads),
+            "n_heads ({}) must be divisible by n_kv_heads ({})",
+            self.n_heads,
+            self.n_kv_heads
+        );
         self.n_heads / self.n_kv_heads
     }
 

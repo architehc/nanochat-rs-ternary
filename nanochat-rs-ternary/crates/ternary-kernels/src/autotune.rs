@@ -4,7 +4,7 @@
 //! and caches the best choice for each shape. Adapts to actual hardware
 //! performance instead of using static heuristics.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
 use std::time::Instant;
 
@@ -47,19 +47,32 @@ impl KernelChoice {
 
 /// Kernel auto-tuner with per-shape caching.
 pub struct KernelAutotuner {
-    cache: RwLock<HashMap<Shape, KernelChoice>>,
+    state: RwLock<CacheState>,
     benchmark_iterations: usize,
 }
 
 const MAX_CACHE_ENTRIES: usize = 1024;
 
+#[derive(Default)]
+struct CacheState {
+    map: HashMap<Shape, KernelChoice>,
+    lru: VecDeque<Shape>,
+}
+
 impl KernelAutotuner {
     /// Create a new auto-tuner.
     pub fn new() -> Self {
         Self {
-            cache: RwLock::new(HashMap::new()),
+            state: RwLock::new(CacheState::default()),
             benchmark_iterations: 10, // Warm-up + benchmark iterations
         }
+    }
+
+    fn touch_lru(lru: &mut VecDeque<Shape>, shape: Shape) {
+        if let Some(pos) = lru.iter().position(|&s| s == shape) {
+            lru.remove(pos);
+        }
+        lru.push_back(shape);
     }
 
     /// Select the best kernel for the given shape.
@@ -68,8 +81,9 @@ impl KernelAutotuner {
     pub fn select_kernel(&self, shape: Shape) -> KernelChoice {
         // Check cache
         {
-            let cache = self.cache.read().unwrap();
-            if let Some(&choice) = cache.get(&shape) {
+            let mut state = self.state.write().unwrap();
+            if let Some(&choice) = state.map.get(&shape) {
+                Self::touch_lru(&mut state.lru, shape);
                 return choice;
             }
         }
@@ -78,13 +92,23 @@ impl KernelAutotuner {
         let choice = self.benchmark_kernels(shape);
 
         {
-            let mut cache = self.cache.write().unwrap();
-            if cache.len() >= MAX_CACHE_ENTRIES {
-                if let Some(old_shape) = cache.keys().next().copied() {
-                    cache.remove(&old_shape);
+            let mut state = self.state.write().unwrap();
+
+            // Another thread may have populated the cache while we benchmarked.
+            if let Some(&cached_choice) = state.map.get(&shape) {
+                Self::touch_lru(&mut state.lru, shape);
+                return cached_choice;
+            }
+
+            if state.map.len() >= MAX_CACHE_ENTRIES {
+                while let Some(old_shape) = state.lru.pop_front() {
+                    if state.map.remove(&old_shape).is_some() {
+                        break;
+                    }
                 }
             }
-            cache.insert(shape, choice);
+            state.map.insert(shape, choice);
+            state.lru.push_back(shape);
         }
 
         choice
@@ -220,14 +244,15 @@ impl KernelAutotuner {
 
     /// Clear the cache (for testing or recalibration).
     pub fn clear_cache(&self) {
-        let mut cache = self.cache.write().unwrap();
-        cache.clear();
+        let mut state = self.state.write().unwrap();
+        state.map.clear();
+        state.lru.clear();
     }
 
     /// Get cache size.
     pub fn cache_size(&self) -> usize {
-        let cache = self.cache.read().unwrap();
-        cache.len()
+        let state = self.state.read().unwrap();
+        state.map.len()
     }
 }
 

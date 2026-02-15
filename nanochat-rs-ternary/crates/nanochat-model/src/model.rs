@@ -215,8 +215,8 @@ impl NanochatModel {
                     wv,
                     wo,
                     w_beta,
-                    n_heads: config.n_heads,
-                    head_dim: config.head_dim(),
+                    n_heads: config.deltanet_qk_heads.unwrap_or(config.n_heads),
+                    head_dim: config.deltanet_qk_head_dim(),
                 })
             } else {
                 AttentionLayer::Standard(Attention {
@@ -816,16 +816,26 @@ impl NanochatModel {
 
         // 6. LM head (use embedding weights if tied)
         let mut logits = vec![0.0f32; self.config.vocab_size];
-        if self.weight_tied {
-            self.tok_embed.forward_as_lm_head(&x_normed, &mut logits);
-        } else {
-            self.lm_head
-                .as_ref()
-                .unwrap()
-                .forward(&x_normed, &mut logits);
-        }
+        self.forward_lm_head(&x_normed, &mut logits);
 
         logits
+    }
+
+    fn forward_lm_head(&self, x_normed: &[f32], logits: &mut [f32]) {
+        if self.weight_tied {
+            self.tok_embed.forward_as_lm_head(x_normed, logits);
+            return;
+        }
+
+        if let Some(lm_head) = self.lm_head.as_ref() {
+            lm_head.forward(x_normed, logits);
+            return;
+        }
+
+        // Degrade gracefully instead of panicking on malformed model construction.
+        self.last_forward_degraded.set(true);
+        eprintln!("ERROR: lm_head missing while weight_tied=false, falling back to embedding head");
+        self.tok_embed.forward_as_lm_head(x_normed, logits);
     }
 
     /// Forward with loop execution (LoopLM path).
@@ -1025,14 +1035,7 @@ impl NanochatModel {
 
         // 6. LM head
         let mut logits = vec![0.0f32; self.config.vocab_size];
-        if self.weight_tied {
-            self.tok_embed.forward_as_lm_head(&x_normed, &mut logits);
-        } else {
-            self.lm_head
-                .as_ref()
-                .unwrap()
-                .forward(&x_normed, &mut logits);
-        }
+        self.forward_lm_head(&x_normed, &mut logits);
 
         logits
     }

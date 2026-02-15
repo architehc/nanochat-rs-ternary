@@ -71,32 +71,68 @@ fn validate_planar_for_ffi(pw: &PlanarWeights, x_len: usize, y_len: usize) {
         pw.rows_padded,
         pw.rows
     );
+    assert!(
+        pw.rows <= i32::MAX as usize,
+        "rows ({}) exceed i32::MAX for C FFI",
+        pw.rows
+    );
+    assert!(
+        pw.cols <= i32::MAX as usize,
+        "cols ({}) exceed i32::MAX for C FFI",
+        pw.cols
+    );
+    assert!(
+        pw.group_size <= i32::MAX as usize,
+        "group_size ({}) exceed i32::MAX for C FFI",
+        pw.group_size
+    );
+    assert!(
+        pw.rows_padded <= i32::MAX as usize,
+        "rows_padded ({}) exceed i32::MAX for C FFI",
+        pw.rows_padded
+    );
 
     let kp = pw.cols / 4;
     let gprow = pw.cols / pw.group_size;
+    let rows_kp = pw
+        .rows
+        .checked_mul(kp)
+        .expect("rows*kp overflow during FFI validation");
+    let rows_gprow = pw
+        .rows
+        .checked_mul(gprow)
+        .expect("rows*gprow overflow during FFI validation");
+    let rows_padded_kp = pw
+        .rows_padded
+        .checked_mul(kp)
+        .expect("rows_padded*kp overflow during FFI validation");
+    let rows_padded_gprow = pw
+        .rows_padded
+        .checked_mul(gprow)
+        .expect("rows_padded*gprow overflow during FFI validation");
     assert!(
-        pw.data.len() >= pw.rows * kp,
+        pw.data.len() >= rows_kp,
         "row-major packed data too short: {} < {}",
         pw.data.len(),
-        pw.rows * kp
+        rows_kp
     );
     assert!(
-        pw.scales_rm.len() >= pw.rows * gprow,
+        pw.scales_rm.len() >= rows_gprow,
         "row-major scales too short: {} < {}",
         pw.scales_rm.len(),
-        pw.rows * gprow
+        rows_gprow
     );
     assert!(
-        pw.data_colmaj.len() >= pw.rows_padded * kp,
+        pw.data_colmaj.len() >= rows_padded_kp,
         "col-major packed data too short: {} < {}",
         pw.data_colmaj.len(),
-        pw.rows_padded * kp
+        rows_padded_kp
     );
     assert!(
-        pw.scales_gm.len() >= pw.rows_padded * gprow,
+        pw.scales_gm.len() >= rows_padded_gprow,
         "group-major scales too short: {} < {}",
         pw.scales_gm.len(),
-        pw.rows_padded * gprow
+        rows_padded_gprow
     );
 }
 
@@ -246,7 +282,7 @@ pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]
                 data_colmaj: unsafe { pw.data_colmaj.as_ptr().add(row_start) },
                 scales_rm: unsafe { pw.scales_rm.as_ptr().add(row_start * gprow) },
                 scales_gm: unsafe { pw.scales_gm.as_ptr().add(row_start) },
-                rows: chunk_rows as i32,
+                rows: i32::try_from(chunk_rows).expect("chunk rows exceed i32::MAX"),
                 cols: pw.cols as i32,
                 group_size: pw.group_size as i32,
                 rows_padded: pw.rows_padded as i32, // keep original — it's the column stride

@@ -112,6 +112,13 @@ impl MhcLiteN2 {
     /// Input:  x = [batch, 2*C] (two streams concatenated)
     /// Output: [batch, C]
     pub fn prepare_input(&self, x: &[f32], dim_c: usize) -> Vec<f32> {
+        assert!(dim_c > 0, "dim_c must be > 0");
+        assert!(
+            x.len().is_multiple_of(2 * dim_c),
+            "x.len() ({}) must be divisible by 2*dim_c ({})",
+            x.len(),
+            2 * dim_c
+        );
         let h_pre = self.h_pre();
         let batch = x.len() / (2 * dim_c);
         let mut out = vec![0.0f32; batch * dim_c];
@@ -140,9 +147,23 @@ impl MhcLiteN2 {
     /// layer_output: [batch, C]    (single stream from layer F)
     /// Returns:      [batch, 2*C]  (two streams)
     pub fn apply(&self, x: &[f32], layer_output: &[f32], dim_c: usize) -> Vec<f32> {
+        assert!(dim_c > 0, "dim_c must be > 0");
+        assert!(
+            x.len().is_multiple_of(2 * dim_c),
+            "x.len() ({}) must be divisible by 2*dim_c ({})",
+            x.len(),
+            2 * dim_c
+        );
         let h_res = self.h_res();
         let h_post = self.h_post();
         let batch = x.len() / (2 * dim_c);
+        assert_eq!(
+            layer_output.len(),
+            batch * dim_c,
+            "layer_output.len() ({}) must equal batch*dim_c ({})",
+            layer_output.len(),
+            batch * dim_c
+        );
         let mut out = vec![0.0f32; batch * 2 * dim_c];
 
         for b in 0..batch {

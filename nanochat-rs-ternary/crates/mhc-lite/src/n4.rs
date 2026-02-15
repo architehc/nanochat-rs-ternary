@@ -168,8 +168,10 @@ impl MhcLiteN4 {
         out
     }
 
-    /// Apply residual update:
-    /// x_out[s] = sum_t H_res[s][t] * x[t] + H_post[s] * layer_output
+    /// Apply residual update with training-matching semantics.
+    ///
+    /// Applies stream-local residual first, then mixes streams:
+    /// x_out = H_res @ (x + H_post^T * layer_output)
     ///
     /// x:            [batch, 4*C]
     /// layer_output: [batch, C]
@@ -177,19 +179,37 @@ impl MhcLiteN4 {
     pub fn apply(&self, x: &[f32], layer_output: &[f32], dim_c: usize) -> Vec<f32> {
         let h_res = self.h_res();
         let h_post = self.h_post();
+        assert!(dim_c > 0, "dim_c must be > 0");
+        assert!(
+            x.len().is_multiple_of(4 * dim_c),
+            "x.len() ({}) must be divisible by 4*dim_c ({})",
+            x.len(),
+            4 * dim_c
+        );
         let batch = x.len() / (4 * dim_c);
+        assert_eq!(
+            layer_output.len(),
+            batch * dim_c,
+            "layer_output.len() ({}) must equal batch*dim_c ({})",
+            layer_output.len(),
+            batch * dim_c
+        );
         let mut out = vec![0.0f32; batch * 4 * dim_c];
 
         for b in 0..batch {
             let x_base = b * 4 * dim_c;
             let ly = &layer_output[b * dim_c..(b + 1) * dim_c];
 
-            for s in 0..4 {
-                let o = &mut out[x_base + s * dim_c..x_base + (s + 1) * dim_c];
-                for i in 0..dim_c {
-                    let mut val = h_post[s] * ly[i];
-                    for t in 0..4 {
-                        val += h_res[s][t] * x[x_base + t * dim_c + i];
+            for i in 0..dim_c {
+                let mut with_res = [0.0f32; 4];
+                for s in 0..4 {
+                    with_res[s] = x[x_base + s * dim_c + i] + h_post[s] * ly[i];
+                }
+                for s in 0..4 {
+                    let o = &mut out[x_base + s * dim_c..x_base + (s + 1) * dim_c];
+                    let mut val = 0.0f32;
+                    for (t, wr) in with_res.iter().enumerate() {
+                        val += h_res[s][t] * wr;
                     }
                     o[i] = val;
                 }
@@ -385,6 +405,39 @@ mod tests {
         // Output should be finite
         for &val in y.iter() {
             assert!(val.is_finite(), "Output {} is not finite", val);
+        }
+    }
+
+    #[test]
+    fn test_n4_apply_matches_residual_first_semantics() {
+        let mut res_logits = [-100.0f32; 24];
+        res_logits[0] = 0.0; // identity
+        res_logits[6] = 0.0; // swap stream 0/1
+        let mhc = MhcLiteN4::from_weights(
+            res_logits,
+            [0.0; 4],
+            [0.0; 4],
+            [0.0; 4],
+            [0.0, 2.0, 0.0, -2.0],
+        );
+
+        let x = vec![1.0f32, 2.0, 3.0, 4.0]; // [batch=1, 4*C], C=1
+        let layer_output = vec![10.0f32];
+        let out = mhc.apply(&x, &layer_output, 1);
+
+        let h_res = mhc.h_res();
+        let h_post = mhc.h_post();
+        for s in 0..4 {
+            let expected: f32 = (0..4)
+                .map(|t| h_res[s][t] * (x[t] + h_post[t] * layer_output[0]))
+                .sum();
+            assert!(
+                (out[s] - expected).abs() < 1e-5,
+                "stream {} mismatch: got {}, expected {}",
+                s,
+                out[s],
+                expected
+            );
         }
     }
 

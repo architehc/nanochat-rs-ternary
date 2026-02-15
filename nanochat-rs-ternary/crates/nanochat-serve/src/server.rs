@@ -49,6 +49,24 @@ fn unix_timestamp_secs() -> u64 {
         .as_secs()
 }
 
+fn error_response(model: String, message: String) -> Json<ChatCompletionResponse> {
+    Json(ChatCompletionResponse {
+        id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+        object: "chat.completion".to_string(),
+        created: unix_timestamp_secs(),
+        model,
+        choices: vec![ChatChoice {
+            index: 0,
+            message: ChatMessage {
+                role: Role::Assistant,
+                content: format!("Error: {}", message),
+            },
+            finish_reason: "error".to_string(),
+        }],
+        usage: Usage::new(0, 0),
+    })
+}
+
 async fn chat_ui() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -101,17 +119,27 @@ async fn non_stream_completion(
     let _timer = metrics::LatencyTimer::new();
     metrics::INFERENCE_REQUESTS.inc();
 
-    let prompt = req.to_prompt_string();
-    let params = req.to_sampling_params();
     let model_name = state.model_name.clone();
+    let prompt = match req.to_prompt_string() {
+        Ok(prompt) => prompt,
+        Err(err) => {
+            metrics::INFERENCE_ERRORS.inc();
+            return error_response(model_name, err);
+        }
+    };
+    let params = req.to_sampling_params();
     let max_seq_len = state.max_seq_len;
 
     let result = tokio::task::spawn_blocking(move || {
         let prompt_ids = state
             .tokenizer
             .encode(prompt.as_str(), false)
-            .map(|e| e.get_ids().to_vec())
-            .unwrap_or_default();
+            .map_err(|err| {
+                eprintln!("ERROR: tokenizer encode failed: {}", err);
+                "failed to tokenize prompt".to_string()
+            })?
+            .get_ids()
+            .to_vec();
         let prompt_len = prompt_ids.len();
 
         // Validate prompt length to prevent RoPE assert panics
@@ -123,12 +151,18 @@ async fn non_stream_completion(
         }
 
         let vs = state.vocab_size;
-        let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
+        if prompt_ids.iter().any(|&t| t >= vs) {
+            return Err(format!(
+                "tokenizer produced token id outside model vocab (vocab_size={})",
+                vs
+            ));
+        }
+        let token_ids = prompt_ids;
 
         let mut engine = state
             .engine
             .lock()
-            .map_err(|e| format!("Engine lock poisoned: {}", e))?;
+            .map_err(|_| "internal engine state unavailable".to_string())?;
         let output_ids = engine.generate(&token_ids, &params);
         let output_len = output_ids.len();
 
@@ -138,10 +172,10 @@ async fn non_stream_completion(
             eprintln!("WARNING: Non-streaming generation had degraded outputs (LoopLM errors)");
         }
 
-        let text = state
-            .tokenizer
-            .decode(&output_ids, true)
-            .unwrap_or_default();
+        let text = state.tokenizer.decode(&output_ids, true).map_err(|err| {
+            eprintln!("ERROR: tokenizer decode failed: {}", err);
+            "failed to decode generated tokens".to_string()
+        })?;
 
         Ok((text, prompt_len, output_len, degraded))
     })
@@ -152,42 +186,13 @@ async fn non_stream_completion(
         Ok(Err(err)) => {
             // Track error
             metrics::INFERENCE_ERRORS.inc();
-            // Return error as assistant message
-            return Json(ChatCompletionResponse {
-                id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
-                object: "chat.completion".to_string(),
-                created: unix_timestamp_secs(),
-                model: model_name,
-                choices: vec![ChatChoice {
-                    index: 0,
-                    message: ChatMessage {
-                        role: Role::Assistant,
-                        content: format!("Error: {}", err),
-                    },
-                    finish_reason: "error".to_string(),
-                }],
-                usage: Usage::new(0, 0),
-            });
+            return error_response(model_name, err);
         }
         Err(join_err) => {
             // Track error
             metrics::INFERENCE_ERRORS.inc();
-            // spawn_blocking panic or cancellation
-            return Json(ChatCompletionResponse {
-                id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
-                object: "chat.completion".to_string(),
-                created: unix_timestamp_secs(),
-                model: model_name,
-                choices: vec![ChatChoice {
-                    index: 0,
-                    message: ChatMessage {
-                        role: Role::Assistant,
-                        content: format!("Internal error: {}", join_err),
-                    },
-                    finish_reason: "error".to_string(),
-                }],
-                usage: Usage::new(0, 0),
-            });
+            eprintln!("ERROR: non_stream spawn_blocking join failed: {}", join_err);
+            return error_response(model_name, "internal request failure".to_string());
         }
     };
 
@@ -229,57 +234,97 @@ async fn stream_completion(
     let _timer = metrics::LatencyTimer::new();
     metrics::INFERENCE_REQUESTS.inc();
 
-    let prompt = req.to_prompt_string();
-    let params = req.to_sampling_params();
     let model_name = state.model_name.clone();
     let request_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
     let max_seq_len = state.max_seq_len;
+    let params = req.to_sampling_params();
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(64);
-
-    let req_id = request_id.clone();
-    let model = model_name.clone();
-    tokio::task::spawn_blocking(move || {
-        let prompt_ids = state
-            .tokenizer
-            .encode(prompt.as_str(), false)
-            .map(|e| e.get_ids().to_vec())
-            .unwrap_or_default();
-
-        // Validate prompt length before streaming
-        if prompt_ids.len() >= max_seq_len {
+    let prompt = match req.to_prompt_string() {
+        Ok(prompt) => prompt,
+        Err(err) => {
+            metrics::INFERENCE_ERRORS.inc();
             let now = unix_timestamp_secs();
             let error_chunk = ChatCompletionChunk {
-                id: req_id,
+                id: request_id.clone(),
                 object: "chat.completion.chunk".to_string(),
                 created: now,
-                model,
+                model: model_name.clone(),
                 choices: vec![ChunkChoice {
                     index: 0,
                     delta: ChunkDelta {
                         role: Some(Role::Assistant),
-                        content: Some(format!(
-                            "Error: Prompt too long ({} tokens exceeds limit of {})",
-                            prompt_ids.len(),
-                            max_seq_len
-                        )),
+                        content: Some(format!("Error: {}", err)),
                     },
                     finish_reason: Some("error".to_string()),
                 }],
             };
-            metrics::INFERENCE_ERRORS.inc();
+            if let Ok(json) = serde_json::to_string(&error_chunk) {
+                let _ = tx.try_send(Ok(Event::default().data(json)));
+            }
+            let _ = tx.try_send(Ok(Event::default().data("[DONE]")));
+            return Sse::new(ReceiverStream::new(rx));
+        }
+    };
+
+    let req_id = request_id.clone();
+    let model = model_name.clone();
+    tokio::task::spawn_blocking(move || {
+        let send_error = |message: String| {
+            let now = unix_timestamp_secs();
+            let error_chunk = ChatCompletionChunk {
+                id: req_id.clone(),
+                object: "chat.completion.chunk".to_string(),
+                created: now,
+                model: model.clone(),
+                choices: vec![ChunkChoice {
+                    index: 0,
+                    delta: ChunkDelta {
+                        role: Some(Role::Assistant),
+                        content: Some(format!("Error: {}", message)),
+                    },
+                    finish_reason: Some("error".to_string()),
+                }],
+            };
             if let Ok(json) = serde_json::to_string(&error_chunk) {
                 let _ = tx.blocking_send(Ok(Event::default().data(json)));
             } else {
-                eprintln!("ERROR: Failed to serialize prompt-length error chunk");
+                eprintln!("ERROR: Failed to serialize streaming error chunk");
             }
-            // Send [DONE] even on error path for OpenAI compatibility
             let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+        };
+
+        let prompt_ids = match state.tokenizer.encode(prompt.as_str(), false) {
+            Ok(encoded) => encoded.get_ids().to_vec(),
+            Err(err) => {
+                metrics::INFERENCE_ERRORS.inc();
+                eprintln!("ERROR: tokenizer encode failed: {}", err);
+                send_error("failed to tokenize prompt".to_string());
+                return;
+            }
+        };
+
+        // Validate prompt length before streaming
+        if prompt_ids.len() >= max_seq_len {
+            metrics::INFERENCE_ERRORS.inc();
+            send_error(format!(
+                "prompt too long ({} tokens exceeds limit of {})",
+                prompt_ids.len(),
+                max_seq_len
+            ));
             return;
         }
 
         let vs = state.vocab_size;
-        let token_ids: Vec<u32> = prompt_ids.into_iter().map(|t| t % vs).collect();
+        if prompt_ids.iter().any(|&t| t >= vs) {
+            metrics::INFERENCE_ERRORS.inc();
+            send_error(format!(
+                "tokenizer produced token id outside model vocab (vocab_size={})",
+                vs
+            ));
+            return;
+        }
+        let token_ids = prompt_ids;
 
         let now = unix_timestamp_secs();
 
@@ -309,29 +354,9 @@ async fn stream_completion(
 
         let mut engine = match state.engine.lock() {
             Ok(engine) => engine,
-            Err(err) => {
+            Err(_) => {
                 metrics::INFERENCE_ERRORS.inc();
-                let now = unix_timestamp_secs();
-                let error_chunk = ChatCompletionChunk {
-                    id: req_id.clone(),
-                    object: "chat.completion.chunk".to_string(),
-                    created: now,
-                    model: model.clone(),
-                    choices: vec![ChunkChoice {
-                        index: 0,
-                        delta: ChunkDelta {
-                            role: Some(Role::Assistant),
-                            content: Some(format!("Error: internal engine lock failure ({})", err)),
-                        },
-                        finish_reason: Some("error".to_string()),
-                    }],
-                };
-                if let Ok(json) = serde_json::to_string(&error_chunk) {
-                    let _ = tx.blocking_send(Ok(Event::default().data(json)));
-                } else {
-                    eprintln!("ERROR: Failed to serialize engine-lock error chunk");
-                }
-                let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+                send_error("internal engine state unavailable".to_string());
                 return;
             }
         };
@@ -349,7 +374,11 @@ async fn stream_completion(
             let text = state
                 .tokenizer
                 .decode(&[tok.token_id], true)
-                .unwrap_or_default();
+                .unwrap_or_else(|err| {
+                    metrics::INFERENCE_ERRORS.inc();
+                    eprintln!("ERROR: tokenizer decode failed in stream: {}", err);
+                    String::new()
+                });
 
             let chunk = ChatCompletionChunk {
                 id: req_id.clone(),

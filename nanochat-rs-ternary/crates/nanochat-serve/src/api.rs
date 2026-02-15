@@ -3,6 +3,10 @@
 use crate::engine::SamplingParams;
 use serde::{Deserialize, Serialize};
 
+pub const MAX_MESSAGES: usize = 256;
+pub const MAX_MESSAGE_CHARS: usize = 16 * 1024;
+pub const MAX_PROMPT_CHARS: usize = 256 * 1024;
+
 /// Chat message role.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -74,18 +78,52 @@ impl ChatCompletionRequest {
         }
     }
 
+    pub fn validate_messages(&self) -> Result<(), String> {
+        if self.messages.is_empty() {
+            return Err("messages must contain at least one item".to_string());
+        }
+        if self.messages.len() > MAX_MESSAGES {
+            return Err(format!(
+                "messages exceeds limit ({} > {})",
+                self.messages.len(),
+                MAX_MESSAGES
+            ));
+        }
+        for (idx, msg) in self.messages.iter().enumerate() {
+            let len = msg.content.chars().count();
+            if len > MAX_MESSAGE_CHARS {
+                return Err(format!(
+                    "messages[{}].content exceeds limit ({} > {})",
+                    idx, len, MAX_MESSAGE_CHARS
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Convert chat messages to a flat prompt string.
     /// Simple format: "<role>: <content>\n" per message.
-    pub fn to_prompt_string(&self) -> String {
+    pub fn to_prompt_string(&self) -> Result<String, String> {
+        self.validate_messages()?;
+
         let mut prompt = String::new();
-        for msg in &self.messages {
+        for (idx, msg) in self.messages.iter().enumerate() {
             prompt.push_str(msg.role.as_str());
             prompt.push_str(": ");
             prompt.push_str(&msg.content);
             prompt.push('\n');
+            if prompt.chars().count() > MAX_PROMPT_CHARS {
+                return Err(format!(
+                    "prompt exceeds limit while processing message {} (>{})",
+                    idx, MAX_PROMPT_CHARS
+                ));
+            }
         }
         prompt.push_str("assistant: ");
-        prompt
+        if prompt.chars().count() > MAX_PROMPT_CHARS {
+            return Err(format!("prompt exceeds limit (>{})", MAX_PROMPT_CHARS));
+        }
+        Ok(prompt)
     }
 }
 
@@ -223,10 +261,45 @@ mod tests {
             seed: None,
         };
 
-        let prompt = req.to_prompt_string();
+        let prompt = req.to_prompt_string().unwrap();
         assert!(prompt.contains("system: You are helpful."));
         assert!(prompt.contains("user: Hello!"));
         assert!(prompt.ends_with("assistant: "));
+    }
+
+    #[test]
+    fn test_chat_request_to_prompt_rejects_empty_messages() {
+        let req = ChatCompletionRequest {
+            messages: vec![],
+            model: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            stream: None,
+            seed: None,
+        };
+
+        assert!(req.to_prompt_string().is_err());
+    }
+
+    #[test]
+    fn test_chat_request_to_prompt_rejects_oversize_message() {
+        let req = ChatCompletionRequest {
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: "x".repeat(MAX_MESSAGE_CHARS + 1),
+            }],
+            model: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            stream: None,
+            seed: None,
+        };
+
+        assert!(req.to_prompt_string().is_err());
     }
 
     #[test]
