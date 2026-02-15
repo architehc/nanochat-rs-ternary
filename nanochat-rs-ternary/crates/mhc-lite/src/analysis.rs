@@ -187,9 +187,8 @@ impl MhcAnalyzer {
     fn compute_entropy_n2(h: &[[f32; 2]; 2]) -> f32 {
         // Shannon entropy: -sum(p * log(p))
         let mut entropy = 0.0;
-        for i in 0..2 {
-            for j in 0..2 {
-                let p = h[i][j];
+        for row in h {
+            for &p in row {
                 if p > 1e-8 {
                     entropy -= p * p.ln();
                 }

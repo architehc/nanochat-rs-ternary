@@ -4,7 +4,7 @@
 //! Key insight: Project gradients to low-rank subspace before optimizer step,
 //! reducing memory from O(d²) to O(d·r) where r << d.
 
-use candle_core::{backprop::GradStore, DType, Device, Result, Tensor, Var};
+use candle_core::{backprop::GradStore, Result, Tensor, Var};
 use std::collections::HashMap;
 
 /// Optimizer wrapper that applies GaLore2 gradient projection

@@ -954,7 +954,7 @@ impl NanochatModel {
                     // Process entire sequence through each loop iteration
                     // Each token maintains its own global state across iterations
                     for iter in 0..loop_cfg.loop_count {
-                        let append_kv = (iter == 0);
+                        let append_kv = iter == 0;
                         match loop_block.forward_batch(
                             &mut x_exp_all,
                             &global_states,
@@ -1407,7 +1407,7 @@ mod tests {
 
     #[test]
     fn test_param_count_basic() {
-        let mut model = make_test_model();
+        let model = make_test_model();
         let count = model.param_count();
 
         // Verify param counting includes all components
@@ -1444,13 +1444,13 @@ mod tests {
 
     #[test]
     fn test_model_mhc_verify() {
-        let mut model = make_test_model();
+        let model = make_test_model();
         model.verify_mhc().expect("mHC verification failed");
     }
 
     #[test]
     fn test_model_shape_through_layers() {
-        let mut model = make_test_model();
+        let model = make_test_model();
         let dim = model.config.dim;
         let n_streams = model.config.mhc_n_streams;
 

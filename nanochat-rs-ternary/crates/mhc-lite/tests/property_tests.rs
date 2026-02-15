@@ -109,6 +109,7 @@ proptest! {
         let mut composite = [[1.0f32, 0.0], [0.0, 1.0]]; // Identity
         for mat in &matrices {
             let mut result = [[0.0f32; 2]; 2];
+            #[allow(clippy::needless_range_loop)]
             for i in 0..2 {
                 for j in 0..2 {
                     for k in 0..2 {
@@ -164,6 +165,7 @@ proptest! {
         let mut matrices = Vec::new();
         for i in 0..layer_count {
             let mut logits = [0.0f32; 24];
+            #[allow(clippy::needless_range_loop)]
             for j in 0..24 {
                 logits[j] = ((seed * 24 + i as u32 * 24 + j as u32) as f32 * 0.7).sin() * 3.0;
             }
@@ -179,12 +181,14 @@ proptest! {
 
         // Compute composite
         let mut composite = [[0.0f32; 4]; 4];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..4 {
             composite[i][i] = 1.0; // Identity
         }
 
         for mat in &matrices {
             let mut result = [[0.0f32; 4]; 4];
+            #[allow(clippy::needless_range_loop)]
             for i in 0..4 {
                 for j in 0..4 {
                     for k in 0..4 {

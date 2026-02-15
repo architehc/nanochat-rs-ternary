@@ -76,12 +76,12 @@ impl ModelConfig {
         if self.dim == 0 {
             return Err(NanoChatError::InvalidConfig("dim must be > 0".into()));
         }
-        if self.n_heads == 0 || self.dim % self.n_heads != 0 {
+        if self.n_heads == 0 || !self.dim.is_multiple_of(self.n_heads) {
             return Err(NanoChatError::InvalidConfig(
                 "dim must be divisible by n_heads".into(),
             ));
         }
-        if self.n_kv_heads == 0 || self.n_heads % self.n_kv_heads != 0 {
+        if self.n_kv_heads == 0 || !self.n_heads.is_multiple_of(self.n_kv_heads) {
             return Err(NanoChatError::InvalidConfig(
                 "n_heads must be divisible by n_kv_heads".into(),
             ));
@@ -270,9 +270,11 @@ mod tests {
 
     #[test]
     fn test_invalid_dim_division() {
-        let mut cfg = ModelConfig::default();
-        cfg.dim = 100;
-        cfg.n_heads = 7; // 100 not divisible by 7
+        let cfg = ModelConfig {
+            dim: 100,
+            n_heads: 7, // 100 not divisible by 7
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
     }
 

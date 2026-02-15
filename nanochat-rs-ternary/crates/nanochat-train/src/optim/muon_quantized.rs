@@ -4,7 +4,7 @@
 //! Key insight: Quantize optimizer states (momentum buffers) to INT8,
 //! reducing memory by 75% with minimal impact on convergence.
 
-use candle_core::{backprop::GradStore, DType, Result, Tensor, Var};
+use candle_core::{backprop::GradStore, Result, Tensor, Var};
 
 /// Quantization configuration for optimizer states
 #[derive(Debug, Clone)]

@@ -127,6 +127,11 @@ impl NumaAllocator {
     }
 
     /// Deallocate NUMA-allocated memory.
+    ///
+    /// # Safety
+    /// - `ptr` must have been allocated by `alloc_on_node` with the same `size`
+    /// - `ptr` must not be used after calling this function
+    /// - This function must not be called twice on the same pointer
     #[cfg(target_os = "linux")]
     pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
         if !ptr.is_null() {

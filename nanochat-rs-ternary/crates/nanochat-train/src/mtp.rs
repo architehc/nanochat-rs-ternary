@@ -5,7 +5,7 @@
 //!
 //! MTP predicts multiple future tokens at once, providing 15-20% better data efficiency.
 
-use candle_core::{DType, Result, Tensor, D};
+use candle_core::{Result, Tensor, D};
 use candle_nn::{linear, Linear, Module, VarBuilder};
 
 /// Multi-Token Prediction module.

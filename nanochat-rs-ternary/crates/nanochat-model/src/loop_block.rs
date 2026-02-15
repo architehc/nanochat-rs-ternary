@@ -3,7 +3,6 @@
 //! This is the inference-optimized version of SharedLoopBlock, using
 //! quantized ternary weights instead of training-mode floating point.
 
-use std::io;
 
 use crate::attention::KvCache;
 use crate::bitlinear::BitLinear;

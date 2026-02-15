@@ -29,7 +29,7 @@ fn main() {
         // Compile to object file
         let obj_file = format!("{}/sigmoid.o", out_dir);
         let status = std::process::Command::new(&nvcc)
-            .args(&[
+            .args([
                 "-c",
                 cuda_file,
                 "-o",
@@ -49,7 +49,7 @@ fn main() {
 
         // Create static library
         let status = std::process::Command::new("ar")
-            .args(&["rcs", &output_lib, &obj_file])
+            .args(["rcs", &output_lib, &obj_file])
             .status()
             .expect("Failed to run ar");
 

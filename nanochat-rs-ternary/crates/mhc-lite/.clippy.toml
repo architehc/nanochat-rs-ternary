@@ -1,0 +1,2 @@
+# Temporary: Allow some pedantic lints while we fix them incrementally
+# TODO: Remove these allows as we fix the underlying issues

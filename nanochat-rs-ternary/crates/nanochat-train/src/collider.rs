@@ -20,10 +20,12 @@ pub struct Collider {
     /// Target sparsity ratio (0-1): fraction of tokens to filter
     sparsity_target: f64,
 
-    /// Apply filtering during backward pass
+    /// Apply filtering during backward pass (TODO: not yet implemented)
+    #[allow(dead_code)]
     filter_backward: bool,
 
-    /// Transform sparse GEMMs to dense (gather important tokens)
+    /// Transform sparse GEMMs to dense (gather important tokens) (TODO: not yet implemented)
+    #[allow(dead_code)]
     transform_gemm: bool,
 }
 
