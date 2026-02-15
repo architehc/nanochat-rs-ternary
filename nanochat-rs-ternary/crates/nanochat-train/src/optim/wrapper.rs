@@ -16,6 +16,7 @@ pub enum MuonOptimizer {
 
 impl MuonOptimizer {
     /// Create optimizer based on config flags
+    #[allow(clippy::too_many_arguments)] // Config constructor needs all optimizer parameters
     pub fn from_config(
         vars: Vec<Var>,
         lr: f64,

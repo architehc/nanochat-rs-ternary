@@ -52,11 +52,6 @@ impl Collider {
         }
     }
 
-    /// Create default Collider with recommended settings.
-    pub fn default() -> Self {
-        Self::new(0.3, 0.35) // Filter 35% of low-importance tokens
-    }
-
     /// Compute per-token importance scores from loss.
     ///
     /// # Arguments
@@ -82,14 +77,9 @@ impl Collider {
 
     /// Compute per-token cross-entropy loss (not reduced).
     fn per_token_cross_entropy(&self, log_probs: &Tensor, targets: &Tensor) -> Result<Tensor> {
-        let (batch_size, seq_len, vocab_size) = log_probs.dims3()?;
+        let (_batch_size, _seq_len, _vocab_size) = log_probs.dims3()?;
 
-        // Flatten for gathering
-        let flat_log_probs = log_probs.reshape((batch_size * seq_len, vocab_size))?;
-        let flat_targets = targets.flatten_all()?;
-
-        // Gather log probs for target tokens
-        // This requires indexing which may not be directly available
+        // TODO: Implement proper per-token indexing when candle supports it
         // For now, use a simplified cross-entropy computation
 
         // Simplified: compute negative log likelihood per token
@@ -108,7 +98,7 @@ impl Collider {
     pub fn create_mask(&self, importance: &Tensor) -> Result<Tensor> {
         // Tokens with importance > threshold are kept
         let mask = importance.gt(self.threshold)?;
-        Ok(mask.to_dtype(DType::F32)?)
+        mask.to_dtype(DType::F32)
     }
 
     /// Apply token filtering to activations.
@@ -155,6 +145,12 @@ impl Collider {
     /// Get target sparsity.
     pub fn sparsity_target(&self) -> f64 {
         self.sparsity_target
+    }
+}
+
+impl Default for Collider {
+    fn default() -> Self {
+        Self::new(0.3, 0.35) // Filter 35% of low-importance tokens
     }
 }
 

@@ -176,6 +176,7 @@ pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]
 mod tests {
     use super::*;
 
+    #[allow(clippy::needless_range_loop)] // Index needed for deterministic pseudo-random generation
     fn make_test_weights(rows: usize, cols: usize) -> (PlanarWeights, Vec<i8>) {
         let gs = 128;
         // Generate deterministic test weights

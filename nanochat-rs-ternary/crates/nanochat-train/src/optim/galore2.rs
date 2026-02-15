@@ -24,7 +24,8 @@ pub struct GaLore2<OPT> {
     /// Current step counter
     step: usize,
 
-    /// Projection scale factor
+    /// Projection scale factor (TODO: not yet used)
+    #[allow(dead_code)]
     scale: f64,
 
     /// Only apply to large matrices (min dimension threshold)
@@ -40,7 +41,8 @@ struct ProjectionPair {
     p: Tensor,
     /// Left singular vectors (dim × rank)
     q: Tensor,
-    /// Step when last updated
+    /// Step when last updated (TODO: not yet used for adaptive refresh)
+    #[allow(dead_code)]
     last_updated: usize,
 }
 
@@ -187,7 +189,8 @@ impl<OPT> GaLore2<OPT> {
         }
     }
 
-    /// Unproject from low-rank subspace: g = Q @ g_proj @ P^T
+    /// Unproject from low-rank subspace: g = Q @ g_proj @ P^T (TODO: not yet used)
+    #[allow(dead_code)]
     fn unproject_gradient(&self, var_idx: usize, grad_proj: &Tensor) -> Result<Tensor> {
         match self.projections.get(&var_idx) {
             Some(proj) => {
@@ -240,7 +243,7 @@ impl<OPT> GaLore2<OPT> {
 
     /// Check if projection update is needed
     fn should_update_projection(&self) -> bool {
-        self.step % self.update_freq == 0
+        self.step.is_multiple_of(self.update_freq)
     }
 }
 
@@ -337,7 +340,7 @@ pub struct MemoryStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::Device;
+    use candle_core::{Device, DType};
     use candle_nn::VarMap;
 
     #[test]
@@ -347,7 +350,7 @@ mod tests {
         let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
         // Small matrix for quick test
-        let w = vb.get_with_hints(
+        let _w = vb.get_with_hints(
             (128, 128),
             "w",
             candle_nn::Init::Randn { mean: 0.0, stdev: 1.0 },

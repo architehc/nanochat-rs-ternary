@@ -179,6 +179,7 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
 mod tests {
     use super::*;
 
+    #[allow(clippy::needless_range_loop)] // Index needed for deterministic pseudo-random generation
     fn make_test_weights(rows: usize, cols: usize) -> (PlanarWeights, Vec<i8>) {
         let gs = 128;
         let mut w = vec![0.0f32; rows * cols];

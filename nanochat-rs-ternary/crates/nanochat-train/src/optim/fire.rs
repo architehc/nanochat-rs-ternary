@@ -167,7 +167,7 @@ impl FIREReinitializer {
     }
 
     /// Compute Squared Frobenius Error: ||X^T X - I||_F^2
-    fn compute_sfe(&self, x: &Tensor, rows: usize, cols: usize) -> Result<f64> {
+    fn compute_sfe(&self, x: &Tensor, _rows: usize, cols: usize) -> Result<f64> {
         // X^T X
         let xtx = x.t()?.matmul(x)?;
 

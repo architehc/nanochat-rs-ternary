@@ -232,7 +232,7 @@ impl Default for KernelAutotuner {
 
 /// Global kernel auto-tuner instance.
 static GLOBAL_AUTOTUNER: once_cell::sync::Lazy<KernelAutotuner> =
-    once_cell::sync::Lazy::new(|| KernelAutotuner::new());
+    once_cell::sync::Lazy::new(KernelAutotuner::new);
 
 /// Get the global auto-tuner instance.
 pub fn global_autotuner() -> &'static KernelAutotuner {
