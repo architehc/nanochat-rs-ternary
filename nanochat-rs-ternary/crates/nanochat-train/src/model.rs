@@ -361,6 +361,33 @@ mod tests {
     }
 
     #[test]
+    fn test_weight_tied_embeddings_receive_lm_head_gradients() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let mut cfg = tiny_config();
+        cfg.weight_tied = true;
+        let model = NanochatTrainModel::new(&cfg, vb)?;
+
+        let ids = Tensor::zeros((1, 4), DType::U32, &device)?;
+        let targets = Tensor::zeros((1, 4), DType::U32, &device)?;
+        let loss = model.forward_loss(&ids, &targets)?;
+        let grads = loss.backward()?;
+
+        let emb = model.tok_embed.embeddings();
+        let grad = grads
+            .get(emb)
+            .ok_or_else(|| candle_core::Error::Msg("missing embedding gradient".to_string()))?;
+        let grad_norm = grad.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
+        assert!(
+            grad_norm.is_finite() && grad_norm > 0.0,
+            "embedding grad norm should be finite and non-zero, got {}",
+            grad_norm
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_model_param_groups_complete() -> Result<()> {
         let device = Device::Cpu;
         let varmap = VarMap::new();

@@ -1,6 +1,6 @@
 //! Training loop: Trainer struct with Muon + Lion optimizer split.
 
-use candle_core::{DType, Device, Result, Tensor, Var, D};
+use candle_core::{backprop::GradStore, DType, Device, Result, Tensor, Var, D};
 use candle_nn::VarMap;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -157,6 +157,11 @@ pub struct Trainer {
     mtp: Option<MultiTokenPrediction>, // Multi-Token Prediction (15-20% data efficiency)
     collider: Option<Collider>,        // Token filtering (35% faster backprop)
     fp4: Option<FP4Trainer>,           // Optional FP4 mixed-precision path
+
+    // Gradient accumulation state.
+    accum_grads: Option<GradStore>,
+    accum_micro_steps: usize,
+    accum_loss_sum: f64,
 }
 
 impl Trainer {
@@ -341,6 +346,9 @@ impl Trainer {
             mtp,
             collider,
             fp4,
+            accum_grads: None,
+            accum_micro_steps: 0,
+            accum_loss_sum: 0.0,
         };
 
         trainer.load_optimizer_state(checkpoint_dir)?;
@@ -474,6 +482,9 @@ impl Trainer {
             mtp,
             collider,
             fp4,
+            accum_grads: None,
+            accum_micro_steps: 0,
+            accum_loss_sum: 0.0,
         })
     }
 
@@ -491,8 +502,8 @@ impl Trainer {
         let hidden_for_lm = if let Some(ref fp4) = self.fp4 {
             let hidden_detached = hidden.detach();
             let hidden_quant = fp4.quantize_fp4(&hidden_detached)?;
-            let delta = (&hidden_quant - &hidden_detached)?;
-            (&hidden + delta)?
+            // Forward value is exactly `hidden_quant`; gradient remains identity via STE.
+            (&hidden_quant + (&hidden - &hidden_detached)?)?
         } else {
             hidden.clone()
         };
@@ -589,34 +600,74 @@ impl Trainer {
             }
         }
 
-        // Backward pass
-        let grads = loss.backward()?;
+        let accum_steps = self.config.grad_accum_steps.max(1);
+        let loss_val_unscaled = loss.to_scalar::<f32>()? as f64;
 
-        // Compute gradient norm for clipping
-        let grad_norm = compute_grad_norm(&grads, &self.varmap)?;
-        let clip_scale = if grad_norm > self.config.grad_clip {
-            self.config.grad_clip / grad_norm
+        // Scale each micro-step loss so accumulated gradients match large-batch average.
+        let scaled_loss = if accum_steps > 1 {
+            (&loss * (1.0 / accum_steps as f64))?
         } else {
-            1.0
+            loss.clone()
         };
 
-        // Optimizer steps
-        self.muon.step(&grads, clip_scale)?;
-        self.lion.step(&grads, clip_scale)?;
+        // Backward pass for this micro-step.
+        let grads = scaled_loss.backward()?;
+        if let Some(accum) = self.accum_grads.as_mut() {
+            accumulate_grad_store(accum, &grads, &self.varmap)?;
+        } else {
+            self.accum_grads = Some(grads);
+        }
 
-        // LR schedule
-        self.global_step += 1;
-        let mult = wsd_schedule(
-            self.global_step,
-            self.config.warmup_steps,
-            self.config.total_steps,
-            self.config.decay_start_frac,
-            0.1,
-        );
-        self.muon.set_lr(self.base_lr_muon * mult);
-        self.lion.set_lr(self.base_lr_lion * mult);
+        self.accum_micro_steps += 1;
+        self.accum_loss_sum += loss_val_unscaled;
+        let should_step = self.accum_micro_steps >= accum_steps;
 
-        let loss_val = loss.to_scalar::<f32>()? as f64;
+        let (grad_norm, mult, loss_val) = if should_step {
+            let grads_to_apply = self.accum_grads.take().ok_or_else(|| {
+                candle_core::Error::Msg("missing accumulated gradients".to_string())
+            })?;
+            let grad_norm = compute_grad_norm(&grads_to_apply, &self.varmap)?;
+            let clip_scale = if grad_norm > self.config.grad_clip {
+                self.config.grad_clip / grad_norm
+            } else {
+                1.0
+            };
+
+            self.muon.step(&grads_to_apply, clip_scale)?;
+            self.lion.step(&grads_to_apply, clip_scale)?;
+
+            self.global_step += 1;
+            let mult = wsd_schedule(
+                self.global_step,
+                self.config.warmup_steps,
+                self.config.total_steps,
+                self.config.decay_start_frac,
+                0.1,
+            );
+            self.muon.set_lr(self.base_lr_muon * mult);
+            self.lion.set_lr(self.base_lr_lion * mult);
+
+            let loss_avg = self.accum_loss_sum / self.accum_micro_steps as f64;
+            self.accum_micro_steps = 0;
+            self.accum_loss_sum = 0.0;
+            (grad_norm, mult, loss_avg)
+        } else {
+            let grad_norm = compute_grad_norm(
+                self.accum_grads.as_ref().ok_or_else(|| {
+                    candle_core::Error::Msg("missing accumulated gradients".to_string())
+                })?,
+                &self.varmap,
+            )?;
+            let mult = wsd_schedule(
+                self.global_step,
+                self.config.warmup_steps,
+                self.config.total_steps,
+                self.config.decay_start_frac,
+                0.1,
+            );
+            (grad_norm, mult, loss_val_unscaled)
+        };
+
         let elapsed = step_start.elapsed().as_secs_f64();
         let n_tokens = (batch * seq_len) as f64;
         let tokens_per_sec = if elapsed > 0.0 {
@@ -630,7 +681,6 @@ impl Trainer {
         drop(collider_mask);
         drop(logits_flat);
         drop(targets_flat);
-        drop(grads);
 
         Ok(StepStats {
             loss: loss_val,
@@ -858,6 +908,21 @@ fn apply_collider_gradient_mask(logits: &Tensor, mask: &Tensor) -> Result<Tensor
     &kept + &dropped_no_grad
 }
 
+fn accumulate_grad_store(dst: &mut GradStore, src: &GradStore, varmap: &VarMap) -> Result<()> {
+    for var in varmap.all_vars() {
+        let Some(g_src) = src.get(var.as_tensor()) else {
+            continue;
+        };
+        if let Some(g_dst) = dst.get(var.as_tensor()) {
+            let sum = (g_dst + g_src)?;
+            dst.insert(var.as_tensor(), sum);
+        } else {
+            dst.insert(var.as_tensor(), g_src.clone());
+        }
+    }
+    Ok(())
+}
+
 /// Compute total gradient norm across all variables.
 pub fn compute_grad_norm(grads: &candle_core::backprop::GradStore, varmap: &VarMap) -> Result<f64> {
     let mut total = 0.0f64;
@@ -1051,6 +1116,57 @@ mod tests {
         // Should not crash with aggressive clipping
         let stats = trainer.train_step(&input_ids, &target_ids)?;
         assert!(stats.loss.is_finite());
+        Ok(())
+    }
+
+    #[test]
+    fn test_label_smoothing_matches_manual_formula() -> Result<()> {
+        let device = Device::Cpu;
+        let logits = Tensor::new(&[[2.0f32, 0.0, -1.0]], &device)?;
+        let targets = Tensor::new(&[0u32], &device)?;
+        let eps = 0.1f64;
+
+        let ce = candle_nn::loss::cross_entropy(&logits, &targets)?;
+        let log_probs = candle_nn::ops::log_softmax(&logits, 1)?;
+        let uniform = log_probs.mean(D::Minus1)?.neg()?.mean_all()?;
+        let smoothed = ((&ce * (1.0 - eps))? + (&uniform * eps)?)?;
+        let got = smoothed.to_scalar::<f32>()?;
+
+        let probs = candle_nn::ops::softmax(&logits, 1)?.to_vec2::<f32>()?;
+        let p0 = probs[0][0].max(1e-12);
+        let p1 = probs[0][1].max(1e-12);
+        let p2 = probs[0][2].max(1e-12);
+        let manual =
+            (1.0 - eps as f32) * (-p0.ln()) + (eps as f32 / 3.0) * (-(p0.ln() + p1.ln() + p2.ln()));
+        assert!(
+            (got - manual).abs() < 1e-5,
+            "got {}, manual {}",
+            got,
+            manual
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grad_accum_steps_applies_optimizer_on_schedule() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = tiny_config();
+        cfg.grad_accum_steps = 2;
+        let mut trainer = Trainer::new(cfg, device)?;
+
+        let input_ids = Tensor::zeros((2, 8), DType::U32, &trainer.device)?;
+        let target_ids = Tensor::zeros((2, 8), DType::U32, &trainer.device)?;
+
+        let _ = trainer.train_step(&input_ids, &target_ids)?;
+        assert_eq!(
+            trainer.global_step, 0,
+            "optimizer should not step on first micro-step"
+        );
+        let _ = trainer.train_step(&input_ids, &target_ids)?;
+        assert_eq!(
+            trainer.global_step, 1,
+            "optimizer should step after grad_accum_steps"
+        );
         Ok(())
     }
 }

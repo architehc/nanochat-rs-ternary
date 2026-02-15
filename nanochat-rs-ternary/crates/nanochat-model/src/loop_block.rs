@@ -186,6 +186,32 @@ impl SharedLoopBlock {
         append_kv: bool,
         token_pos: Option<usize>,
     ) -> Result<(Vec<f32>, Vec<f32>), String> {
+        let expected_expanded = 2 * self.dim;
+        if x_expanded.len() != expected_expanded {
+            return Err(format!(
+                "x_expanded has invalid length: got {}, expected {} (2 streams * dim {})",
+                x_expanded.len(),
+                expected_expanded,
+                self.dim
+            ));
+        }
+        if let Some(g_state) = global_state {
+            if g_state.len() != self.dim {
+                return Err(format!(
+                    "global_state has invalid length: got {}, expected {}",
+                    g_state.len(),
+                    self.dim
+                ));
+            }
+        }
+        let expected_kv_dim = self.n_kv_heads * self.head_dim;
+        if kv_cache.kv_dim != expected_kv_dim {
+            return Err(format!(
+                "kv_cache.kv_dim mismatch: got {}, expected {}",
+                kv_cache.kv_dim, expected_kv_dim
+            ));
+        }
+
         // ========== Attention Sub-Layer ==========
 
         // 1. mHC prepare: collapse expanded input to single stream
@@ -416,6 +442,32 @@ impl SharedLoopBlock {
         seq_len: usize,
     ) -> Result<Vec<Vec<f32>>, String> {
         let exp_dim = 2 * self.dim;
+        if x_exp_all.len() != seq_len * exp_dim {
+            return Err(format!(
+                "x_exp_all has invalid length: got {}, expected {} (seq_len={} * exp_dim={})",
+                x_exp_all.len(),
+                seq_len * exp_dim,
+                seq_len,
+                exp_dim
+            ));
+        }
+        if global_states.len() != seq_len {
+            return Err(format!(
+                "global_states length mismatch: got {}, expected {}",
+                global_states.len(),
+                seq_len
+            ));
+        }
+        let base_pos = if append_kv {
+            kv_cache.len
+        } else {
+            kv_cache.len.checked_sub(seq_len).ok_or_else(|| {
+                format!(
+                    "append_kv=false requires kv_cache.len >= seq_len ({} < {})",
+                    kv_cache.len, seq_len
+                )
+            })?
+        };
         let mut new_global_states = Vec::with_capacity(seq_len);
 
         // Process tokens sequentially to maintain causality
@@ -430,7 +482,7 @@ impl SharedLoopBlock {
                 global_state,
                 kv_cache,
                 append_kv,
-                Some(t), // Pass explicit token position
+                Some(base_pos + t), // Preserve absolute sequence position across loop iterations
             )?;
 
             x_exp_all[t * exp_dim..(t + 1) * exp_dim].copy_from_slice(&x_out);

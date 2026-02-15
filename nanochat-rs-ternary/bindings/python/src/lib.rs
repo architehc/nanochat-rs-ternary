@@ -53,12 +53,20 @@ impl PyModel {
 
         while generated < max_tokens && tokens.len() < self.model.config.max_seq_len {
             let logits = self.model.forward_sequence(&tokens);
+            if logits.is_empty() {
+                return Err(PyRuntimeError::new_err("Model returned empty logits"));
+            }
+            if logits.iter().any(|v| !v.is_finite()) {
+                return Err(PyRuntimeError::new_err(
+                    "Model produced NaN/Inf logits during generation",
+                ));
+            }
 
             // Greedy sampling (argmax)
             let next_token = logits
                 .iter()
                 .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .max_by(|(_, a), (_, b)| a.total_cmp(b))
                 .map(|(idx, _)| idx as u32)
                 .ok_or_else(|| PyRuntimeError::new_err("Failed to generate token"))?;
 

@@ -56,6 +56,8 @@ fn tiny_config(weight_tied: bool) -> TrainConfig {
         use_async_loader: false,
         async_n_workers: 4,
         async_prefetch_size: 8,
+        use_fp4: false,
+        fp4_stochastic_rounding: false,
     }
 }
 

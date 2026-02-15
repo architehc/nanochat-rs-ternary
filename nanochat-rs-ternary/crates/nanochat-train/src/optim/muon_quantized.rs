@@ -189,10 +189,10 @@ impl QuantizedMuon {
             let grad = (grad * clip_scale)?;
 
             // Dequantize momentum buffer
-            let buf = self.momentum_buffers[i].to_tensor(var.device())?;
+            let prev_buf = self.momentum_buffers[i].to_tensor(var.device())?;
 
             // EMA momentum: buf = beta * buf + (1 - beta) * grad
-            let buf_scaled = (&buf * self.beta)?;
+            let buf_scaled = (&prev_buf * self.beta)?;
             let grad_scaled = (&grad * (1.0 - self.beta))?;
             let new_buf = (&buf_scaled + &grad_scaled)?;
 
@@ -202,7 +202,7 @@ impl QuantizedMuon {
             let update = if var.as_tensor().dims().len() >= 2 {
                 // Nesterov: update = beta * buf + (1 - beta) * grad
                 let nest_grad = (&grad * (1.0 - self.beta))?;
-                let nest_buf = (&new_buf * self.beta)?;
+                let nest_buf = (&prev_buf * self.beta)?;
                 let nesterov = (&nest_grad + &nest_buf)?;
 
                 // Reshape to 2D for orthogonalization
@@ -249,10 +249,10 @@ impl QuantizedMuon {
             let grad = (grad * clip_scale)?;
 
             // Dequantize momentum buffer
-            let buf = self.momentum_buffers[i].to_tensor(var.device())?;
+            let prev_buf = self.momentum_buffers[i].to_tensor(var.device())?;
 
             // EMA momentum: buf = beta * buf + (1 - beta) * grad
-            let buf_scaled = (&buf * self.beta)?;
+            let buf_scaled = (&prev_buf * self.beta)?;
             let grad_scaled = (&grad * (1.0 - self.beta))?;
             let new_buf = (&buf_scaled + &grad_scaled)?;
 
@@ -262,7 +262,7 @@ impl QuantizedMuon {
             let update = if var.as_tensor().dims().len() >= 2 {
                 // Nesterov: update = beta * buf + (1 - beta) * grad
                 let nest_grad = (&grad * (1.0 - self.beta))?;
-                let nest_buf = (&new_buf * self.beta)?;
+                let nest_buf = (&prev_buf * self.beta)?;
                 let nesterov = (&nest_grad + &nest_buf)?;
 
                 // Reshape to 2D for orthogonalization

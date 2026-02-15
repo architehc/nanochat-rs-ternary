@@ -5,6 +5,7 @@
 //!
 //! Gated behind `#[cfg(feature = "cuda")]`.
 
+use std::sync::OnceLock;
 use ternary_core::planar::PlanarWeights;
 
 extern "C" {
@@ -26,22 +27,21 @@ extern "C" {
     fn cuda_synchronize() -> i32;
 }
 
-static INIT: std::sync::Once = std::sync::Once::new();
+type GpuResult<T> = std::result::Result<T, String>;
+
+static INIT_RESULT: OnceLock<GpuResult<()>> = OnceLock::new();
 
 struct DeviceAlloc {
     ptr: *mut u8,
 }
 
 impl DeviceAlloc {
-    fn alloc(bytes: usize, label: &str) -> Self {
+    fn alloc(bytes: usize, label: &str) -> GpuResult<Self> {
         let ptr = unsafe { cuda_alloc(bytes) };
-        assert!(
-            !ptr.is_null(),
-            "GPU alloc failed for {} ({} bytes)",
-            label,
-            bytes
-        );
-        Self { ptr }
+        if ptr.is_null() {
+            return Err(format!("GPU alloc failed for {} ({} bytes)", label, bytes));
+        }
+        Ok(Self { ptr })
     }
 
     fn as_ptr(&self) -> *mut u8 {
@@ -66,11 +66,17 @@ impl Drop for DeviceAlloc {
 }
 
 /// Initialize CUDA decode LUT. Call once before any GPU GEMV.
-pub fn init() {
-    INIT.call_once(|| {
-        let ret = unsafe { cuda_ternary_gemv_init() };
-        assert_eq!(ret, 0, "CUDA GEMV init failed");
-    });
+pub fn init() -> GpuResult<()> {
+    INIT_RESULT
+        .get_or_init(|| {
+            let ret = unsafe { cuda_ternary_gemv_init() };
+            if ret == 0 {
+                Ok(())
+            } else {
+                Err("CUDA GEMV init failed".to_string())
+            }
+        })
+        .clone()
 }
 
 /// Device-side weight storage for GPU GEMV.
@@ -93,48 +99,56 @@ impl GpuWeights {
     /// Upload PlanarWeights to GPU device memory.
     ///
     /// Uses row-major data + row-major scales for the dp4a kernel.
-    pub fn from_planar(pw: &PlanarWeights) -> Self {
-        assert!(pw.rows > 0, "rows must be > 0");
-        assert!(pw.cols > 0, "cols must be > 0");
-        assert!(pw.group_size > 0, "group_size must be > 0");
-        assert!(pw.cols.is_multiple_of(4), "cols must be divisible by 4");
-        assert!(
-            pw.group_size.is_multiple_of(4),
-            "group_size must be divisible by 4"
-        );
-        assert!(
-            pw.cols.is_multiple_of(pw.group_size),
-            "cols must be divisible by group_size"
-        );
-        assert!(
-            pw.rows <= i32::MAX as usize,
-            "rows ({}) exceed i32::MAX for CUDA FFI",
-            pw.rows
-        );
-        assert!(
-            pw.cols <= i32::MAX as usize - 3,
-            "cols ({}) exceed CUDA kernel indexing limit",
-            pw.cols
-        );
-        assert!(
-            pw.group_size <= i32::MAX as usize,
-            "group_size ({}) exceed i32::MAX for CUDA FFI",
-            pw.group_size
-        );
+    pub fn from_planar(pw: &PlanarWeights) -> GpuResult<Self> {
+        if pw.rows == 0 {
+            return Err("rows must be > 0".to_string());
+        }
+        if pw.cols == 0 {
+            return Err("cols must be > 0".to_string());
+        }
+        if pw.group_size == 0 {
+            return Err("group_size must be > 0".to_string());
+        }
+        if !pw.cols.is_multiple_of(4) {
+            return Err("cols must be divisible by 4".to_string());
+        }
+        if !pw.group_size.is_multiple_of(4) {
+            return Err("group_size must be divisible by 4".to_string());
+        }
+        if !pw.cols.is_multiple_of(pw.group_size) {
+            return Err("cols must be divisible by group_size".to_string());
+        }
+        if pw.rows > i32::MAX as usize {
+            return Err(format!("rows ({}) exceed i32::MAX for CUDA FFI", pw.rows));
+        }
+        if pw.cols > i32::MAX as usize - 3 {
+            return Err(format!(
+                "cols ({}) exceed CUDA kernel indexing limit",
+                pw.cols
+            ));
+        }
+        if pw.group_size > i32::MAX as usize {
+            return Err(format!(
+                "group_size ({}) exceed i32::MAX for CUDA FFI",
+                pw.group_size
+            ));
+        }
 
-        init();
+        init()?;
 
         let kp = pw.cols / 4;
         let data_bytes = pw.rows * kp;
         let n_groups = pw.cols / pw.group_size;
         let scales_bytes = pw.rows * n_groups * std::mem::size_of::<f32>();
 
-        let d_data = DeviceAlloc::alloc(data_bytes, "data");
-        let d_scales = DeviceAlloc::alloc(scales_bytes, "scales");
+        let d_data = DeviceAlloc::alloc(data_bytes, "data")?;
+        let d_scales = DeviceAlloc::alloc(scales_bytes, "scales")?;
 
         // Upload row-major data
         let ret = unsafe { cuda_memcpy_h2d(d_data.as_ptr(), pw.data.as_ptr(), data_bytes) };
-        assert_eq!(ret, 0, "H2D copy failed for data");
+        if ret != 0 {
+            return Err("H2D copy failed for data".to_string());
+        }
 
         // Upload row-major scales
         let ret = unsafe {
@@ -144,9 +158,11 @@ impl GpuWeights {
                 scales_bytes,
             )
         };
-        assert_eq!(ret, 0, "H2D copy failed for scales");
+        if ret != 0 {
+            return Err("H2D copy failed for scales".to_string());
+        }
 
-        GpuWeights {
+        Ok(GpuWeights {
             d_data: d_data.into_raw(),
             d_scales: d_scales.into_raw(),
             rows: pw.rows,
@@ -154,7 +170,7 @@ impl GpuWeights {
             group_size: pw.group_size,
             data_bytes,
             scales_bytes,
-        }
+        })
     }
 }
 
@@ -186,42 +202,52 @@ impl std::fmt::Debug for GpuWeights {
 /// * `x` - Host-side INT8 activations [cols]
 /// * `act_scale` - Activation scale factor
 /// * `y` - Host-side output buffer [rows]
-pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
-    assert_eq!(x.len(), gw.cols, "x.len() != cols");
-    assert_eq!(y.len(), gw.rows, "y.len() != rows");
-    assert!(
-        gw.rows <= 65_535,
-        "rows ({}) exceed CUDA grid.x limit (65535)",
-        gw.rows
-    );
-    assert!(
-        gw.rows <= i32::MAX as usize,
-        "rows ({}) exceed i32::MAX for CUDA FFI",
-        gw.rows
-    );
-    assert!(
-        gw.cols <= i32::MAX as usize - 3,
-        "cols ({}) exceed CUDA kernel indexing limit",
-        gw.cols
-    );
-    assert!(
-        gw.group_size <= i32::MAX as usize,
-        "group_size ({}) exceed i32::MAX for CUDA FFI",
-        gw.group_size
-    );
+pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) -> GpuResult<()> {
+    if x.len() != gw.cols {
+        return Err(format!("x.len() ({}) != cols ({})", x.len(), gw.cols));
+    }
+    if y.len() != gw.rows {
+        return Err(format!("y.len() ({}) != rows ({})", y.len(), gw.rows));
+    }
+    if gw.rows > 65_535 {
+        return Err(format!(
+            "rows ({}) exceed CUDA grid.x limit (65535)",
+            gw.rows
+        ));
+    }
+    if gw.rows > i32::MAX as usize {
+        return Err(format!("rows ({}) exceed i32::MAX for CUDA FFI", gw.rows));
+    }
+    if gw.cols > i32::MAX as usize - 3 {
+        return Err(format!(
+            "cols ({}) exceed CUDA kernel indexing limit",
+            gw.cols
+        ));
+    }
+    if gw.group_size > i32::MAX as usize {
+        return Err(format!(
+            "group_size ({}) exceed i32::MAX for CUDA FFI",
+            gw.group_size
+        ));
+    }
 
-    init();
+    init()?;
 
     let x_bytes = x.len();
-    let y_bytes = std::mem::size_of_val(y);
+    let y_bytes = y
+        .len()
+        .checked_mul(std::mem::size_of::<f32>())
+        .ok_or_else(|| "y byte size overflow".to_string())?;
 
     // Allocate device buffers for x and y
-    let d_x = DeviceAlloc::alloc(x_bytes, "x");
-    let d_y = DeviceAlloc::alloc(y_bytes, "y");
+    let d_x = DeviceAlloc::alloc(x_bytes, "x")?;
+    let d_y = DeviceAlloc::alloc(y_bytes, "y")?;
 
     // Upload x
     let ret = unsafe { cuda_memcpy_h2d(d_x.as_ptr(), x.as_ptr() as *const u8, x_bytes) };
-    assert_eq!(ret, 0, "H2D copy failed for x");
+    if ret != 0 {
+        return Err("H2D copy failed for x".to_string());
+    }
 
     // Launch kernel
     let ret = unsafe {
@@ -236,7 +262,9 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
             gw.group_size as i32,
         )
     };
-    assert_eq!(ret, 0, "CUDA kernel launch failed");
+    if ret != 0 {
+        return Err("CUDA kernel launch failed".to_string());
+    }
 
     // Download y
     let ret = unsafe {
@@ -246,13 +274,18 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
             y_bytes,
         )
     };
-    assert_eq!(ret, 0, "D2H copy failed for y");
+    if ret != 0 {
+        return Err("D2H copy failed for y".to_string());
+    }
 
     // Sync
     let ret = unsafe { cuda_synchronize() };
-    assert_eq!(ret, 0, "CUDA synchronize failed");
+    if ret != 0 {
+        return Err("CUDA synchronize failed".to_string());
+    }
 
     // Temporary buffers are freed by DeviceAlloc Drop.
+    Ok(())
 }
 
 #[cfg(test)]
@@ -286,9 +319,9 @@ mod tests {
         crate::cpu::gemv_scalar_ref(&pw, &x, act_scale, &mut y_cpu);
 
         // GPU
-        let gw = GpuWeights::from_planar(&pw);
+        let gw = GpuWeights::from_planar(&pw).expect("gpu upload");
         let mut y_gpu = vec![0.0f32; 128];
-        gemv_gpu(&gw, &x, act_scale, &mut y_gpu);
+        gemv_gpu(&gw, &x, act_scale, &mut y_gpu).expect("gpu gemv");
 
         let max_diff: f32 = y_cpu
             .iter()
@@ -312,9 +345,9 @@ mod tests {
             let mut y_cpu = vec![0.0f32; m];
             crate::cpu::gemv_scalar_ref(&pw, &x, act_scale, &mut y_cpu);
 
-            let gw = GpuWeights::from_planar(&pw);
+            let gw = GpuWeights::from_planar(&pw).expect("gpu upload");
             let mut y_gpu = vec![0.0f32; m];
-            gemv_gpu(&gw, &x, act_scale, &mut y_gpu);
+            gemv_gpu(&gw, &x, act_scale, &mut y_gpu).expect("gpu gemv");
 
             let max_diff: f32 = y_cpu
                 .iter()
@@ -335,7 +368,7 @@ mod tests {
     #[test]
     fn test_gpu_upload_download_roundtrip() {
         let (pw, _) = make_test_weights(64, 128);
-        let gw = GpuWeights::from_planar(&pw);
+        let gw = GpuWeights::from_planar(&pw).expect("gpu upload");
 
         assert_eq!(gw.rows, 64);
         assert_eq!(gw.cols, 128);

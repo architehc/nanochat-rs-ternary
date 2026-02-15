@@ -26,6 +26,10 @@ pub struct Collider {
 
     /// Transform sparse GEMMs to dense (gather important tokens).
     transform_gemm: bool,
+
+    /// Gradient floor for filtered tokens (0.0-1.0).
+    /// A small non-zero value avoids fully dead gradients.
+    filtered_grad_scale: f64,
 }
 
 impl Collider {
@@ -47,8 +51,22 @@ impl Collider {
             threshold,
             sparsity_target,
             filter_backward: true,
-            transform_gemm: true,
+            // Default to masked dense path to preserve gradients on filtered tokens.
+            transform_gemm: false,
+            filtered_grad_scale: 0.1,
         }
+    }
+
+    /// Enable/disable sparse GEMM compaction path.
+    pub fn with_transform_gemm(mut self, enabled: bool) -> Self {
+        self.transform_gemm = enabled;
+        self
+    }
+
+    /// Set gradient floor for filtered tokens.
+    pub fn with_filtered_grad_scale(mut self, scale: f64) -> Self {
+        self.filtered_grad_scale = scale.clamp(0.0, 1.0);
+        self
     }
 
     /// Compute per-token importance scores from loss.
@@ -230,9 +248,11 @@ impl Collider {
         // mask: [batch, seq_len]
         let (batch, seq, hidden) = activations.dims3()?;
         let expanded_mask = mask.unsqueeze(2)?.broadcast_as((batch, seq, hidden))?;
+        let inv_mask = Tensor::ones_like(&expanded_mask)?.sub(&expanded_mask)?;
+        let scaled_inv = (&inv_mask * self.filtered_grad_scale)?;
+        let effective_mask = (&expanded_mask + &scaled_inv)?;
 
-        // Zero out filtered tokens
-        activations.mul(&expanded_mask)
+        activations.mul(&effective_mask)
     }
 
     /// Get filtering statistics.
@@ -367,11 +387,11 @@ mod tests {
         let filtered = collider.filter_activations(&activations, &mask).unwrap();
         let result = filtered.to_vec3::<f32>().unwrap();
 
-        // Check that filtered tokens are zeroed
+        // Check that filtered tokens are downscaled (non-zero gradient floor)
         assert_eq!(result[0][0], [1.0, 1.0]); // kept
-        assert_eq!(result[0][1], [0.0, 0.0]); // filtered
+        assert_eq!(result[0][1], [0.1, 0.1]); // filtered (scale 0.1)
         assert_eq!(result[0][2], [1.0, 1.0]); // kept
-        assert_eq!(result[0][3], [0.0, 0.0]); // filtered
+        assert_eq!(result[0][3], [0.1, 0.1]); // filtered (scale 0.1)
     }
 
     #[test]
@@ -410,7 +430,7 @@ mod tests {
     #[test]
     fn test_sparse_backward_compacts_rows() {
         let device = Device::Cpu;
-        let collider = Collider::new(0.5, 0.35);
+        let collider = Collider::new(0.5, 0.35).with_transform_gemm(true);
 
         let hidden = Tensor::new(
             &[[[1.0f32, 10.0], [2.0, 20.0], [3.0, 30.0], [4.0, 40.0]]],
@@ -427,6 +447,25 @@ mod tests {
             vec![vec![1.0, 10.0], vec![3.0, 30.0]]
         );
         assert_eq!(targets_kept.to_vec1::<u32>().unwrap(), vec![11, 33]);
+    }
+
+    #[test]
+    fn test_sparse_backward_default_keeps_all_rows_with_scaled_filtering() {
+        let device = Device::Cpu;
+        let collider = Collider::new(0.5, 0.35);
+
+        let hidden = Tensor::new(
+            &[[[1.0f32, 10.0], [2.0, 20.0], [3.0, 30.0], [4.0, 40.0]]],
+            &device,
+        )
+        .unwrap();
+        let targets = Tensor::new(&[[11u32, 22u32, 33u32, 44u32]], &device).unwrap();
+        let mask = Tensor::new(&[[1.0f32, 0.0, 1.0, 0.0]], &device).unwrap();
+
+        let (hidden_flat, targets_flat) =
+            collider.sparse_backward(&hidden, &targets, &mask).unwrap();
+        assert_eq!(hidden_flat.dims(), &[4, 2]);
+        assert_eq!(targets_flat.to_vec1::<u32>().unwrap(), vec![11, 22, 33, 44]);
     }
 
     #[test]

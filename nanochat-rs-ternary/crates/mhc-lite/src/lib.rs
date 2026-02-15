@@ -39,17 +39,54 @@ pub(crate) fn sigmoid(x: f32) -> f32 {
 /// Numerically stable softmax over 24 elements.
 pub(crate) fn softmax_24(logits: &[f32; 24]) -> [f32; 24] {
     let max_val = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    if !max_val.is_finite() {
+        // Degenerate case (all -inf/NaN): keep DS invariants by falling back to uniform.
+        return [1.0 / 24.0; 24];
+    }
+
     let mut out = [0.0f32; 24];
     let mut sum = 0.0f32;
 
     for (o, &l) in out.iter_mut().zip(logits.iter()) {
-        *o = (l - max_val).exp();
+        let shifted = l - max_val;
+        *o = if shifted.is_finite() {
+            shifted.exp()
+        } else {
+            0.0
+        };
         sum += *o;
     }
 
-    let inv_sum = if sum > 0.0 { 1.0 / sum } else { 0.0 };
+    if !sum.is_finite() || sum <= 0.0 {
+        return [1.0 / 24.0; 24];
+    }
+
+    let inv_sum = 1.0 / sum;
     for o in out.iter_mut() {
         *o *= inv_sum;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::softmax_24;
+
+    #[test]
+    fn test_softmax_24_all_neg_inf_is_finite_and_normalized() {
+        let logits = [f32::NEG_INFINITY; 24];
+        let out = softmax_24(&logits);
+        let sum: f32 = out.iter().sum();
+        assert!(out.iter().all(|v| v.is_finite()));
+        assert!((sum - 1.0).abs() < 1e-6, "sum={}", sum);
+    }
+
+    #[test]
+    fn test_softmax_24_all_nan_is_finite_and_normalized() {
+        let logits = [f32::NAN; 24];
+        let out = softmax_24(&logits);
+        let sum: f32 = out.iter().sum();
+        assert!(out.iter().all(|v| v.is_finite()));
+        assert!((sum - 1.0).abs() < 1e-6, "sum={}", sum);
+    }
 }

@@ -1,5 +1,6 @@
 //! nanochat-serve — OpenAI-compatible inference server for nanochat ternary models.
 
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -125,10 +126,29 @@ async fn main() {
     let model_name = format!("nanochat-{}m", model.param_count().total / 1_000_000);
     let vocab_size = model.config.vocab_size as u32;
     let max_seq_len = model.config.max_seq_len;
-    let engine = InferenceEngine::new(model);
+    let mut engines = vec![std::sync::Mutex::new(InferenceEngine::new(model))];
+
+    // Optional engine replication for concurrent streaming requests.
+    let replicas = std::env::var("NANOCHAT_ENGINE_REPLICAS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1)
+        .max(1);
+    if replicas > 1 {
+        tracing::info!("Initializing {} inference engine replicas", replicas);
+        for replica_idx in 1..replicas {
+            let replica_model =
+                NanochatModel::from_gguf(&args.model, &args.mhc).unwrap_or_else(|e| {
+                    eprintln!("Failed to load replica {} model: {e}", replica_idx);
+                    std::process::exit(1);
+                });
+            engines.push(std::sync::Mutex::new(InferenceEngine::new(replica_model)));
+        }
+    }
 
     let state = Arc::new(AppState {
-        engine: std::sync::Mutex::new(engine),
+        engines,
+        next_engine: AtomicUsize::new(0),
         tokenizer,
         model_name,
         vocab_size,

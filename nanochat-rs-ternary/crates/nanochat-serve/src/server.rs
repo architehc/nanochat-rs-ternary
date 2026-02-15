@@ -1,6 +1,7 @@
 //! Axum HTTP server with OpenAI-compatible endpoints.
 
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -21,7 +22,8 @@ use crate::metrics;
 
 /// Shared application state.
 pub struct AppState {
-    pub engine: std::sync::Mutex<InferenceEngine>,
+    pub engines: Vec<std::sync::Mutex<InferenceEngine>>,
+    pub next_engine: AtomicUsize,
     pub tokenizer: tokenizers::Tokenizer,
     pub model_name: String,
     pub vocab_size: u32,
@@ -158,9 +160,16 @@ async fn non_stream_completion(
             ));
         }
         let token_ids = prompt_ids;
+        if state.engines.is_empty() {
+            return Err("no inference engines are available".to_string());
+        }
+        let engine_idx = state.next_engine.fetch_add(1, Ordering::Relaxed) % state.engines.len();
+        let engine_lock = state
+            .engines
+            .get(engine_idx)
+            .ok_or_else(|| "engine index out of range".to_string())?;
 
-        let mut engine = state
-            .engine
+        let mut engine = engine_lock
             .lock()
             .map_err(|_| "internal engine state unavailable".to_string())?;
         let output_ids = engine.generate(&token_ids, &params);
@@ -325,6 +334,17 @@ async fn stream_completion(
             return;
         }
         let token_ids = prompt_ids;
+        if state.engines.is_empty() {
+            metrics::INFERENCE_ERRORS.inc();
+            send_error("no inference engines are available".to_string());
+            return;
+        }
+        let engine_idx = state.next_engine.fetch_add(1, Ordering::Relaxed) % state.engines.len();
+        let Some(engine_lock) = state.engines.get(engine_idx) else {
+            metrics::INFERENCE_ERRORS.inc();
+            send_error("engine index out of range".to_string());
+            return;
+        };
 
         let now = unix_timestamp_secs();
 
@@ -352,7 +372,7 @@ async fn stream_completion(
             return;
         }
 
-        let mut engine = match state.engine.lock() {
+        let mut engine = match engine_lock.lock() {
             Ok(engine) => engine,
             Err(_) => {
                 metrics::INFERENCE_ERRORS.inc();
@@ -627,7 +647,8 @@ mod tests {
         let tokenizer = make_test_tokenizer();
 
         Arc::new(AppState {
-            engine: std::sync::Mutex::new(engine),
+            engines: vec![std::sync::Mutex::new(engine)],
+            next_engine: AtomicUsize::new(0),
             tokenizer,
             model_name: "nanochat-test".to_string(),
             vocab_size: 256,

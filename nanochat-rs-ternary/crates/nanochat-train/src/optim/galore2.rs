@@ -302,7 +302,10 @@ impl<OPT> GaLore2<OPT> {
         }
     }
 
-    /// Compute relative projection error ||g - g_hat|| / ||g|| for one variable.
+    /// Compute projection mismatch as cosine distance (1 - cos(g, g_hat)).
+    ///
+    /// Using direction mismatch avoids pathological "always large" residual errors
+    /// when low-rank projections intentionally discard magnitude components.
     fn projection_relative_error(&self, var_idx: usize, grad_2d: &Tensor) -> Result<f64> {
         if !self.projections.contains_key(&var_idx) {
             return Ok(f64::INFINITY);
@@ -310,16 +313,14 @@ impl<OPT> GaLore2<OPT> {
 
         let grad_proj = self.project_gradient(var_idx, grad_2d)?;
         let grad_recon = self.unproject_gradient(var_idx, &grad_proj)?;
-        let diff_norm = (&grad_recon - grad_2d)?
-            .sqr()?
-            .sum_all()?
-            .sqrt()?
-            .to_scalar::<f32>()? as f64;
         let grad_norm = grad_2d.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()? as f64;
-        if grad_norm <= 1e-12 {
+        let recon_norm = grad_recon.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()? as f64;
+        if grad_norm <= 1e-12 || recon_norm <= 1e-12 {
             return Ok(0.0);
         }
-        Ok(diff_norm / grad_norm)
+        let dot = (grad_2d.mul(&grad_recon)?).sum_all()?.to_scalar::<f32>()? as f64;
+        let cosine = (dot / (grad_norm * recon_norm)).clamp(-1.0, 1.0);
+        Ok(1.0 - cosine)
     }
 
     /// Check if a single variable projection should refresh.
