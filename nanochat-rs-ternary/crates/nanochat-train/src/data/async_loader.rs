@@ -51,8 +51,8 @@ pub struct AsyncDataLoader {
     /// Shutdown signal
     shutdown: Arc<AtomicBool>,
 
-    /// Number of prefetch buffers
-    prefetch_size: usize,
+    /// Total number of batches in the epoch
+    total_batches: usize,
 
     /// Target device for tensor creation
     device: Device,
@@ -115,11 +115,13 @@ impl AsyncDataLoader {
         // Drop the sender from main thread so channel closes when workers finish
         drop(batch_tx);
 
+        let total_batches = dataset.len().div_ceil(batch_size);
+
         Self {
             batch_rx,
             workers,
             shutdown,
-            prefetch_size,
+            total_batches,
             device,
         }
     }
@@ -153,9 +155,25 @@ impl AsyncDataLoader {
             let mut target_ids = Vec::with_capacity(actual_batch_size * 1024);
             let mut seq_len = 0;
 
-            for &idx in batch_indices {
+            for (i, &idx) in batch_indices.iter().enumerate() {
                 let (inp, tgt) = dataset.get_item(idx);
-                seq_len = inp.len();
+                if i == 0 {
+                    seq_len = inp.len();
+                } else {
+                    assert_eq!(
+                        inp.len(),
+                        seq_len,
+                        "async_loader: sample {} has seq_len {} but first sample had {}, \
+                         all samples in a batch must have uniform length",
+                        idx, inp.len(), seq_len,
+                    );
+                }
+                assert_eq!(
+                    inp.len(),
+                    tgt.len(),
+                    "async_loader: sample {} input len {} != target len {}",
+                    idx, inp.len(), tgt.len(),
+                );
                 input_ids.extend_from_slice(&inp);
                 target_ids.extend_from_slice(&tgt);
             }
@@ -188,9 +206,7 @@ impl AsyncDataLoader {
 
     /// Total number of batches in epoch
     pub fn n_batches(&self) -> usize {
-        // This is approximate since we don't track exact count
-        // In practice, callers should just iterate until None
-        self.prefetch_size
+        self.total_batches
     }
 
     /// Shutdown workers gracefully
@@ -336,5 +352,26 @@ mod tests {
 
             assert_eq!(count, 6); // ceil(48/8) = 6
         }
+    }
+
+    #[test]
+    fn test_n_batches_returns_correct_count() {
+        let dataset = Arc::new(SyntheticDataset::new(100, 16, 20, 42));
+        let device = Device::Cpu;
+
+        let loader = AsyncDataLoader::new(
+            Arc::clone(&dataset), 8, false, 42, 2, 4, device,
+        );
+
+        // n_batches should be ceil(20/8) = 3, not prefetch_size (4)
+        assert_eq!(loader.n_batches(), 3);
+
+        // Also test non-evenly-divisible case
+        let dataset2 = Arc::new(SyntheticDataset::new(100, 16, 50, 42));
+        let loader2 = AsyncDataLoader::new(
+            dataset2, 8, false, 42, 2, 16, Device::Cpu,
+        );
+        // n_batches should be ceil(50/8) = 7, not prefetch_size (16)
+        assert_eq!(loader2.n_batches(), 7);
     }
 }
