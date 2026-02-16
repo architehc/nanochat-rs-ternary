@@ -86,6 +86,16 @@ impl TokenFileDataset {
     /// Load from a binary file of little-endian u32 values.
     pub fn from_binary_file(path: &std::path::Path, seq_len: usize) -> std::io::Result<Self> {
         let data = std::fs::read(path)?;
+        if data.len() % 4 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "token file {} has {} bytes (not a multiple of 4)",
+                    path.display(),
+                    data.len()
+                ),
+            ));
+        }
         let tokens: Vec<u32> = data
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
