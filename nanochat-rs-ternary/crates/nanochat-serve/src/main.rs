@@ -144,6 +144,11 @@ async fn main() {
         .ok()
         .and_then(|v| ChatTemplate::parse(&v))
         .unwrap_or(ChatTemplate::RoleTagged);
+    let stream_channel_capacity = std::env::var("NANOCHAT_STREAM_CHANNEL_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(64);
     let numa_mode_raw = std::env::var("NANOCHAT_NUMA_MODE").unwrap_or_else(|_| "off".to_string());
     let use_numa_engine = match numa_mode_raw.trim().to_ascii_lowercase().as_str() {
         "off" | "false" | "0" => false,
@@ -169,6 +174,7 @@ async fn main() {
         tracing::warn!("CORS origin not set; cross-origin browser access is disabled by default");
     }
     tracing::info!("Chat template: {:?}", chat_template);
+    tracing::info!("Stream channel capacity: {}", stream_channel_capacity);
     tracing::info!(
         "NUMA engine mode: {}",
         if use_numa_engine { "threadpool" } else { "off" }
@@ -222,6 +228,7 @@ async fn main() {
         api_key,
         request_timeout,
         cors_allowed_origin,
+        stream_channel_capacity,
     });
 
     let app = build_router(state);

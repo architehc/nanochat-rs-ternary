@@ -13,6 +13,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio_stream::wrappers::ReceiverStream;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::cors::CorsLayer;
@@ -33,6 +34,7 @@ pub struct AppState {
     pub api_key: Option<String>,
     pub request_timeout: Duration,
     pub cors_allowed_origin: Option<String>,
+    pub stream_channel_capacity: usize,
 }
 
 /// Build the Axum router.
@@ -322,7 +324,8 @@ async fn stream_completion(
     let request_timeout = state.request_timeout;
     let params = req.to_sampling_params();
 
-    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(64);
+    let stream_capacity = state.stream_channel_capacity.max(1);
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(stream_capacity);
     let prompt = match req.to_prompt_string_with_template(state.chat_template) {
         Ok(prompt) => prompt,
         Err(err) => {
@@ -353,6 +356,18 @@ async fn stream_completion(
     let req_id = request_id.clone();
     let model = model_name.clone();
     tokio::task::spawn_blocking(move || {
+        let try_send = |tx: &mpsc::Sender<Result<Event, Infallible>>, data: String| -> bool {
+            match tx.try_send(Ok(Event::default().data(data))) {
+                Ok(()) => true,
+                Err(TrySendError::Full(_)) => {
+                    metrics::INFERENCE_ERRORS.inc();
+                    eprintln!("ERROR: stream channel backpressure (buffer full)");
+                    false
+                }
+                Err(TrySendError::Closed(_)) => false,
+            }
+        };
+
         let send_error = |message: String| {
             let now = unix_timestamp_secs();
             let error_chunk = ChatCompletionChunk {
@@ -370,11 +385,11 @@ async fn stream_completion(
                 }],
             };
             if let Ok(json) = serde_json::to_string(&error_chunk) {
-                let _ = tx.blocking_send(Ok(Event::default().data(json)));
+                let _ = try_send(&tx, json);
             } else {
                 eprintln!("ERROR: Failed to serialize streaming error chunk");
             }
-            let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+            let _ = try_send(&tx, "[DONE]".to_string());
         };
 
         let prompt_ids = match state.tokenizer.encode(prompt.as_str(), false) {
@@ -439,11 +454,13 @@ async fn stream_completion(
             }],
         };
         if let Ok(json) = serde_json::to_string(&initial) {
-            let _ = tx.blocking_send(Ok(Event::default().data(json)));
+            if !try_send(&tx, json) {
+                return;
+            }
         } else {
             metrics::INFERENCE_ERRORS.inc();
             eprintln!("ERROR: Failed to serialize initial streaming chunk");
-            let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+            let _ = try_send(&tx, "[DONE]".to_string());
             return;
         }
 
@@ -459,6 +476,7 @@ async fn stream_completion(
         let mut token_count = 0usize;
         let mut had_degraded = false;
         let mut timed_out = false;
+        let mut backpressured = false;
         engine.generate_streaming(&token_ids, &params, |tok| {
             if started.elapsed() >= request_timeout {
                 timed_out = true;
@@ -481,9 +499,9 @@ async fn stream_completion(
                     }],
                 };
                 if let Ok(json) = serde_json::to_string(&timeout_chunk) {
-                    let _ = tx.blocking_send(Ok(Event::default().data(json)));
+                    let _ = try_send(&tx, json);
                 }
-                let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+                let _ = try_send(&tx, "[DONE]".to_string());
                 return false;
             }
 
@@ -523,7 +541,13 @@ async fn stream_completion(
             };
 
             match serde_json::to_string(&chunk) {
-                Ok(json) => tx.blocking_send(Ok(Event::default().data(json))).is_ok(),
+                Ok(json) => {
+                    let sent = try_send(&tx, json);
+                    if !sent {
+                        backpressured = true;
+                    }
+                    sent
+                }
                 Err(err) => {
                     metrics::INFERENCE_ERRORS.inc();
                     eprintln!("ERROR: Failed to serialize streaming chunk: {}", err);
@@ -539,12 +563,15 @@ async fn stream_completion(
         if timed_out {
             return;
         }
+        if backpressured {
+            return;
+        }
 
         // Track generated tokens
         metrics::TOKENS_GENERATED.inc_by(token_count as f64);
 
         // Send [DONE]
-        let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+        let _ = try_send(&tx, "[DONE]".to_string());
     });
 
     Sse::new(ReceiverStream::new(rx))
@@ -764,6 +791,7 @@ mod tests {
             api_key: None,
             request_timeout: std::time::Duration::from_secs(30),
             cors_allowed_origin: None,
+            stream_channel_capacity: 64,
         })
     }
 
