@@ -1,6 +1,8 @@
 #!/bin/bash
 # Simplified 6-hour continuous training
 
+set -eo pipefail
+
 CHECKPOINT_DIR="${1:-checkpoints/rust-6hour}"
 BATCH_SIZE=2
 DATA_PATH="data/rust_tokens.bin"
@@ -17,6 +19,7 @@ mkdir -p "$CHECKPOINT_DIR"
 
 # Use timeout to enforce 6 hour limit
 timeout 6h bash -c '
+set -o pipefail
 CHECKPOINT_DIR="'"$CHECKPOINT_DIR"'"
 RUN=0
 while true; do

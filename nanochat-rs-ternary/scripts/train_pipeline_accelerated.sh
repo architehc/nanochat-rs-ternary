@@ -2,7 +2,7 @@
 # Accelerated Training Pipeline: Supervised → MaxRL → Evaluate
 # Complete end-to-end training automation
 
-set -e
+set -eo pipefail
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_DIR="logs/pipeline_$TIMESTAMP"
@@ -39,7 +39,7 @@ echo "  Batch size: 1"
 echo "  Log: $SUPERVISED_LOG"
 echo ""
 
-./train_stable_v2.sh 2>&1 | tee "$SUPERVISED_LOG" &
+./train_stable_v2.sh > >(tee "$SUPERVISED_LOG") 2>&1 &
 SUPERVISED_PID=$!
 
 echo "Training PID: $SUPERVISED_PID"
@@ -89,7 +89,7 @@ echo "  Method: Learn only from compilable code"
 echo "  Log: $MAXRL_LOG"
 echo ""
 
-./scripts/train_maxrl.sh "$SUPERVISED_CHECKPOINT" 2>&1 | tee "$MAXRL_LOG" &
+./scripts/train_maxrl.sh "$SUPERVISED_CHECKPOINT" > >(tee "$MAXRL_LOG") 2>&1 &
 MAXRL_PID=$!
 
 echo "MaxRL PID: $MAXRL_PID"

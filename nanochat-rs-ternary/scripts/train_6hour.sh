@@ -2,7 +2,7 @@
 # 6-hour continuous training with automatic OOM recovery
 # Trains continuously for 6 hours, restarting after each OOM event
 
-set -e
+set -eo pipefail
 
 CHECKPOINT_DIR="${1:-checkpoints/rust-6hour}"
 DURATION_HOURS="${2:-6}"

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Download top Rust repositories for training data
 
-set -e
+set -eo pipefail
 
 DATA_DIR="data/rust-repos"
 mkdir -p "$DATA_DIR"
@@ -39,7 +39,7 @@ for repo_info in "${REPOS[@]}"; do
     fi
 
     echo "Cloning (shallow, depth=1 for speed)..."
-    if git clone --depth 1 "$url" "$DATA_DIR/$name" 2>&1 | tail -3; then
+    if git clone --depth 1 "$url" "$DATA_DIR/$name"; then
         echo "✓ Cloned successfully"
 
         # Count Rust files

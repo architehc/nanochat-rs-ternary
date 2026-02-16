@@ -162,8 +162,15 @@ class ModelZoo:
         mhc_path = model_dir / "model.mhc"
 
         if not force and self._is_cached(name):
-            print(f"✓ Model '{name}' already cached at {model_dir}")
-            return model_dir
+            if verify_checksum:
+                if not self.verify_cached_model(name):
+                    print(f"⚠ Checksum mismatch for cached '{name}', re-downloading...")
+                else:
+                    print(f"✓ Model '{name}' already cached at {model_dir}")
+                    return model_dir
+            else:
+                print(f"✓ Model '{name}' already cached at {model_dir}")
+                return model_dir
 
         model_dir.mkdir(parents=True, exist_ok=True)
 

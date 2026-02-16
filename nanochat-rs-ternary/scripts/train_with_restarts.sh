@@ -2,7 +2,7 @@
 # Training script with automatic restarts to work around CUDA memory leak
 # Trains in 500-step chunks, restarting after each chunk to free GPU memory
 
-set -e
+set -eo pipefail
 
 # Configuration
 CHECKPOINT_DIR="${1:-checkpoints/rust-nano-d20}"
@@ -98,7 +98,7 @@ for ((chunk=1; chunk<=CHUNKS_NEEDED; chunk++)); do
         echo "✗ Chunk $chunk failed with exit code $EXIT_CODE"
 
         # Check if it's the expected OOM error
-        if grep -q "CUDA_ERROR_OUT_OF_MEMORY" "$CHECKPOINT_DIR/training.log" | tail -50; then
+        if grep -q "CUDA_ERROR_OUT_OF_MEMORY" "$CHECKPOINT_DIR/training.log"; then
             echo "  (CUDA OOM - expected with memory leak)"
             echo "  Checkpoint should be saved, continuing..."
 

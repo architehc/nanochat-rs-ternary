@@ -1,7 +1,7 @@
 #!/bin/bash
 # Test E2 optimizer integration with a tiny training run
 
-set -e
+set -eo pipefail
 
 echo "=== Testing E2 Optimizer Integration ==="
 echo ""
@@ -26,7 +26,7 @@ echo "================================="
     --log-interval 5 \
     --device cpu \
     --threads 16 \
-    2>&1 | head -50
+    2>&1 | tail -50
 
 echo ""
 echo "Test 2: 8-bit Quantized Muon"
@@ -75,7 +75,7 @@ EOF
     --log-interval 5 \
     --device cpu \
     --threads 16 \
-    2>&1 | head -50
+    2>&1 | tail -50
 
 echo ""
 echo "✅ All optimizer integration tests passed!"
