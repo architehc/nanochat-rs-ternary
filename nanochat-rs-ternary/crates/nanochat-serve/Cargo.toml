@@ -10,6 +10,7 @@ ternary-core = { path = "../ternary-core" }
 mhc-lite = { path = "../mhc-lite" }
 half = { workspace = true }
 rayon = { workspace = true }
+core_affinity = "0.8"
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"

@@ -265,13 +265,63 @@ impl NumaConfig {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn parse_linux_cpu_list(spec: &str) -> Vec<usize> {
+    let mut cpus = Vec::new();
+    for part in spec.trim().split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((start, end)) = part.split_once('-') {
+            let Ok(start) = start.trim().parse::<usize>() else {
+                continue;
+            };
+            let Ok(end) = end.trim().parse::<usize>() else {
+                continue;
+            };
+            if end < start {
+                continue;
+            }
+            cpus.extend(start..=end);
+        } else if let Ok(cpu) = part.parse::<usize>() {
+            cpus.push(cpu);
+        }
+    }
+    cpus.sort_unstable();
+    cpus.dedup();
+    cpus
+}
+
+#[cfg(target_os = "linux")]
+fn node_cpu_ids(node: usize) -> Vec<usize> {
+    let path = format!("/sys/devices/system/node/node{}/cpulist", node);
+    std::fs::read_to_string(path)
+        .map(|s| parse_linux_cpu_list(&s))
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn node_cpu_ids(_node: usize) -> Vec<usize> {
+    Vec::new()
+}
+
+fn pin_current_thread(cpu: usize) {
+    let Some(core_ids) = core_affinity::get_core_ids() else {
+        return;
+    };
+    if let Some(core) = core_ids.into_iter().find(|c| c.id == cpu) {
+        let _ = core_affinity::set_for_current(core);
+    }
+}
+
 /// NUMA-aware inference engine for dual-socket systems.
 ///
 /// Current behavior:
 /// - Detects NUMA topology and builds per-node thread pools.
 /// - Uses NUMA-aware weight allocation where available.
 /// - Dispatches prefill/decode work onto per-node thread pools.
-/// - Does not currently enforce CPU affinity pinning for those pools.
+/// - Attempts CPU affinity pinning for pools when node CPU topology is available.
 /// - Does not yet split a single forward pass per layer across nodes.
 pub struct NumaInferenceEngine {
     pub model: NanochatModel,
@@ -279,6 +329,8 @@ pub struct NumaInferenceEngine {
     pub numa_config: NumaConfig,
     /// Per-node rayon thread pools. On non-NUMA systems, contains a single pool.
     pub thread_pools: Vec<rayon::ThreadPool>,
+    /// Whether worker threads were pinned to node-local CPU sets.
+    pub thread_pinning_active: bool,
     /// Layer split point: layers 0..split on node 0, split..N on node 1
     pub layer_split: usize,
 }
@@ -292,19 +344,39 @@ impl NumaInferenceEngine {
 
         // Create per-node thread pools
         let mut thread_pools = Vec::new();
+        let mut thread_pinning_active = false;
         for node in 0..numa_config.num_nodes {
-            let n_threads = numa_config.threads_per_node;
-            let pool = rayon::ThreadPoolBuilder::new()
+            let node_cpus = node_cpu_ids(node);
+            let pinning_for_node = !node_cpus.is_empty();
+            if pinning_for_node {
+                thread_pinning_active = true;
+            }
+            let n_threads = if pinning_for_node {
+                node_cpus.len().min(numa_config.threads_per_node).max(1)
+            } else {
+                numa_config.threads_per_node
+            };
+
+            let node_cpus_for_handler = node_cpus.clone();
+            let mut builder = rayon::ThreadPoolBuilder::new()
                 .num_threads(n_threads)
-                .thread_name(move |idx| format!("numa-{}-worker-{}", node, idx))
-                .build()
-                .unwrap_or_else(|_| {
-                    // Fallback: build with default settings
-                    rayon::ThreadPoolBuilder::new()
-                        .num_threads(1)
-                        .build()
-                        .expect("failed to create fallback thread pool")
+                .thread_name(move |idx| format!("numa-{}-worker-{}", node, idx));
+            if pinning_for_node {
+                builder = builder.start_handler(move |idx| {
+                    if !node_cpus_for_handler.is_empty() {
+                        let cpu = node_cpus_for_handler[idx % node_cpus_for_handler.len()];
+                        pin_current_thread(cpu);
+                    }
                 });
+            }
+
+            let pool = builder.build().unwrap_or_else(|_| {
+                // Fallback: build with default settings
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(1)
+                    .build()
+                    .expect("failed to create fallback thread pool")
+            });
             thread_pools.push(pool);
         }
 
@@ -321,6 +393,7 @@ impl NumaInferenceEngine {
             eot_token,
             numa_config,
             thread_pools,
+            thread_pinning_active,
             layer_split,
         }
     }
@@ -452,10 +525,16 @@ impl NumaInferenceEngine {
     /// Report NUMA status for logging.
     pub fn numa_status(&self) -> String {
         if self.numa_config.numa_active {
+            let pinning = if self.thread_pinning_active {
+                "affinity pinning enabled"
+            } else {
+                "no affinity pinning"
+            };
             format!(
-                "NUMA active: {} nodes, {} threads/node, decode dispatch via pools (no affinity pinning), layer split metadata {}/{}",
+                "NUMA active: {} nodes, {} threads/node, decode dispatch via pools ({}), layer split metadata {}/{}",
                 self.numa_config.num_nodes,
                 self.numa_config.threads_per_node,
+                pinning,
                 self.layer_split,
                 self.model.config.n_layers,
             )
@@ -755,6 +834,13 @@ mod tests {
         );
         assert!(config.num_nodes >= 1);
         assert!(config.threads_per_node >= 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_linux_cpu_list() {
+        let cpus = parse_linux_cpu_list("0-3,8,10-11");
+        assert_eq!(cpus, vec![0, 1, 2, 3, 8, 10, 11]);
     }
 
     #[test]
