@@ -208,10 +208,39 @@ impl GgufFile {
                     .or_else(|| self.metadata.get("model.group_size"))
                 {
                     Some(GgufValue::U32(v)) => *v as usize,
-                    _ => 128,
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "missing group_size metadata for Q1_58 tensor '{}'",
+                                tensor.name
+                            ),
+                        ))
+                    }
                 };
+                if gs == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "group_size metadata must be > 0",
+                    ));
+                }
+                if !cols.is_multiple_of(4) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Q1_58 tensor cols {} must be divisible by 4", cols),
+                    ));
+                }
+                if !cols.is_multiple_of(gs) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Q1_58 tensor cols {} must be divisible by group_size {}",
+                            cols, gs
+                        ),
+                    ));
+                }
                 let kp = cols / 4;
-                let gprow = if gs > 0 { cols / gs } else { 1 };
+                let gprow = cols / gs;
                 let packed = rows.checked_mul(kp).ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidData, "packed size overflow")
                 })?;
@@ -1254,7 +1283,6 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
 
         // Write a GGUF with Q1_58 tensor but NO model.group_size metadata
-        // This should fall through to the _ => 128 default
         let mut f = File::create(&path).unwrap();
         f.write_all(&GGUF_MAGIC.to_le_bytes()).unwrap();
         f.write_all(&GGUF_VERSION.to_le_bytes()).unwrap();
@@ -1276,9 +1304,12 @@ mod tests {
 
         let gguf = GgufFile::open(&path).unwrap();
         assert_eq!(gguf.tensors.len(), 1);
-        // Should compute size using default group_size=128
-        let data = gguf.tensor_data(&gguf.tensors[0]).unwrap();
-        assert_eq!(data.len(), 128 + 16);
+        let err = gguf.tensor_data(&gguf.tensors[0]).unwrap_err().to_string();
+        assert!(
+            err.contains("missing group_size metadata"),
+            "unexpected error: {}",
+            err
+        );
 
         std::fs::remove_file(&path).ok();
     }

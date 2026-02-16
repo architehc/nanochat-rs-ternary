@@ -212,6 +212,13 @@ impl EngineHandle {
             EngineHandle::Numa(engine) => engine.model.last_forward_was_degraded(),
         }
     }
+
+    pub fn last_forward_error_message(&self) -> Option<String> {
+        match self {
+            EngineHandle::Standard(engine) => engine.model.last_forward_error_message(),
+            EngineHandle::Numa(engine) => engine.model.last_forward_error_message(),
+        }
+    }
 }
 
 // ============================================================

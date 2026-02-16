@@ -247,8 +247,18 @@ async fn non_stream_completion(
 
             // Check for degraded state after generation
             let degraded = engine.last_forward_was_degraded();
+            let degraded_reason = engine.last_forward_error_message();
             if degraded {
-                eprintln!("WARNING: Non-streaming generation had degraded outputs (LoopLM errors)");
+                if let Some(reason) = degraded_reason.as_deref() {
+                    eprintln!(
+                        "WARNING: Non-streaming generation had degraded outputs: {}",
+                        reason
+                    );
+                } else {
+                    eprintln!(
+                        "WARNING: Non-streaming generation had degraded outputs (LoopLM errors)"
+                    );
+                }
             }
 
             let text = state.tokenizer.decode(&output_ids, true).map_err(|err| {
@@ -256,12 +266,13 @@ async fn non_stream_completion(
                 "failed to decode generated tokens".to_string()
             })?;
 
-            Ok((text, prompt_len, output_len, degraded))
+            Ok((text, prompt_len, output_len, degraded, degraded_reason))
         }),
     )
     .await;
 
-    let (generated_text, prompt_tokens, completion_tokens, degraded) = match result {
+    let (generated_text, prompt_tokens, completion_tokens, degraded, degraded_reason) = match result
+    {
         Ok(Ok(Ok(data))) => data,
         Ok(Ok(Err(err))) => {
             // Track error
@@ -289,7 +300,16 @@ async fn non_stream_completion(
     metrics::TOKENS_GENERATED.inc_by(completion_tokens as f64);
 
     if degraded {
-        eprintln!("WARNING: non-stream generation degraded but returning standard finish reason");
+        if let Some(reason) = degraded_reason.as_deref() {
+            eprintln!(
+                "WARNING: non-stream generation degraded ({}) but returning standard finish reason",
+                reason
+            );
+        } else {
+            eprintln!(
+                "WARNING: non-stream generation degraded but returning standard finish reason"
+            );
+        }
     }
 
     Json(ChatCompletionResponse {
@@ -555,10 +575,22 @@ async fn stream_completion(
                 }
             }
         });
+        let degraded_reason = if had_degraded {
+            engine.last_forward_error_message()
+        } else {
+            None
+        };
 
         // Log if any degraded outputs occurred
         if had_degraded {
-            eprintln!("WARNING: Streaming response had degraded outputs (LoopLM errors)");
+            if let Some(reason) = degraded_reason.as_deref() {
+                eprintln!(
+                    "WARNING: Streaming response had degraded outputs: {}",
+                    reason
+                );
+            } else {
+                eprintln!("WARNING: Streaming response had degraded outputs (LoopLM errors)");
+            }
         }
         if timed_out {
             return;

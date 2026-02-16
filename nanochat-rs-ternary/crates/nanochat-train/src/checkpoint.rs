@@ -5,9 +5,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::TrainConfig;
 
+const CHECKPOINT_VERSION_CURRENT: u32 = 1;
+
+fn default_checkpoint_version() -> u32 {
+    0 // Legacy checkpoints written before explicit versioning.
+}
+
 /// Metadata stored alongside model weights.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointMeta {
+    #[serde(default = "default_checkpoint_version")]
+    pub version: u32,
     pub config: TrainConfig,
     pub step: usize,
     pub loss: f64,
@@ -33,6 +41,7 @@ pub fn save_checkpoint(
 
     // Save metadata
     let meta = CheckpointMeta {
+        version: CHECKPOINT_VERSION_CURRENT,
         config: config.clone(),
         step,
         loss,
@@ -53,6 +62,13 @@ pub fn load_checkpoint(
     // Load metadata
     let meta_json = std::fs::read_to_string(format!("{}/meta.json", dir))?;
     let meta: CheckpointMeta = serde_json::from_str(&meta_json)?;
+    if meta.version > CHECKPOINT_VERSION_CURRENT {
+        return Err(format!(
+            "unsupported checkpoint metadata version {} (max supported {})",
+            meta.version, CHECKPOINT_VERSION_CURRENT
+        )
+        .into());
+    }
 
     // Load weights
     let mut varmap = VarMap::new();
@@ -153,5 +169,6 @@ mod tests {
         assert!((meta.loss - std::f64::consts::PI).abs() < 1e-10);
         assert_eq!(meta.config.dim, 64);
         assert_eq!(meta.config.n_layers, 2);
+        assert_eq!(meta.version, CHECKPOINT_VERSION_CURRENT);
     }
 }
