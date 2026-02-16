@@ -162,6 +162,85 @@ impl DeltaNetAttention {
         // Output projection
         self.wo.forward(&attn_out, out);
     }
+
+    /// Batched forward pass for DeltaNet recurrent attention.
+    ///
+    /// This remains recurrent across sequence positions (stateful by design),
+    /// but reuses temporary buffers to avoid per-token allocations.
+    pub fn forward_batch(
+        &self,
+        x_batch: &[f32],
+        seq_len: usize,
+        state: &mut DeltaNetState,
+        out_batch: &mut [f32],
+    ) {
+        let dim = self.wq.cols;
+        let n_heads = self.n_heads;
+        let hd = self.head_dim;
+        assert_eq!(x_batch.len(), seq_len * dim);
+        assert_eq!(out_batch.len(), seq_len * dim);
+        assert_eq!(state.n_heads, n_heads);
+        assert_eq!(state.head_dim, hd);
+
+        let mut q = vec![0.0f32; dim];
+        let mut k = vec![0.0f32; dim];
+        let mut v = vec![0.0f32; dim];
+        let mut k_norm = vec![0.0f32; dim];
+        let mut beta_raw = vec![0.0f32; n_heads];
+        let mut attn_out = vec![0.0f32; dim];
+        let mut sk = vec![0.0f32; hd];
+
+        for t in 0..seq_len {
+            let x = &x_batch[t * dim..(t + 1) * dim];
+            let out = &mut out_batch[t * dim..(t + 1) * dim];
+
+            self.wq.forward(x, &mut q);
+            self.wk.forward(x, &mut k);
+            self.wv.forward(x, &mut v);
+            self.w_beta.forward(x, &mut beta_raw);
+
+            for b in beta_raw.iter_mut() {
+                *b = sigmoid(*b);
+            }
+
+            k_norm.copy_from_slice(&k);
+            for h in 0..n_heads {
+                let offset = h * hd;
+                l2_normalize(&mut k_norm[offset..offset + hd]);
+            }
+
+            attn_out.fill(0.0);
+            for (h, &beta) in beta_raw.iter().enumerate().take(n_heads) {
+                let h_offset = h * hd;
+                let s_offset = h * hd * hd;
+
+                for (i, sk_val) in sk.iter_mut().enumerate() {
+                    let mut sum = 0.0f32;
+                    for j in 0..hd {
+                        sum += state.s[s_offset + i * hd + j] * k_norm[h_offset + j];
+                    }
+                    *sk_val = sum;
+                }
+
+                for i in 0..hd {
+                    let diff_i = v[h_offset + i] - sk[i];
+                    for j in 0..hd {
+                        state.s[s_offset + i * hd + j] += beta * diff_i * k_norm[h_offset + j];
+                    }
+                }
+
+                for i in 0..hd {
+                    let mut sum = 0.0f32;
+                    for j in 0..hd {
+                        sum += state.s[s_offset + i * hd + j] * q[h_offset + j];
+                    }
+                    attn_out[h_offset + i] = sum;
+                }
+            }
+
+            self.wo.forward(&attn_out, out);
+        }
+    }
 }
 
 /// Sigmoid activation: 1 / (1 + exp(-x))
@@ -321,5 +400,43 @@ mod tests {
         l2_normalize(&mut v);
         // Should not panic, should produce zeros (or near-zero due to epsilon)
         assert!(v.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn test_deltanet_forward_batch_matches_stepwise() {
+        let config = deltanet_test_config();
+        let attn = DeltaNetAttention::new_random(&config);
+        let seq_len = 6usize;
+        let dim = config.dim;
+
+        let mut x_batch = vec![0.0f32; seq_len * dim];
+        for t in 0..seq_len {
+            for d in 0..dim {
+                x_batch[t * dim + d] = ((t * 97 + d * 13) % 200) as f32 / 100.0 - 1.0;
+            }
+        }
+
+        let mut state_step = DeltaNetState::new(config.n_heads, config.head_dim());
+        let mut out_step = vec![0.0f32; seq_len * dim];
+        for t in 0..seq_len {
+            let x = &x_batch[t * dim..(t + 1) * dim];
+            let out = &mut out_step[t * dim..(t + 1) * dim];
+            attn.forward(x, &mut state_step, out);
+        }
+
+        let mut state_batch = DeltaNetState::new(config.n_heads, config.head_dim());
+        let mut out_batch = vec![0.0f32; seq_len * dim];
+        attn.forward_batch(&x_batch, seq_len, &mut state_batch, &mut out_batch);
+
+        let max_diff = out_step
+            .iter()
+            .zip(out_batch.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_diff < 1e-5,
+            "batch DeltaNet output deviates from stepwise output: {}",
+            max_diff
+        );
     }
 }

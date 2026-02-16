@@ -25,6 +25,16 @@ struct BatchWorkspace {
     residual_tmp: Vec<f32>,
 }
 
+#[derive(Debug, Default)]
+struct TokenWorkspace {
+    attn_in: Vec<f32>,
+    normed: Vec<f32>,
+    attn_out: Vec<f32>,
+    ffn_in: Vec<f32>,
+    ffn_out: Vec<f32>,
+    residual_tmp: Vec<f32>,
+}
+
 /// Attention layer variant -- standard MHA/GQA or DeltaNet recurrent.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
@@ -75,6 +85,7 @@ pub struct TransformerBlock {
     pub attention: AttentionLayer,
     pub ffn: FfnLayer,
     pub dim: usize,
+    token_workspace: Mutex<TokenWorkspace>,
     batch_workspace: Mutex<BatchWorkspace>,
 }
 
@@ -136,6 +147,7 @@ impl TransformerBlock {
             attention,
             ffn,
             dim,
+            token_workspace: Mutex::new(TokenWorkspace::default()),
             batch_workspace: Mutex::new(BatchWorkspace::default()),
         }
     }
@@ -215,44 +227,60 @@ impl TransformerBlock {
         let n_streams = x_expanded.len() / dim;
         assert_eq!(x_expanded.len(), n_streams * dim);
 
+        let mut ws = self
+            .token_workspace
+            .lock()
+            .expect("token_workspace lock poisoned");
+        let TokenWorkspace {
+            attn_in,
+            normed,
+            attn_out,
+            ffn_in,
+            ffn_out,
+            residual_tmp,
+        } = &mut *ws;
+        attn_in.resize(dim, 0.0);
+        normed.resize(dim, 0.0);
+        attn_out.resize(dim, 0.0);
+        ffn_in.resize(dim, 0.0);
+        ffn_out.resize(dim, 0.0);
+        residual_tmp.resize(x_expanded.len(), 0.0);
+
         // === Attention sub-layer ===
         // 1. Prepare input: mix streams -> single
-        let attn_in = self.mhc_attn.prepare_input(x_expanded, dim);
+        mhc_prepare_input_into(&self.mhc_attn, x_expanded, dim, attn_in);
 
         // 2. RMSNorm
-        let mut normed = vec![0.0f32; dim];
-        self.norm_attn.forward(&attn_in, &mut normed);
+        self.norm_attn.forward(attn_in, normed);
 
         // 3. Attention (dispatch based on layer type)
-        let mut attn_out = vec![0.0f32; dim];
         match (&self.attention, attn_state) {
             (AttentionLayer::Standard(attn), AttentionState::Kv(cache)) => {
-                attn.forward(&normed, cache, rope, pos, &mut attn_out);
+                attn.forward(normed, cache, rope, pos, attn_out);
             }
             (AttentionLayer::DeltaNet(attn), AttentionState::Recurrent(state)) => {
-                attn.forward(&normed, state, &mut attn_out);
+                attn.forward(normed, state, attn_out);
             }
             _ => unreachable!("attention layer type and state type mismatch"),
         }
 
         // 4. mHC residual update
-        let x_new = self.mhc_attn.apply(x_expanded, &attn_out, dim);
-        x_expanded.copy_from_slice(&x_new);
+        mhc_apply_into(&self.mhc_attn, x_expanded, attn_out, dim, residual_tmp);
+        x_expanded.copy_from_slice(residual_tmp);
 
         // === FFN sub-layer ===
         // 1. Prepare input
-        let ffn_in = self.mhc_ffn.prepare_input(x_expanded, dim);
+        mhc_prepare_input_into(&self.mhc_ffn, x_expanded, dim, ffn_in);
 
         // 2. RMSNorm
-        self.norm_ffn.forward(&ffn_in, &mut normed);
+        self.norm_ffn.forward(ffn_in, normed);
 
         // 3. FFN
-        let mut ffn_out = vec![0.0f32; dim];
-        self.ffn.forward(&normed, &mut ffn_out);
+        self.ffn.forward(normed, ffn_out);
 
         // 4. mHC residual update
-        let x_new = self.mhc_ffn.apply(x_expanded, &ffn_out, dim);
-        x_expanded.copy_from_slice(&x_new);
+        mhc_apply_into(&self.mhc_ffn, x_expanded, ffn_out, dim, residual_tmp);
+        x_expanded.copy_from_slice(residual_tmp);
     }
 
     /// Batched forward pass for prefill: process `seq_len` tokens.
@@ -322,12 +350,7 @@ impl TransformerBlock {
                 );
             }
             (AttentionLayer::DeltaNet(attn), AttentionState::Recurrent(state)) => {
-                // DeltaNet processes tokens one at a time (recurrent)
-                for t in 0..seq_len {
-                    let normed = &normed_batch[t * dim..(t + 1) * dim];
-                    let out = &mut attn_out_batch[t * dim..(t + 1) * dim];
-                    attn.forward(normed, state, out);
-                }
+                attn.forward_batch(normed_batch, seq_len, state, attn_out_batch);
             }
             _ => unreachable!("attention layer type and state type mismatch"),
         }
