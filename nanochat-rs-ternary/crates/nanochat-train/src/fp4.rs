@@ -43,29 +43,45 @@ impl FP4Trainer {
         Ok(())
     }
 
-    /// Quantize tensor values with a device-native FP4-like lattice.
+    /// Quantize tensor values using nearest-neighbor lookup into E2M1 levels.
     ///
-    /// The quantizer uses per-token (last-dimension) dynamic scaling and
-    /// symmetric signed 4-bit levels in `[-7, 7]` to avoid host sync loops.
+    /// The quantizer uses per-token (last-dimension) dynamic scaling with
+    /// the E2M1 FP4 table `[-6, -4, -3, -2, -1.5, -1, -0.5, 0, 0, 0.5, 1, 1.5, 2, 3, 4, 6]`.
+    /// Each value is mapped to the nearest E2M1 level after scaling, then
+    /// dequantized back. This produces a proper FP4 lattice instead of a
+    /// uniform INT4 grid.
     pub fn quantize_fp4(&self, tensor: &Tensor) -> Result<Tensor> {
         let last_dim = tensor.dims().len().saturating_sub(1);
 
-        // Per-token absmax scaling keeps quantization stable across batches.
+        // Per-token absmax scaling; max E2M1 magnitude is 6.0.
         let absmax = tensor.abs()?.max_keepdim(last_dim)?.clamp(1e-8, f64::MAX)?;
-        let scale = (&absmax / 7.0)?;
+        let scale = (&absmax / 6.0)?; // max E2M1 value is 6.0
         let scaled = tensor.broadcast_div(&scale)?;
 
-        let rounded = if self.stochastic_rounding {
-            // Uniform-like noise (via clipped normal) for unbiased rounding.
-            let noise = Tensor::randn(0.0f32, 0.28867513, tensor.dims(), tensor.device())?
-                .clamp(-0.5, 0.5)?;
-            (&scaled + &noise)?.round()?
-        } else {
-            scaled.round()?
-        };
+        // Pull to host, snap each element to nearest E2M1 level, push back.
+        // This is fine for training (small activation tensors); production
+        // inference would use a GPU kernel.
+        let flat = scaled.flatten_all()?.to_vec1::<f32>()?;
+        let snapped: Vec<f32> = flat
+            .iter()
+            .map(|&v| {
+                let mut best = self.fp4_table[0];
+                let mut best_dist = (v - best).abs();
+                for &level in &self.fp4_table[1..] {
+                    let dist = (v - level).abs();
+                    if dist < best_dist {
+                        best = level;
+                        best_dist = dist;
+                    }
+                }
+                best
+            })
+            .collect();
 
-        let quant_i4 = rounded.clamp(-7.0, 7.0)?;
-        quant_i4.broadcast_mul(&scale)
+        let snapped_tensor = Tensor::from_vec(snapped, scaled.shape(), tensor.device())?;
+        // Reshape back to original shape (flatten_all may lose shape)
+        let snapped_reshaped = snapped_tensor.reshape(tensor.shape())?;
+        snapped_reshaped.broadcast_mul(&scale)
     }
 }
 

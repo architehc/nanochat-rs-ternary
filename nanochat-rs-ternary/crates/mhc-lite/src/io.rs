@@ -115,6 +115,16 @@ pub fn save_mhc_file<P: AsRef<Path>>(
     n_streams: u32,
     layers: &[MhcLayerParams],
 ) -> io::Result<()> {
+    for layer in layers {
+        match (n_streams, layer) {
+            (2, MhcLayerParams::N2(_)) => {},
+            (4, MhcLayerParams::N4(_)) => {},
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                format!("n_streams={} but layer variant is {}", n_streams,
+                        if matches!(layer, MhcLayerParams::N2(_)) { "N2" } else { "N4" }))),
+        }
+    }
+
     let mut file = File::create(path)?;
 
     // Write header

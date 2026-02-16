@@ -155,6 +155,7 @@ pub struct Trainer {
 
     // E3 optimizations
     mtp: Option<MultiTokenPrediction>, // Multi-Token Prediction (15-20% data efficiency)
+    mtp_varmap: Option<VarMap>,        // Separate VarMap for MTP parameters
     collider: Option<Collider>,        // Token filtering (35% faster backprop)
     fp4: Option<FP4Trainer>,           // Optional FP4 mixed-precision path
 
@@ -174,7 +175,17 @@ impl Trainer {
             .map_err(|e| candle_core::Error::Msg(format!("optimizer state serialize: {}", e)))?;
         let path = format!("{}/optimizer_state.bin", checkpoint_dir);
         std::fs::write(&path, bytes)
-            .map_err(|e| candle_core::Error::Msg(format!("optimizer state write {}: {}", path, e)))
+            .map_err(|e| candle_core::Error::Msg(format!("optimizer state write {}: {}", path, e)))?;
+
+        // Save MTP parameters if present
+        if let Some(ref mtp_vm) = self.mtp_varmap {
+            let mtp_path = format!("{}/mtp.safetensors", checkpoint_dir);
+            mtp_vm.save(&mtp_path).map_err(|e| {
+                candle_core::Error::Msg(format!("MTP state save {}: {}", mtp_path, e))
+            })?;
+        }
+
+        Ok(())
     }
 
     fn load_optimizer_state(&mut self, checkpoint_dir: &str) -> Result<()> {
@@ -217,6 +228,20 @@ impl Trainer {
         self.muon.import_state(&state.muon)?;
         self.lion.import_state(&state.lion)?;
         tracing::info!("Optimizer state restored from {}", bin_path);
+
+        // Load MTP parameters if present
+        if let Some(ref mut mtp_vm) = self.mtp_varmap {
+            let mtp_path = format!("{}/mtp.safetensors", checkpoint_dir);
+            if std::path::Path::new(&mtp_path).exists() {
+                mtp_vm.load(&mtp_path).map_err(|e| {
+                    candle_core::Error::Msg(format!("MTP state load {}: {}", mtp_path, e))
+                })?;
+                tracing::info!("MTP state restored from {}", mtp_path);
+            } else {
+                tracing::info!("MTP state file not found at {}; using fresh MTP parameters", mtp_path);
+            }
+        }
+
         Ok(())
     }
 
@@ -289,11 +314,11 @@ impl Trainer {
             base_lr_lion,
             config.lion_betas.0,
             config.lion_betas.1,
-            config.weight_decay,
+            0.0, // no weight decay for Lion group (matches new() path)
         )?;
 
         // E3 optimizations: Multi-Token Prediction
-        let mtp = if let Some(mtp_vm) = mtp_varmap {
+        let (mtp, mtp_varmap_stored) = if let Some(mtp_vm) = mtp_varmap {
             let mtp_vb = candle_nn::VarBuilder::from_varmap(&mtp_vm, DType::F32, &device);
             let mtp_module = MultiTokenPrediction::new(
                 mtp_vb,
@@ -302,9 +327,9 @@ impl Trainer {
                 config.mtp_n_tokens,
             )?;
             println!("  MTP resumed: {} future tokens", config.mtp_n_tokens);
-            Some(mtp_module)
+            (Some(mtp_module), Some(mtp_vm))
         } else {
-            None
+            (None, None)
         };
 
         // E3 optimizations: Collider token filtering
@@ -345,6 +370,7 @@ impl Trainer {
             base_lr_muon,
             base_lr_lion,
             mtp,
+            mtp_varmap: mtp_varmap_stored,
             collider,
             fp4,
             accum_grads: None,
@@ -430,7 +456,7 @@ impl Trainer {
         let base_lr_lion = config.mhc_lr;
 
         // E3 optimizations: Multi-Token Prediction
-        let mtp = if let Some(mtp_vm) = mtp_varmap {
+        let (mtp, mtp_varmap_stored) = if let Some(mtp_vm) = mtp_varmap {
             let mtp_vb = candle_nn::VarBuilder::from_varmap(&mtp_vm, DType::F32, &device);
             let mtp_module = MultiTokenPrediction::new(
                 mtp_vb,
@@ -439,9 +465,9 @@ impl Trainer {
                 config.mtp_n_tokens,
             )?;
             println!("  MTP enabled: {} future tokens", config.mtp_n_tokens);
-            Some(mtp_module)
+            (Some(mtp_module), Some(mtp_vm))
         } else {
-            None
+            (None, None)
         };
 
         // E3 optimizations: Collider token filtering
@@ -471,6 +497,11 @@ impl Trainer {
             None
         };
 
+        // Warn if async loader is configured but not yet integrated
+        if config.use_async_loader {
+            tracing::warn!("use_async_loader is configured but not yet integrated into the training loop; using synchronous loading");
+        }
+
         Ok(Self {
             model,
             varmap,
@@ -482,6 +513,7 @@ impl Trainer {
             base_lr_muon,
             base_lr_lion,
             mtp,
+            mtp_varmap: mtp_varmap_stored,
             collider,
             fp4,
             accum_grads: None,
@@ -595,11 +627,11 @@ impl Trainer {
 
             // Compute MTP loss
             if !mtp_preds_flat.is_empty() {
-                let mtp_loss_result = mtp.compute_loss(&mtp_preds_flat, &mtp_targets_flat)?;
-                let mtp_weighted = mtp_loss_result.total * (self.config.mtp_weight as f32);
-                // Create scalar tensor (shape []) to match main loss
-                let mtp_tensor = Tensor::new(mtp_weighted, &self.device)?;
-                loss = (loss + mtp_tensor)?;
+                let (mtp_loss_info, mtp_loss_tensor) = mtp.compute_loss(&mtp_preds_flat, &mtp_targets_flat)?;
+                // Scale by MTP weight and add directly to loss (preserves gradient flow)
+                let mtp_weighted_tensor = (mtp_loss_tensor * self.config.mtp_weight)?;
+                loss = (loss + mtp_weighted_tensor)?;
+                let _ = mtp_loss_info; // diagnostic info available for logging if needed
             }
         }
 

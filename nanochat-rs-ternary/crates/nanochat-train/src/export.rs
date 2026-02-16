@@ -4,6 +4,7 @@ use candle_core::Result;
 
 use crate::config::TrainConfig;
 use crate::model::NanochatTrainModel;
+use crate::quantize::dequantize_ternary;
 
 /// Export trained model weights to GGUF format.
 ///
@@ -101,14 +102,17 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
                         block: &crate::block::TransformerBlockTrain|
      -> Result<()> {
         // Attention ternary weights
+        // Dequantize using original per-group scales so PlanarWeights::from_row_major
+        // can recompute accurate scales instead of seeing only {-1,0,+1} magnitudes.
         for (name, layer) in [
             ("attention.wq", &block.attention.wq),
             ("attention.wk", &block.attention.wk),
             ("attention.wv", &block.attention.wv),
             ("attention.wo", &block.attention.wo),
         ] {
-            let (w_ternary, _scales) = layer.get_ternary_weights()?;
-            let w_flat = w_ternary.flatten_all()?.to_vec1::<f32>()?;
+            let (w_ternary, scales) = layer.get_ternary_weights()?;
+            let w_deq = dequantize_ternary(&w_ternary, &scales, layer.group_size)?;
+            let w_flat = w_deq.flatten_all()?.to_vec1::<f32>()?;
             let rows = layer.out_features;
             let cols = layer.in_features;
 
@@ -122,8 +126,9 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
             ("ffn.w_up", &block.ffn.w_up),
             ("ffn.w_down", &block.ffn.w_down),
         ] {
-            let (w_ternary, _scales) = layer.get_ternary_weights()?;
-            let w_flat = w_ternary.flatten_all()?.to_vec1::<f32>()?;
+            let (w_ternary, scales) = layer.get_ternary_weights()?;
+            let w_deq = dequantize_ternary(&w_ternary, &scales, layer.group_size)?;
+            let w_flat = w_deq.flatten_all()?.to_vec1::<f32>()?;
             let rows = layer.out_features;
             let cols = layer.in_features;
 
@@ -159,15 +164,16 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
         if let Some(ref loop_block) = model.shared_loop_block {
             let prefix = "shared_loop";
 
-            // Attention weights
+            // Attention weights (dequantize with original scales)
             for (name, layer) in [
                 ("attention.wq", &loop_block.wq),
                 ("attention.wk", &loop_block.wk),
                 ("attention.wv", &loop_block.wv),
                 ("attention.wo", &loop_block.wo),
             ] {
-                let (w_ternary, _scales) = layer.get_ternary_weights()?;
-                let w_flat = w_ternary.flatten_all()?.to_vec1::<f32>()?;
+                let (w_ternary, scales) = layer.get_ternary_weights()?;
+                let w_deq = dequantize_ternary(&w_ternary, &scales, layer.group_size)?;
+                let w_flat = w_deq.flatten_all()?.to_vec1::<f32>()?;
                 let rows = layer.out_features;
                 let cols = layer.in_features;
 
@@ -175,10 +181,11 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
                 writer.add_ternary_tensor(&format!("{}.{}.weight", prefix, name), &pw);
             }
 
-            // Global gates
+            // Global gates (dequantize with original scales)
             for (name, layer) in [("g_qk", &loop_block.g_qk), ("g_ffn", &loop_block.g_ffn)] {
-                let (w_ternary, _scales) = layer.get_ternary_weights()?;
-                let w_flat = w_ternary.flatten_all()?.to_vec1::<f32>()?;
+                let (w_ternary, scales) = layer.get_ternary_weights()?;
+                let w_deq = dequantize_ternary(&w_ternary, &scales, layer.group_size)?;
+                let w_flat = w_deq.flatten_all()?.to_vec1::<f32>()?;
                 let rows = layer.out_features;
                 let cols = layer.in_features;
 
@@ -186,14 +193,15 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
                 writer.add_ternary_tensor(&format!("{}.{}.weight", prefix, name), &pw);
             }
 
-            // FFN weights
+            // FFN weights (dequantize with original scales)
             for (name, layer) in [
                 ("ffn.w_gate", &loop_block.w_gate),
                 ("ffn.w_up", &loop_block.w_up),
                 ("ffn.w_down", &loop_block.w_down),
             ] {
-                let (w_ternary, _scales) = layer.get_ternary_weights()?;
-                let w_flat = w_ternary.flatten_all()?.to_vec1::<f32>()?;
+                let (w_ternary, scales) = layer.get_ternary_weights()?;
+                let w_deq = dequantize_ternary(&w_ternary, &scales, layer.group_size)?;
+                let w_flat = w_deq.flatten_all()?.to_vec1::<f32>()?;
                 let rows = layer.out_features;
                 let cols = layer.in_features;
 

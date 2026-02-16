@@ -116,7 +116,7 @@ fn e2e_generate_greedy() {
         seed: None,
     };
 
-    let output = engine.generate(&[1, 5, 10], &params);
+    let (output, _finish_reason) = engine.generate(&[1, 5, 10], &params);
     assert!(!output.is_empty(), "greedy generation produced no tokens");
     assert!(output.len() <= 10, "exceeded max_tokens");
 
@@ -138,7 +138,7 @@ fn e2e_generate_with_temperature() {
         seed: Some(42),
     };
 
-    let output = engine.generate(&[1, 2, 3], &params);
+    let (output, _finish_reason) = engine.generate(&[1, 2, 3], &params);
     assert!(output.len() <= 10);
     for &t in &output {
         assert!((t as usize) < 256, "invalid token: {}", t);
@@ -161,8 +161,8 @@ fn e2e_generate_deterministic() {
         seed: None,
     };
 
-    let output_a = engine_a.generate(&[1, 10], &params);
-    let output_b = engine_b.generate(&[1, 10], &params);
+    let (output_a, _) = engine_a.generate(&[1, 10], &params);
+    let (output_b, _) = engine_b.generate(&[1, 10], &params);
 
     assert_eq!(
         output_a, output_b,
@@ -176,7 +176,7 @@ fn e2e_generate_empty_prompt() {
     let mut engine = InferenceEngine::new_random(config);
 
     let params = SamplingParams::default();
-    let output = engine.generate(&[], &params);
+    let (output, _finish_reason) = engine.generate(&[], &params);
     assert!(
         output.is_empty(),
         "empty prompt should produce empty output"
@@ -194,7 +194,7 @@ fn e2e_generate_single_token_prompt() {
         ..Default::default()
     };
 
-    let output = engine.generate(&[42], &params);
+    let (output, _finish_reason) = engine.generate(&[42], &params);
     assert!(output.len() <= 3);
 }
 

@@ -177,7 +177,15 @@ pub fn gemv(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
     );
     assert!(
         (pw.scales_rm.as_ptr() as usize).is_multiple_of(128),
-        "scales not 128B aligned"
+        "scales_rm not 128B aligned"
+    );
+    assert!(
+        (pw.data_colmaj.as_ptr() as usize).is_multiple_of(128),
+        "data_colmaj not 128B aligned"
+    );
+    assert!(
+        (pw.scales_gm.as_ptr() as usize).is_multiple_of(128),
+        "scales_gm not 128B aligned"
     );
 
     let c_pw = to_c_struct(pw);

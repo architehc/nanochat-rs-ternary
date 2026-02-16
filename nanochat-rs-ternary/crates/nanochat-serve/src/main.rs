@@ -94,6 +94,7 @@ async fn main() {
     });
 
     let elapsed = start.elapsed();
+    nanochat_serve::metrics::MODEL_LOAD_TIME.set(elapsed.as_secs_f64());
     let config = &model.config;
     tracing::info!(
         "Model loaded in {:.2}s: dim={}, layers={}, heads={}, vocab={}, params={}",
@@ -247,5 +248,11 @@ async fn main() {
     tracing::info!("  GET  /v1/models");
     tracing::info!("  GET  /health");
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            tokio::signal::ctrl_c().await.ok();
+            tracing::info!("Shutting down gracefully...");
+        })
+        .await
+        .unwrap();
 }

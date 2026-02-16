@@ -59,7 +59,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(chat_ui))
         .route("/health", get(health))
-        .route("/metrics", get(prometheus_metrics))
+        .route("/metrics", get(prometheus_metrics_authed))
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .layer(DefaultBodyLimit::max(1024 * 1024))
@@ -75,22 +75,29 @@ fn unix_timestamp_secs() -> u64 {
         .as_secs()
 }
 
-fn error_response(model: String, message: String) -> Json<ChatCompletionResponse> {
-    Json(ChatCompletionResponse {
-        id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
-        object: "chat.completion".to_string(),
-        created: unix_timestamp_secs(),
-        model,
-        choices: vec![ChatChoice {
-            index: 0,
-            message: ChatMessage {
-                role: Role::Assistant,
-                content: format!("Error: {}", message),
-            },
-            finish_reason: "error".to_string(),
-        }],
-        usage: Usage::new(0, 0),
-    })
+/// Create a JSON error response with proper HTTP status code.
+fn error_json(status: StatusCode, message: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        status,
+        Json(serde_json::json!({
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "code": null
+            }
+        })),
+    )
+}
+
+/// Constant-time string comparison to prevent timing attacks on API keys.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 fn unauthorized_response() -> Response {
@@ -114,7 +121,7 @@ fn is_authorized(headers: &HeaderMap, api_key: Option<&str>) -> bool {
         .map(str::trim);
     if let Some(auth) = bearer {
         let expected_bearer = format!("Bearer {}", expected);
-        if auth == expected_bearer {
+        if constant_time_eq(auth, &expected_bearer) {
             return true;
         }
     }
@@ -123,7 +130,7 @@ fn is_authorized(headers: &HeaderMap, api_key: Option<&str>) -> bool {
         .get("x-api-key")
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
-        .is_some_and(|provided| provided == expected)
+        .is_some_and(|provided| constant_time_eq(provided, expected))
 }
 
 async fn chat_ui() -> impl IntoResponse {
@@ -141,8 +148,14 @@ async fn health() -> &'static str {
     "ok"
 }
 
-async fn prometheus_metrics() -> impl IntoResponse {
-    metrics::render_metrics()
+async fn prometheus_metrics_authed(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_authorized(&headers, state.api_key.as_deref()) {
+        return unauthorized_response();
+    }
+    metrics::render_metrics().into_response()
 }
 
 async fn list_models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -181,10 +194,7 @@ async fn chat_completions(
 async fn non_stream_completion(
     state: Arc<AppState>,
     req: ChatCompletionRequest,
-) -> Json<ChatCompletionResponse> {
-    // Metrics instrumentation
-    let _active_guard = metrics::ActiveRequestGuard::new();
-    let _timer = metrics::LatencyTimer::new();
+) -> Response {
     metrics::INFERENCE_REQUESTS.inc();
 
     let model_name = state.model_name.clone();
@@ -192,7 +202,7 @@ async fn non_stream_completion(
         Ok(prompt) => prompt,
         Err(err) => {
             metrics::INFERENCE_ERRORS.inc();
-            return error_response(model_name, err);
+            return error_json(StatusCode::BAD_REQUEST, &err).into_response();
         }
     };
     let params = req.to_sampling_params();
@@ -202,12 +212,19 @@ async fn non_stream_completion(
     let result = tokio::time::timeout(
         request_timeout,
         tokio::task::spawn_blocking(move || {
+            // Metrics guards live inside spawn_blocking so they measure
+            // the actual generation duration and stay alive until completion.
+            let _active_guard = metrics::ActiveRequestGuard::new();
+            let _timer = metrics::LatencyTimer::new();
+
+            let gen_start = Instant::now();
+
             let prompt_ids = state
                 .tokenizer
                 .encode(prompt.as_str(), false)
                 .map_err(|err| {
                     eprintln!("ERROR: tokenizer encode failed: {}", err);
-                    "failed to tokenize prompt".to_string()
+                    (StatusCode::INTERNAL_SERVER_ERROR, "failed to tokenize prompt".to_string())
                 })?
                 .get_ids()
                 .to_vec();
@@ -215,35 +232,42 @@ async fn non_stream_completion(
 
             // Validate prompt length to prevent RoPE assert panics
             if prompt_len >= max_seq_len {
-                return Err(format!(
+                return Err((StatusCode::BAD_REQUEST, format!(
                     "Prompt too long: {} tokens exceeds model limit of {}",
                     prompt_len, max_seq_len
-                ));
+                )));
             }
 
             let vs = state.vocab_size;
             if prompt_ids.iter().any(|&t| t >= vs) {
-                return Err(format!(
+                return Err((StatusCode::BAD_REQUEST, format!(
                     "tokenizer produced token id outside model vocab (vocab_size={})",
                     vs
-                ));
+                )));
             }
             let token_ids = prompt_ids;
             if state.engines.is_empty() {
-                return Err("no inference engines are available".to_string());
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, "no inference engines are available".to_string()));
             }
             let engine_idx =
                 state.next_engine.fetch_add(1, Ordering::Relaxed) % state.engines.len();
             let engine_lock = state
                 .engines
                 .get(engine_idx)
-                .ok_or_else(|| "engine index out of range".to_string())?;
+                .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "engine index out of range".to_string()))?;
 
             let mut engine = engine_lock
                 .lock()
-                .map_err(|_| "internal engine state unavailable".to_string())?;
-            let output_ids = engine.generate(&token_ids, &params);
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "internal engine state unavailable".to_string()))?;
+            let (output_ids, finish_reason) = engine.generate(&token_ids, &params);
             let output_len = output_ids.len();
+
+            // Record tokens per second
+            let gen_elapsed = gen_start.elapsed();
+            if gen_elapsed.as_secs_f64() > 0.0 && output_len > 0 {
+                let tps = output_len as f64 / gen_elapsed.as_secs_f64();
+                metrics::TOKENS_PER_SECOND.set(tps);
+            }
 
             // Check for degraded state after generation
             let degraded = engine.last_forward_was_degraded();
@@ -263,34 +287,32 @@ async fn non_stream_completion(
 
             let text = state.tokenizer.decode(&output_ids, true).map_err(|err| {
                 eprintln!("ERROR: tokenizer decode failed: {}", err);
-                "failed to decode generated tokens".to_string()
+                (StatusCode::INTERNAL_SERVER_ERROR, "failed to decode generated tokens".to_string())
             })?;
 
-            Ok((text, prompt_len, output_len, degraded, degraded_reason))
+            Ok((text, prompt_len, output_len, finish_reason, degraded, degraded_reason))
         }),
     )
     .await;
 
-    let (generated_text, prompt_tokens, completion_tokens, degraded, degraded_reason) = match result
+    let (generated_text, prompt_tokens, completion_tokens, finish_reason, degraded, degraded_reason) = match result
     {
         Ok(Ok(Ok(data))) => data,
-        Ok(Ok(Err(err))) => {
-            // Track error
+        Ok(Ok(Err((status, err)))) => {
             metrics::INFERENCE_ERRORS.inc();
-            return error_response(model_name, err);
+            return error_json(status, &err).into_response();
         }
         Ok(Err(join_err)) => {
-            // Track error
             metrics::INFERENCE_ERRORS.inc();
             eprintln!("ERROR: non_stream spawn_blocking join failed: {}", join_err);
-            return error_response(model_name, "internal request failure".to_string());
+            return error_json(StatusCode::INTERNAL_SERVER_ERROR, "internal request failure").into_response();
         }
         Err(_) => {
             metrics::INFERENCE_ERRORS.inc();
-            return error_response(
-                model_name,
-                format!("request timed out after {}s", request_timeout.as_secs()),
-            );
+            return error_json(
+                StatusCode::REQUEST_TIMEOUT,
+                &format!("request timed out after {}s", request_timeout.as_secs()),
+            ).into_response();
         }
     };
 
@@ -323,19 +345,16 @@ async fn non_stream_completion(
                 role: Role::Assistant,
                 content: generated_text,
             },
-            finish_reason: "stop".to_string(),
+            finish_reason: finish_reason.as_str().to_string(),
         }],
         usage: Usage::new(prompt_tokens, completion_tokens),
-    })
+    }).into_response()
 }
 
 async fn stream_completion(
     state: Arc<AppState>,
     req: ChatCompletionRequest,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    // Metrics instrumentation
-    let _active_guard = metrics::ActiveRequestGuard::new();
-    let _timer = metrics::LatencyTimer::new();
     metrics::INFERENCE_REQUESTS.inc();
 
     let model_name = state.model_name.clone();
@@ -376,6 +395,11 @@ async fn stream_completion(
     let req_id = request_id.clone();
     let model = model_name.clone();
     tokio::task::spawn_blocking(move || {
+        // Metrics guards live inside spawn_blocking so they measure
+        // the actual generation duration and stay alive until completion.
+        let _active_guard = metrics::ActiveRequestGuard::new();
+        let _timer = metrics::LatencyTimer::new();
+
         let try_send = |tx: &mpsc::Sender<Result<Event, Infallible>>, data: String| -> bool {
             match tx.try_send(Ok(Event::default().data(data))) {
                 Ok(()) => true,
@@ -532,6 +556,11 @@ async fn stream_completion(
                 had_degraded = true;
             }
 
+            // NOTE: Per-token BPE decode can produce garbled output for multi-byte
+            // UTF-8 characters that span multiple BPE tokens. A future improvement
+            // would use a token accumulator buffer that collects tokens until a
+            // complete UTF-8 codepoint boundary is reached before decoding, similar
+            // to how HuggingFace text-generation-inference handles this.
             let text = state
                 .tokenizer
                 .decode(&[tok.token_id], true)
@@ -601,6 +630,13 @@ async fn stream_completion(
 
         // Track generated tokens
         metrics::TOKENS_GENERATED.inc_by(token_count as f64);
+
+        // Record tokens per second
+        let gen_elapsed = started.elapsed();
+        if gen_elapsed.as_secs_f64() > 0.0 && token_count > 0 {
+            let tps = token_count as f64 / gen_elapsed.as_secs_f64();
+            metrics::TOKENS_PER_SECOND.set(tps);
+        }
 
         // Send [DONE]
         let _ = try_send(&tx, "[DONE]".to_string());

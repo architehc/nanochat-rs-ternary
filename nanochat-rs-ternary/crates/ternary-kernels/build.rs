@@ -1,7 +1,13 @@
 use std::process::Command;
 
 fn main() {
-    // AVX2 kernel — compiled separately with AVX2+FMA target
+    // Declare has_cuda as a valid cfg so #[cfg(has_cuda)] doesn't warn.
+    println!("cargo::rustc-check-cfg=cfg(has_cuda)");
+
+    // AVX2 kernel — compiled separately with AVX2+FMA target.
+    // NOTE: -march=native means the resulting binary is NOT portable to machines
+    // with a different (older) CPU microarchitecture. For portable builds,
+    // replace with explicit -mavx2 -mfma or use function multi-versioning.
     cc::Build::new()
         .file("csrc/ternary_gemv_avx2.c")
         .flag("-O3")
@@ -11,7 +17,13 @@ fn main() {
         .flag("-w")
         .compile("ternary_gemv_avx2");
 
-    // CPU kernels — compile with native arch detection
+    // CPU kernels — compile with native arch detection.
+    // NOTE: -march=native means the resulting binary is NOT portable to machines
+    // with a different (older) CPU microarchitecture. The C code uses runtime
+    // CPUID dispatch so it will not emit illegal instructions, but the compiler
+    // may still use native-only optimizations in non-kernel helper functions.
+    // For portable builds, replace with -march=x86-64 (baseline) and rely
+    // solely on the runtime dispatch + function-level target attributes.
     cc::Build::new()
         .file("csrc/ternary_gemv.c")
         .flag("-O3")
@@ -40,7 +52,10 @@ fn main() {
         return; // No CUDA, skip GPU kernel
     };
 
-    println!("cargo:rustc-cfg=feature=\"cuda\"");
+    // Use a custom cfg flag instead of feature="cuda" to avoid conflicting
+    // with Cargo's feature system. Rust source gates on:
+    //   #[cfg(any(feature = "cuda", has_cuda))]
+    println!("cargo:rustc-cfg=has_cuda");
 
     let nvcc = format!("{}/bin/nvcc", cuda_path);
     let out_dir = std::env::var("OUT_DIR").unwrap();

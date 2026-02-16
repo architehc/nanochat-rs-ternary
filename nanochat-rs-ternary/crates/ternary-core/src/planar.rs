@@ -120,11 +120,19 @@ impl<T: Copy + Default> AlignedVec<T> {
         let ptr = NonNull::new(raw as *mut T).expect("allocation failed");
 
         // Advise huge pages for large buffers (>= 2MB)
+        // Advise huge pages for large buffers (>= 2MB).
+        // madvise is advisory — failure is non-fatal, but we log a warning.
         #[cfg(target_os = "linux")]
         {
             if size >= 2 * 1024 * 1024 {
                 unsafe {
-                    libc::madvise(raw as *mut libc::c_void, size, libc::MADV_HUGEPAGE);
+                    let ret = libc::madvise(raw as *mut libc::c_void, size, libc::MADV_HUGEPAGE);
+                    if ret != 0 {
+                        log::warn!(
+                            "madvise(MADV_HUGEPAGE) failed for {} bytes (non-fatal, advisory only)",
+                            size
+                        );
+                    }
                 }
             }
         }

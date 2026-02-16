@@ -25,11 +25,13 @@ pub struct PackedMatrix {
 impl PackedMatrix {
     /// Number of packed bytes per row.
     pub fn bytes_per_row(&self) -> usize {
+        assert!(self.cols > 0, "cols must be > 0");
         self.cols / 4
     }
 
     /// Number of groups per row.
     pub fn groups_per_row(&self) -> usize {
+        assert!(self.group_size > 0, "group_size must be > 0");
         self.cols / self.group_size
     }
 

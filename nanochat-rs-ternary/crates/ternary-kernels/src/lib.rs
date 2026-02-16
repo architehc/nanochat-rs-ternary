@@ -1,5 +1,5 @@
 pub mod autotune;
 pub mod cpu;
 pub mod dispatch;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", has_cuda))]
 pub mod gpu;

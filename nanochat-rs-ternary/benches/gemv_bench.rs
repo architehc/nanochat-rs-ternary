@@ -8,6 +8,8 @@
 //!   4096×11008     ~20 GOPS  ~16 GOPS
 //!   11008×4096     ~20 GOPS  ~18 GOPS
 
+use std::hint::black_box;
+
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use ternary_core::planar::PlanarWeights;
@@ -43,6 +45,7 @@ fn bench_gemv_scalar(c: &mut Criterion) {
         (4096, 4096),
         (4096, 11008),
         (11008, 4096),
+        (8192, 8192),
     ];
 
     for &(m, k) in shapes {
@@ -62,6 +65,7 @@ fn bench_gemv_scalar(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     gemv_scalar_ref(&pw, &x, act_scale, &mut y);
+                    black_box(&y);
                 });
             },
         );
@@ -82,6 +86,7 @@ fn bench_gemv_ffi(c: &mut Criterion) {
         (4096, 4096),
         (4096, 11008),
         (11008, 4096),
+        (8192, 8192),
     ];
 
     for &(m, k) in shapes {
@@ -100,6 +105,7 @@ fn bench_gemv_ffi(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     cpu::gemv(&pw, &x, act_scale, &mut y);
+                    black_box(&y);
                 });
             },
         );
@@ -112,7 +118,7 @@ fn bench_gemv_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("gemv_scalar_vs_ffi");
 
     // Focus on the production-critical shapes
-    let shapes: &[(usize, usize)] = &[(2048, 2048), (4096, 4096), (4096, 11008), (11008, 4096)];
+    let shapes: &[(usize, usize)] = &[(2048, 2048), (4096, 4096), (4096, 11008), (11008, 4096), (8192, 8192)];
 
     for &(m, k) in shapes {
         let w = gen_weights(m, k);
@@ -124,11 +130,17 @@ fn bench_gemv_comparison(c: &mut Criterion) {
         let label = format!("{}x{}", m, k);
 
         group.bench_with_input(BenchmarkId::new("scalar", &label), &(), |b, _| {
-            b.iter(|| gemv_scalar_ref(&pw, &x, act_scale, &mut y));
+            b.iter(|| {
+                gemv_scalar_ref(&pw, &x, act_scale, &mut y);
+                black_box(&y);
+            });
         });
 
         group.bench_with_input(BenchmarkId::new("ffi", &label), &(), |b, _| {
-            b.iter(|| cpu::gemv(&pw, &x, act_scale, &mut y));
+            b.iter(|| {
+                cpu::gemv(&pw, &x, act_scale, &mut y);
+                black_box(&y);
+            });
         });
     }
 
@@ -139,7 +151,7 @@ fn bench_gemv_parallel(c: &mut Criterion) {
     let mut group = c.benchmark_group("gemv_parallel");
 
     // Production-critical shapes where parallel matters (large M)
-    let shapes: &[(usize, usize)] = &[(2048, 2048), (4096, 4096), (4096, 11008), (11008, 4096)];
+    let shapes: &[(usize, usize)] = &[(2048, 2048), (4096, 4096), (4096, 11008), (11008, 4096), (8192, 8192)];
 
     for &(m, k) in shapes {
         let w = gen_weights(m, k);
@@ -157,6 +169,7 @@ fn bench_gemv_parallel(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     cpu::gemv_parallel(&pw, &x, act_scale, &mut y);
+                    black_box(&y);
                 });
             },
         );
@@ -168,7 +181,7 @@ fn bench_gemv_parallel(c: &mut Criterion) {
 fn bench_gemv_single_vs_parallel(c: &mut Criterion) {
     let mut group = c.benchmark_group("gemv_single_vs_parallel");
 
-    let shapes: &[(usize, usize)] = &[(2048, 2048), (4096, 4096), (4096, 11008), (11008, 4096)];
+    let shapes: &[(usize, usize)] = &[(2048, 2048), (4096, 4096), (4096, 11008), (11008, 4096), (8192, 8192)];
 
     for &(m, k) in shapes {
         let w = gen_weights(m, k);
@@ -180,11 +193,17 @@ fn bench_gemv_single_vs_parallel(c: &mut Criterion) {
         let label = format!("{}x{}", m, k);
 
         group.bench_with_input(BenchmarkId::new("single_ffi", &label), &(), |b, _| {
-            b.iter(|| cpu::gemv(&pw, &x, act_scale, &mut y));
+            b.iter(|| {
+                cpu::gemv(&pw, &x, act_scale, &mut y);
+                black_box(&y);
+            });
         });
 
         group.bench_with_input(BenchmarkId::new("parallel_ffi", &label), &(), |b, _| {
-            b.iter(|| cpu::gemv_parallel(&pw, &x, act_scale, &mut y));
+            b.iter(|| {
+                cpu::gemv_parallel(&pw, &x, act_scale, &mut y);
+                black_box(&y);
+            });
         });
     }
 

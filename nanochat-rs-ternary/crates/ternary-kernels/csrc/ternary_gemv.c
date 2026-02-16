@@ -32,6 +32,7 @@
 #include <math.h>
 #include <time.h>
 
+#include "ternary_gemv.h"
 #include "ternary_gemv_avx2.h"
 
 // ============================================================
@@ -138,14 +139,9 @@ static inline int8_t decode_trit(uint8_t bits) {
 // PLANAR STORAGE
 // ============================================================
 
-typedef struct {
-    uint8_t *data;          // [rows * cols/4] row-major, 128B aligned
-    uint8_t *data_colmaj;   // [cols/4 * rows_padded] col-major, 128B aligned
-    float   *scales_rm;     // [rows * gprow] row-major (scalar kernels)
-    float   *scales_gm;     // [gprow * rows_padded] group-major (SIMD)
-    int      rows, cols, group_size;
-    int      rows_padded;
-} PlanarWeights;
+// PlanarWeightsC is defined in ternary_gemv.h (the single authoritative definition).
+// Legacy alias for code below that uses the short name.
+typedef PlanarWeightsC PlanarWeights;
 
 PlanarWeights planar_pack(const float *w, int rows, int cols, int gs) {
     if (cols % 4)  { fprintf(stderr, "FATAL: cols%%4!=0\n"); exit(1); }

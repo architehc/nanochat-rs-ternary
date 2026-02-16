@@ -102,6 +102,12 @@ impl CodePatternsDataset {
                 }
             }
 
+            // Clamp all token IDs to valid vocab range (hardcoded pattern IDs
+            // may exceed vocab_size for small vocabularies)
+            for token in &mut seq {
+                *token %= vocab_size;
+            }
+
             samples.push(seq);
         }
 

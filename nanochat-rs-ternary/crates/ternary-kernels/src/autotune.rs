@@ -1,5 +1,16 @@
 //! Kernel auto-tuning for runtime kernel selection.
 //!
+//! **NOTE: This autotuner is currently a no-op with respect to actual kernel
+//! dispatch.** The real kernel selection happens inside the C code
+//! (`ternary_gemv()` in `ternary_gemv.c`), which performs its own CPUID-based
+//! dispatch at first call. This Rust-side autotuner benchmarks kernels and
+//! caches a `KernelChoice`, but that choice is never fed back to the C
+//! dispatch layer -- all calls through `cpu::gemv()` go through the C
+//! dispatcher regardless of what this module selects.
+//!
+//! Retained for future use (e.g., if we add a Rust-native kernel path or
+//! need to choose between CPU and GPU at the Rust level).
+//!
 //! Benchmarks different kernel implementations (AVX-512, AVX2, Scalar)
 //! and caches the best choice for each shape. Adapts to actual hardware
 //! performance instead of using static heuristics.

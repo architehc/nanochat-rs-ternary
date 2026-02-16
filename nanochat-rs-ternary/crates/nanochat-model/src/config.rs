@@ -266,7 +266,7 @@ impl ModelConfig {
             vocab_size: 128256,
             max_seq_len: 8192,
             group_size: 128,
-            mhc_n_streams: 4,
+            mhc_n_streams: 2,
             rope_theta: 500000.0,
             rope_scale: 1.0,
             n_experts: None,
@@ -294,7 +294,7 @@ impl ModelConfig {
             vocab_size: 128256,
             max_seq_len: 8192,
             group_size: 128,
-            mhc_n_streams: 4,
+            mhc_n_streams: 2,
             rope_theta: 500000.0,
             rope_scale: 1.0,
             n_experts: Some(8),
@@ -322,7 +322,7 @@ impl ModelConfig {
             vocab_size: 128256,
             max_seq_len: 8192,
             group_size: 128,
-            mhc_n_streams: 4,
+            mhc_n_streams: 2,
             rope_theta: 500000.0,
             rope_scale: 1.0,
             n_experts: Some(16),
@@ -375,7 +375,7 @@ impl ModelConfig {
             vocab_size: 151936,  // Qwen3 tokenizer vocab size
             max_seq_len: 262144, // 256k context
             group_size: 128,
-            mhc_n_streams: 4,
+            mhc_n_streams: 2,
             rope_theta: 10000.0, // Base theta
             rope_scale: 8.0,     // NTK-aware scaling for 256k (base was 32k)
             n_experts: Some(512),
@@ -478,6 +478,29 @@ impl ModelConfig {
             gated_attention: false,
             loop_config: None,
         }
+    }
+
+    /// Validate model config for consistency.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.n_kv_heads > self.n_heads {
+            return Err("n_kv_heads must be <= n_heads".into());
+        }
+        if self.dim % self.n_heads != 0 {
+            return Err("dim must be divisible by n_heads".into());
+        }
+        if self.group_size == 0 {
+            return Err("group_size must be > 0".into());
+        }
+        if self.ffn_mult <= 0.0 && self.expert_dim.is_none() {
+            return Err("ffn_mult must be > 0 or expert_dim must be set".into());
+        }
+        if self.mhc_n_streams != 2 {
+            return Err(format!(
+                "Only mhc_n_streams=2 is currently supported; got {}. N4 integration is not yet implemented",
+                self.mhc_n_streams
+            ));
+        }
+        Ok(())
     }
 
     /// Determine whether a layer should use DeltaNet attention based on layer_sequence.

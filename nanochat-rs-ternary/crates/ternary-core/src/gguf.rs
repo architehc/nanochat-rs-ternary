@@ -107,8 +107,28 @@ impl GgufFile {
             ));
         }
 
-        let n_tensors = read_u64(&mut file)?;
-        let n_metadata = read_u64(&mut file)?;
+        let n_tensors_u64 = read_u64(&mut file)?;
+        let n_metadata_u64 = read_u64(&mut file)?;
+
+        const MAX_ENTRIES: u64 = 100_000;
+        if n_tensors_u64 > MAX_ENTRIES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("n_tensors {} exceeds maximum allowed {}", n_tensors_u64, MAX_ENTRIES),
+            ));
+        }
+        if n_metadata_u64 > MAX_ENTRIES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("n_metadata {} exceeds maximum allowed {}", n_metadata_u64, MAX_ENTRIES),
+            ));
+        }
+        let n_tensors = usize::try_from(n_tensors_u64).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "n_tensors does not fit usize")
+        })?;
+        let n_metadata = usize::try_from(n_metadata_u64).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "n_metadata does not fit usize")
+        })?;
 
         // Parse metadata
         let mut metadata = HashMap::new();
@@ -119,7 +139,7 @@ impl GgufFile {
         }
 
         // Parse tensor descriptors
-        let mut tensors = Vec::with_capacity(n_tensors as usize);
+        let mut tensors = Vec::with_capacity(n_tensors);
         for _ in 0..n_tensors {
             let name = read_gguf_string(&mut file)?;
             let n_dims = read_u32(&mut file)?;
@@ -260,7 +280,10 @@ impl GgufFile {
             1 => n_elements
                 .checked_mul(2)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "F16 tensor too large")),
-            _ => Ok(n_elements),
+            _ => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("unsupported GGUF dtype: {}", tensor.dtype),
+            )),
         }
     }
 
@@ -481,8 +504,11 @@ impl GgufFileWriter {
         file.write_all(&(meta.tensors.len() as u64).to_le_bytes())?;
         file.write_all(&(meta.metadata.len() as u64).to_le_bytes())?;
 
-        // Metadata
-        for (key, value) in &meta.metadata {
+        // Metadata — sort keys for deterministic output
+        let mut sorted_keys: Vec<_> = meta.metadata.keys().collect();
+        sorted_keys.sort();
+        for key in sorted_keys {
+            let value = &meta.metadata[key];
             write_gguf_string(&mut file, key)?;
             write_gguf_value(&mut file, value)?;
         }
@@ -551,8 +577,26 @@ fn read_f32(r: &mut impl Read) -> io::Result<f32> {
     Ok(f32::from_le_bytes(buf))
 }
 
+/// Maximum allowed GGUF string length: 16 MB.
+const MAX_GGUF_STRING_LEN: u64 = 16_777_216;
+
 fn read_gguf_string(r: &mut impl Read) -> io::Result<String> {
-    let len = read_u64(r)? as usize;
+    let len_u64 = read_u64(r)?;
+    if len_u64 > MAX_GGUF_STRING_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "GGUF string length {} exceeds maximum allowed {}",
+                len_u64, MAX_GGUF_STRING_LEN
+            ),
+        ));
+    }
+    let len = usize::try_from(len_u64).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "GGUF string length does not fit usize",
+        )
+    })?;
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
     String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
@@ -1266,13 +1310,20 @@ mod tests {
         let pos = f.stream_position().unwrap() as usize;
         let pad = ((pos + 31) & !31) - pos;
         f.write_all(&vec![0u8; pad]).unwrap();
-        f.write_all(&[0u8; 4]).unwrap(); // 4 bytes (n_elements * 1)
+        f.write_all(&[0u8; 4]).unwrap(); // 4 bytes of data
         drop(f);
 
         let gguf = GgufFile::open(&path).unwrap();
         assert_eq!(gguf.tensors.len(), 1);
-        let data = gguf.tensor_data(&gguf.tensors[0]).unwrap();
-        assert_eq!(data.len(), 4); // 4 * 1 byte for unknown dtype
+        // Unknown dtype should now return an error
+        let result = gguf.tensor_data(&gguf.tensors[0]);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("unsupported GGUF dtype"),
+            "unexpected error: {}",
+            err_msg
+        );
 
         std::fs::remove_file(&path).ok();
     }

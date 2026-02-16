@@ -7,6 +7,8 @@
 //! N=4 involve 24 multiplies + 24 adds for h_res (32 FLOPs per layer) vs
 //! ~90M FLOPs for the GEMV. That's <0.00004% overhead.
 
+use std::hint::black_box;
+
 use criterion::{criterion_group, criterion_main, Criterion};
 
 use mhc_lite::{
@@ -40,32 +42,32 @@ fn bench_mhc_n2_operations(c: &mut Criterion) {
     let x_expanded = MhcLiteN2::expand_input(&x_single, dim);
 
     group.bench_function("h_res", |b| {
-        b.iter(|| mhc.h_res());
+        b.iter(|| black_box(mhc.h_res()));
     });
 
     group.bench_function("h_pre", |b| {
-        b.iter(|| mhc.h_pre());
+        b.iter(|| black_box(mhc.h_pre()));
     });
 
     group.bench_function("h_post", |b| {
-        b.iter(|| mhc.h_post());
+        b.iter(|| black_box(mhc.h_post()));
     });
 
     group.bench_function("prepare_input", |b| {
-        b.iter(|| mhc.prepare_input(&x_expanded, dim));
+        b.iter(|| black_box(mhc.prepare_input(&x_expanded, dim)));
     });
 
     group.bench_function("apply", |b| {
         let layer_out = x_single.clone();
-        b.iter(|| mhc.apply(&x_expanded, &layer_out, dim));
+        b.iter(|| black_box(mhc.apply(&x_expanded, &layer_out, dim)));
     });
 
     group.bench_function("expand_input", |b| {
-        b.iter(|| MhcLiteN2::expand_input(&x_single, dim));
+        b.iter(|| black_box(MhcLiteN2::expand_input(&x_single, dim)));
     });
 
     group.bench_function("collapse_output", |b| {
-        b.iter(|| MhcLiteN2::collapse_output(&x_expanded, dim));
+        b.iter(|| black_box(MhcLiteN2::collapse_output(&x_expanded, dim)));
     });
 
     group.finish();
@@ -85,32 +87,32 @@ fn bench_mhc_n4_operations(c: &mut Criterion) {
     let x_expanded = MhcLiteN4::expand_input(&x_single, dim);
 
     group.bench_function("h_res", |b| {
-        b.iter(|| mhc.h_res());
+        b.iter(|| black_box(mhc.h_res()));
     });
 
     group.bench_function("h_pre", |b| {
-        b.iter(|| mhc.h_pre());
+        b.iter(|| black_box(mhc.h_pre()));
     });
 
     group.bench_function("h_post", |b| {
-        b.iter(|| mhc.h_post());
+        b.iter(|| black_box(mhc.h_post()));
     });
 
     group.bench_function("prepare_input", |b| {
-        b.iter(|| mhc.prepare_input(&x_expanded, dim));
+        b.iter(|| black_box(mhc.prepare_input(&x_expanded, dim)));
     });
 
     group.bench_function("apply", |b| {
         let layer_out = x_single.clone();
-        b.iter(|| mhc.apply(&x_expanded, &layer_out, dim));
+        b.iter(|| black_box(mhc.apply(&x_expanded, &layer_out, dim)));
     });
 
     group.bench_function("expand_input", |b| {
-        b.iter(|| MhcLiteN4::expand_input(&x_single, dim));
+        b.iter(|| black_box(MhcLiteN4::expand_input(&x_single, dim)));
     });
 
     group.bench_function("collapse_output", |b| {
-        b.iter(|| MhcLiteN4::collapse_output(&x_expanded, dim));
+        b.iter(|| black_box(MhcLiteN4::collapse_output(&x_expanded, dim)));
     });
 
     group.finish();
@@ -123,14 +125,14 @@ fn bench_mhc_verification(c: &mut Criterion) {
     let mhc2 = MhcLiteN2::new_identity();
     let h2 = mhc2.h_res();
     group.bench_function("verify_ds_2x2", |b| {
-        b.iter(|| verify_doubly_stochastic_2x2(&h2, 1e-6));
+        b.iter(|| black_box(verify_doubly_stochastic_2x2(&h2, 1e-6)));
     });
 
     // N=4 DS check
     let mhc4 = MhcLiteN4::new_identity();
     let h4 = mhc4.h_res();
     group.bench_function("verify_ds_4x4", |b| {
-        b.iter(|| verify_doubly_stochastic(&h4, 1e-5));
+        b.iter(|| black_box(verify_doubly_stochastic(&h4, 1e-5)));
     });
 
     // Composite gain (64 layers)
@@ -147,7 +149,7 @@ fn bench_mhc_verification(c: &mut Criterion) {
         .collect();
 
     group.bench_function("composite_amax_gain_64", |b| {
-        b.iter(|| composite_amax_gain(&matrices));
+        b.iter(|| black_box(composite_amax_gain(&matrices)));
     });
 
     group.finish();
@@ -166,7 +168,10 @@ fn bench_mhc_vs_gemv(c: &mut Criterion) {
     let act_scale = 1.0 / 127.0;
 
     group.bench_function("gemv_4096x11008_ffi", |b| {
-        b.iter(|| cpu::gemv(&pw, &x, act_scale, &mut y));
+        b.iter(|| {
+            cpu::gemv(&pw, &x, act_scale, &mut y);
+            black_box(&y);
+        });
     });
 
     // mHC N=4 full layer overhead (h_res + prepare + apply)
@@ -182,9 +187,10 @@ fn bench_mhc_vs_gemv(c: &mut Criterion) {
 
     group.bench_function("mhc_n4_full_layer", |b| {
         b.iter(|| {
-            let _h = mhc.h_res();
-            let _prepared = mhc.prepare_input(&x_expanded, dim);
-            let _applied = mhc.apply(&x_expanded, &x_single, dim);
+            let h = mhc.h_res();
+            let prepared = mhc.prepare_input(&x_expanded, dim);
+            let applied = mhc.apply(&x_expanded, &x_single, dim);
+            black_box((h, prepared, applied));
         });
     });
 

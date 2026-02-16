@@ -18,17 +18,26 @@ pub struct RopeFreqs {
 }
 
 impl RopeFreqs {
-    pub fn new(head_dim: usize, max_seq_len: usize, theta: f32) -> Self {
+    pub fn new(head_dim: usize, max_seq_len: usize, theta: f32, scale: f32) -> Self {
         let half_dim = head_dim / 2;
         let mut cos = vec![0.0f32; max_seq_len * half_dim];
         let mut sin = vec![0.0f32; max_seq_len * half_dim];
 
+        // NTK-aware RoPE scaling: multiply theta by scale^(dim/(dim-2))
+        // When scale=1.0, this is a no-op (effective_theta == theta).
+        let effective_theta = if scale != 1.0 && head_dim > 2 {
+            let dim_f = head_dim as f64;
+            theta as f64 * (scale as f64).powf(dim_f / (dim_f - 2.0))
+        } else {
+            theta as f64
+        };
+
         for pos in 0..max_seq_len {
             for i in 0..half_dim {
-                let freq = 1.0 / theta.powf(2.0 * i as f32 / head_dim as f32);
-                let angle = pos as f32 * freq;
-                cos[pos * half_dim + i] = angle.cos();
-                sin[pos * half_dim + i] = angle.sin();
+                let freq = 1.0 / (effective_theta.powf(2.0 * i as f64 / head_dim as f64));
+                let angle = pos as f64 * freq;
+                cos[pos * half_dim + i] = angle.cos() as f32;
+                sin[pos * half_dim + i] = angle.sin() as f32;
             }
         }
 
@@ -84,6 +93,10 @@ impl KvCache {
     pub fn append_kv(&mut self, k: &[f32], v: &[f32]) {
         assert_eq!(k.len(), self.kv_dim);
         assert_eq!(v.len(), self.kv_dim);
+        assert!(
+            self.len < self.k.len() / self.kv_dim,
+            "KV cache overflow: sequence exceeds max_seq_len"
+        );
         let offset = self.len * self.kv_dim;
         self.k[offset..offset + self.kv_dim].copy_from_slice(k);
         self.v[offset..offset + self.kv_dim].copy_from_slice(v);
@@ -242,21 +255,27 @@ impl Attention {
         // 3. Causal attention: query at position t attends to [0..start_pos+t+1]
         let scale = 1.0 / (self.head_dim as f32).sqrt();
 
+        // Pre-allocate buffers outside the token loop to avoid quadratic allocations
+        let max_causal_len = start_pos + seq_len; // max possible causal_len
+        let mut attn_out = vec![0.0f32; dim];
+        let mut scores = vec![0.0f32; max_causal_len];
+
         for t in 0..seq_len {
             let causal_len = start_pos + t + 1; // number of KV positions visible
             let q_base = t * dim;
             let out_base = t * dim;
 
-            let mut attn_out = vec![0.0f32; dim];
+            attn_out.fill(0.0);
 
             for h in 0..self.n_heads {
                 let kv_h = h / self.n_rep;
                 let q_offset = q_base + h * self.head_dim;
                 let kv_offset = kv_h * self.head_dim;
 
-                // Compute attention scores
-                let mut scores = vec![0.0f32; causal_len];
-                for (s, score) in scores.iter_mut().enumerate() {
+                // Compute attention scores (reuse pre-allocated buffer)
+                let scores_slice = &mut scores[..causal_len];
+                scores_slice.fill(0.0);
+                for (s, score) in scores_slice.iter_mut().enumerate() {
                     let k_base = s * kv_dim + kv_offset;
                     let mut dot = 0.0f32;
                     for d in 0..self.head_dim {
@@ -266,11 +285,11 @@ impl Attention {
                 }
 
                 // Softmax
-                softmax_inplace(&mut scores);
+                softmax_inplace(scores_slice);
 
                 // Weighted sum of values
                 let h_out_offset = h * self.head_dim;
-                for (s, &w) in scores.iter().enumerate() {
+                for (s, &w) in scores_slice.iter().enumerate() {
                     let v_base = s * kv_dim + kv_offset;
                     for d in 0..self.head_dim {
                         attn_out[h_out_offset + d] += w * cache.v[v_base + d];
@@ -318,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_rope_freqs() {
-        let rope = RopeFreqs::new(64, 128, 10000.0);
+        let rope = RopeFreqs::new(64, 128, 10000.0, 1.0);
         assert_eq!(rope.cos.len(), 128 * 32);
         // Position 0 should have cos=1, sin=0
         for i in 0..32 {
@@ -329,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_rope_apply() {
-        let rope = RopeFreqs::new(4, 16, 10000.0);
+        let rope = RopeFreqs::new(4, 16, 10000.0, 1.0);
         let mut data = vec![1.0, 0.0, 0.0, 1.0]; // 1 head, dim=4
         let orig = data.clone();
         rope.apply(&mut data, 1, 4, 0);
@@ -362,7 +381,7 @@ mod tests {
     fn test_attention_forward_batch_matches_sequential() {
         let config = ModelConfig::d20();
         let attn = Attention::new_random(&config);
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
         let dim = config.dim;
         let seq_len = 4;
 
@@ -417,7 +436,7 @@ mod tests {
     fn test_attention_forward() {
         let config = ModelConfig::d20();
         let attn = Attention::new_random(&config);
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
         let mut cache = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
 
         let x = vec![0.1f32; config.dim];

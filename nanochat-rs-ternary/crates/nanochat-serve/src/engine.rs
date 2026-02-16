@@ -33,6 +33,28 @@ impl Default for SamplingParams {
     }
 }
 
+/// Reason why generation finished.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FinishReason {
+    Stop,
+    Length,
+}
+
+impl FinishReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FinishReason::Stop => "stop",
+            FinishReason::Length => "length",
+        }
+    }
+}
+
+impl std::fmt::Display for FinishReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Token generated during streaming.
 pub struct GeneratedToken {
     pub token_id: u32,
@@ -81,14 +103,28 @@ impl InferenceEngine {
     /// prompt_ids: input token sequence
     /// params: sampling parameters
     ///
-    /// Returns: generated token IDs (not including prompt).
-    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> Vec<u32> {
+    /// Returns: (generated token IDs not including prompt, finish reason).
+    /// FinishReason::Length when max_tokens is reached, FinishReason::Stop otherwise.
+    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> (Vec<u32>, FinishReason) {
         let mut tokens = Vec::new();
+        let mut reason = FinishReason::Stop;
         self.generate_streaming(prompt_ids, params, |tok| {
             tokens.push(tok.token_id);
+            if let Some(ref fr) = tok.finish_reason {
+                if fr == "length" {
+                    reason = FinishReason::Length;
+                }
+            }
             tok.finish_reason.is_none()
         });
-        tokens
+        // If we generated max_tokens without hitting EOS or explicit finish,
+        // that's a length stop
+        if tokens.len() >= params.max_tokens && reason == FinishReason::Stop {
+            // Check: if the last token didn't have a "stop" finish_reason from EOS,
+            // then we stopped due to length
+            reason = FinishReason::Length;
+        }
+        (tokens, reason)
     }
 
     /// Generate tokens one at a time, calling `on_token` for each.
@@ -184,7 +220,7 @@ pub enum EngineHandle {
 }
 
 impl EngineHandle {
-    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> Vec<u32> {
+    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> (Vec<u32>, FinishReason) {
         match self {
             EngineHandle::Standard(engine) => engine.generate(prompt_ids, params),
             EngineHandle::Numa(engine) => engine.generate(prompt_ids, params),
@@ -444,13 +480,22 @@ impl NumaInferenceEngine {
     }
 
     /// Generate tokens autoregressively with NUMA thread-pool dispatch.
-    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> Vec<u32> {
+    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> (Vec<u32>, FinishReason) {
         let mut tokens = Vec::new();
+        let mut reason = FinishReason::Stop;
         self.generate_streaming(prompt_ids, params, |tok| {
             tokens.push(tok.token_id);
+            if let Some(ref fr) = tok.finish_reason {
+                if fr == "length" {
+                    reason = FinishReason::Length;
+                }
+            }
             tok.finish_reason.is_none()
         });
-        tokens
+        if tokens.len() >= params.max_tokens && reason == FinishReason::Stop {
+            reason = FinishReason::Length;
+        }
+        (tokens, reason)
     }
 
     /// Generate tokens one at a time with NUMA thread-pool dispatch.
@@ -749,9 +794,15 @@ mod tests {
             ..Default::default()
         };
 
-        let output = engine.generate(&prompt, &params);
+        let (output, finish_reason) = engine.generate(&prompt, &params);
         assert!(!output.is_empty(), "generate produced no tokens");
         assert!(output.len() <= 5, "exceeded max_tokens");
+        // finish_reason should be Stop or Length
+        assert!(
+            finish_reason == FinishReason::Stop || finish_reason == FinishReason::Length,
+            "unexpected finish reason: {:?}",
+            finish_reason
+        );
 
         for &t in &output {
             assert!((t as usize) < 256, "invalid token: {}", t);
@@ -817,7 +868,7 @@ mod tests {
         let mut engine = InferenceEngine::new_random(config);
 
         let params = SamplingParams::default();
-        let output = engine.generate(&[], &params);
+        let (output, _finish_reason) = engine.generate(&[], &params);
         assert!(output.is_empty());
     }
 
@@ -865,7 +916,7 @@ mod tests {
             ..Default::default()
         };
 
-        let output = engine.generate(&prompt, &params);
+        let (output, _finish_reason) = engine.generate(&prompt, &params);
         // Should produce valid tokens (may be empty if first token is EOT)
         for &t in &output {
             assert!((t as usize) < 256, "invalid token: {}", t);

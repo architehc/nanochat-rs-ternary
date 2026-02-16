@@ -105,7 +105,12 @@ impl NumaAllocator {
             // Bind to specific NUMA node using mbind
             #[cfg(target_arch = "x86_64")]
             {
-                let mut nodemask: u64 = 1u64 << node;
+                assert!(
+                    (node as u32) < 64,
+                    "NUMA node {} out of range for 64-bit nodemask",
+                    node
+                );
+                let mut nodemask: u64 = 1u64 << (node as u32);
                 let maxnode = 64;
 
                 // MPOL_BIND = 2, MPOL_MF_STRICT = 1, MPOL_MF_MOVE = 2
@@ -302,8 +307,8 @@ impl<T> Drop for NumaVec<T> {
     }
 }
 
-unsafe impl<T: Send> Send for NumaVec<T> {}
-unsafe impl<T: Sync> Sync for NumaVec<T> {}
+unsafe impl<T: Send + Copy + Default> Send for NumaVec<T> {}
+unsafe impl<T: Sync + Copy + Default> Sync for NumaVec<T> {}
 
 #[cfg(test)]
 mod tests {

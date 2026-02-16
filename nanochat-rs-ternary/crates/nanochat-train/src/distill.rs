@@ -532,7 +532,12 @@ impl DistillationTrainer {
             kl_divergence_loss(&teacher_logits, &student_logits, self.config.temperature)?;
 
         // 3. MoE-specific losses (if model has MoE)
-        // TODO: Extract router outputs from student model
+        // TODO: Extract router outputs from student model to compute load balancing
+        // and auxiliary losses. Currently these are zero, meaning MoE training will
+        // not receive expert balancing signals.
+        if self.config.load_balance_weight > 0.0 || self.config.router_aux_weight > 0.0 {
+            tracing::warn!("MoE distillation: load_balance_loss and router_aux_loss are not yet implemented; MoE balancing signals are zero");
+        }
         let load_balance_loss = Tensor::new(&[0.0f32], &self.device)?;
         let router_aux_loss = Tensor::new(&[0.0f32], &self.device)?;
 

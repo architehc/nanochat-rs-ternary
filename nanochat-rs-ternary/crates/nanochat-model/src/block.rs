@@ -396,7 +396,7 @@ mod tests {
     fn test_block_forward_finite() {
         let config = ModelConfig::d20();
         let block = TransformerBlock::new_random(&config);
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
         let mut state = block.create_attn_state(&config);
 
         // Expanded input (2 streams)
@@ -428,7 +428,7 @@ mod tests {
     fn test_block_shape_preserved() {
         let config = ModelConfig::d20();
         let block = TransformerBlock::new_random(&config);
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
         let mut state = block.create_attn_state(&config);
 
         let expanded_dim = config.mhc_n_streams * config.dim;
@@ -447,7 +447,7 @@ mod tests {
     fn test_block_multi_token() {
         let config = ModelConfig::d20();
         let block = TransformerBlock::new_random(&config);
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
         let mut state = block.create_attn_state(&config);
 
         let mut x_exp = vec![0.1f32; config.mhc_n_streams * config.dim];
@@ -473,7 +473,7 @@ mod tests {
         config.n_experts = Some(4);
         config.n_active_experts = Some(2);
         let block = TransformerBlock::new_random(&config);
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
         let mut state = block.create_attn_state(&config);
 
         // Verify the FFN is actually MoE
@@ -496,7 +496,7 @@ mod tests {
     fn test_block_deltanet_forward() {
         let config = ModelConfig::d20();
         let block = TransformerBlock::new_random_deltanet(&config);
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
         let mut state = block.create_attn_state(&config);
 
         let mut x_exp = vec![0.1f32; config.mhc_n_streams * config.dim];

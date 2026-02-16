@@ -91,7 +91,7 @@ impl ChatCompletionRequest {
     pub fn to_sampling_params(&self) -> SamplingParams {
         let temperature = self.temperature.unwrap_or(1.0).clamp(0.0, 2.0);
         let top_p = self.top_p.unwrap_or(0.9).clamp(0.0, 1.0);
-        let top_k = self.top_k.unwrap_or(50).clamp(1, 200);
+        let top_k = self.top_k.unwrap_or(50).clamp(0, 200);
         let max_tokens = self.max_tokens.unwrap_or(256).clamp(1, 4096);
 
         SamplingParams {

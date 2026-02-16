@@ -28,8 +28,9 @@ impl Embedding {
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            // Map to roughly [-0.02, 0.02]
-            *w = ((state >> 33) as f32 / u32::MAX as f32 - 0.5) * 0.04;
+            // Map to roughly [-0.02, 0.02)
+            let val = (state >> 33) as f32 / (1u64 << 31) as f32; // [0, 1)
+            *w = (val - 0.5) * 0.04;
         }
         Self {
             weight,

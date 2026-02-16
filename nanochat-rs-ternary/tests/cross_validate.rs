@@ -83,6 +83,7 @@ fn load_npy_f32(path: &str) -> Vec<f32> {
 }
 
 #[test]
+#[ignore] // Requires reference files (ref.gguf, ref.mhc, ref_logits.npy) that are gitignored
 fn cross_validate_python_rust() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let ref_dir = format!("{}/training", manifest_dir);

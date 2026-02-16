@@ -3,7 +3,7 @@
 //! Provides `GpuWeights` (device-side weight storage) and `gemv_gpu()`
 //! for autoregressive decode on NVIDIA GPUs.
 //!
-//! Gated behind `#[cfg(feature = "cuda")]`.
+//! Gated behind `#[cfg(any(feature = "cuda", has_cuda))]`.
 
 use std::sync::OnceLock;
 use ternary_core::planar::PlanarWeights;
@@ -209,9 +209,11 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) -> Gpu
     if y.len() != gw.rows {
         return Err(format!("y.len() ({}) != rows ({})", y.len(), gw.rows));
     }
-    if gw.rows > 65_535 {
+    // CUDA grid.x limit is 2^31-1 for compute capability 3.0+.
+    // The old 65535 limit only applies to grid.y and grid.z dimensions.
+    if gw.rows > 2_147_483_647 {
         return Err(format!(
-            "rows ({}) exceed CUDA grid.x limit (65535)",
+            "rows ({}) exceed CUDA grid.x limit (2^31-1)",
             gw.rows
         ));
     }
@@ -278,7 +280,11 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) -> Gpu
         return Err("D2H copy failed for y".to_string());
     }
 
-    // Sync
+    // NOTE: This synchronize call is technically redundant after the synchronous
+    // cudaMemcpy D2H above (cudaMemcpy with cudaMemcpyDeviceToHost is
+    // synchronous and implicitly waits for all prior GPU work to complete).
+    // Kept as a defensive safety net in case the CUDA runtime behavior changes
+    // or the D2H implementation is switched to an async variant in the future.
     let ret = unsafe { cuda_synchronize() };
     if ret != 0 {
         return Err("CUDA synchronize failed".to_string());

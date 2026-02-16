@@ -64,6 +64,9 @@ pub struct ModelAnalysis {
 impl ModelAnalysis {
     /// Check if overall model mHC is healthy
     pub fn is_healthy(&self) -> bool {
+        if self.layer_stats.is_empty() {
+            return true;
+        }
         // Model is healthy if:
         // 1. < 20% of layers are unhealthy
         // 2. Total composite gain < 2.0
@@ -169,6 +172,16 @@ impl MhcAnalyzer {
 
     /// Analyze full model with N=2 layers
     pub fn analyze_model_n2(layers: &[MhcLiteN2]) -> ModelAnalysis {
+        if layers.is_empty() {
+            return ModelAnalysis {
+                layer_stats: Vec::new(),
+                total_composite_gain: 1.0,
+                avg_entropy: 0.0,
+                avg_orthogonality_error: 0.0,
+                unhealthy_layers: Vec::new(),
+            };
+        }
+
         let layer_stats: Vec<LayerStats> = layers
             .iter()
             .enumerate()

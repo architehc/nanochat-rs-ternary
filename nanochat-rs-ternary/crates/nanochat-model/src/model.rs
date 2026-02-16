@@ -40,15 +40,25 @@ pub struct NanochatModel {
 
     /// Tracks if the last forward pass encountered a LoopLM error (degraded output).
     /// Provides structured error signal to callers without breaking API.
-    last_forward_degraded: std::cell::Cell<bool>,
+    last_forward_degraded: std::sync::atomic::AtomicBool,
     /// Context message for the most recent degraded forward pass (if any).
-    last_forward_error: std::cell::RefCell<Option<String>>,
+    last_forward_error: std::sync::Mutex<Option<String>>,
 }
 
 impl NanochatModel {
     /// Create model with random weights (for testing / validation).
     pub fn new_random(config: ModelConfig) -> Self {
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        assert!(
+            config.mhc_n_streams == 2,
+            "Only mhc_n_streams=2 is currently supported; N4 integration is not yet implemented"
+        );
+
+        if config.gated_attention {
+            // gated_attention is configured but not yet implemented; ignoring
+            eprintln!("WARNING: gated_attention is configured but not yet implemented; ignoring");
+        }
+
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
 
         // Build architecture based on loop_config
         let (
@@ -170,8 +180,8 @@ impl NanochatModel {
             weight_tied,
             rope,
             config,
-            last_forward_degraded: std::cell::Cell::new(false),
-            last_forward_error: std::cell::RefCell::new(None),
+            last_forward_degraded: std::sync::atomic::AtomicBool::new(false),
+            last_forward_error: std::sync::Mutex::new(None),
         }
     }
 
@@ -181,6 +191,15 @@ impl NanochatModel {
 
         // Extract config from GGUF metadata
         let config = Self::config_from_gguf(&gguf)?;
+        config.validate().map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("invalid model config: {e}"))
+        })?;
+
+        if config.gated_attention {
+            // gated_attention is configured but not yet implemented; ignoring
+            eprintln!("WARNING: gated_attention is configured but not yet implemented; ignoring");
+        }
+
         Self::validate_tensor_names(&gguf, &config)?;
         let group_size = config.group_size;
 
@@ -447,7 +466,7 @@ impl NanochatModel {
         };
 
         // RoPE
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta);
+        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
 
         Ok(Self {
             tok_embed,
@@ -464,8 +483,8 @@ impl NanochatModel {
             weight_tied,
             rope,
             config,
-            last_forward_degraded: std::cell::Cell::new(false),
-            last_forward_error: std::cell::RefCell::new(None),
+            last_forward_degraded: std::sync::atomic::AtomicBool::new(false),
+            last_forward_error: std::sync::Mutex::new(None),
         })
     }
 
@@ -971,22 +990,22 @@ impl NanochatModel {
     /// Returns true if the last forward_token() or forward_sequence_batched() call
     /// encountered an error and produced degraded output.
     pub fn last_forward_was_degraded(&self) -> bool {
-        self.last_forward_degraded.get()
+        self.last_forward_degraded.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Returns error context for the most recent degraded forward pass.
     pub fn last_forward_error_message(&self) -> Option<String> {
-        self.last_forward_error.borrow().clone()
+        self.last_forward_error.lock().unwrap().clone()
     }
 
     fn clear_forward_error_state(&self) {
-        self.last_forward_degraded.set(false);
-        self.last_forward_error.replace(None);
+        self.last_forward_degraded.store(false, std::sync::atomic::Ordering::Relaxed);
+        *self.last_forward_error.lock().unwrap() = None;
     }
 
     fn mark_forward_degraded(&self, message: impl Into<String>) {
-        self.last_forward_degraded.set(true);
-        self.last_forward_error.replace(Some(message.into()));
+        self.last_forward_degraded.store(true, std::sync::atomic::Ordering::Relaxed);
+        *self.last_forward_error.lock().unwrap() = Some(message.into());
     }
 
     /// Forward pass for a single token at position `pos`.
@@ -1323,8 +1342,9 @@ impl NanochatModel {
                     dim * dim + 2 * dim * kv_dim + dim * dim
                 }
                 AttentionLayer::DeltaNet(_) => {
-                    // Q, K, V, O (all dim*dim) + beta (n_heads * dim)
-                    4 * dim * dim + self.config.n_heads * dim
+                    // Q, K, V, O (all dim*dim) + beta (deltanet_qk_heads * dim)
+                    let dn_heads = self.config.deltanet_qk_heads.unwrap_or(self.config.n_heads);
+                    4 * dim * dim + dn_heads * dim
                 }
             }
         };

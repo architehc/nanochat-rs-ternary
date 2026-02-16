@@ -296,9 +296,9 @@ impl SensitivityAnalyzer {
 
     /// Load model weights from checkpoint.
     pub fn load_checkpoint(&mut self, _checkpoint_path: &str) -> Result<()> {
-        // TODO: Implement checkpoint loading
-        eprintln!("Warning: Checkpoint loading not yet implemented");
-        Ok(())
+        Err(candle_core::Error::Msg(
+            "Sensitivity analyzer checkpoint loading is not yet implemented".to_string(),
+        ))
     }
 
     /// Evaluate model on validation dataset.

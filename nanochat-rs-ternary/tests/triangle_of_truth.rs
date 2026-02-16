@@ -181,6 +181,32 @@ fn triangle_scale_only() {
     }
 }
 
+/// Cross-validate gemv_parallel against scalar reference.
+#[test]
+fn triangle_parallel_matches_scalar() {
+    for &(m, k) in &[(256, 256), (4096, 4096), (4096, 11008)] {
+        let gs = 128;
+        let w = gen_weights(m, k);
+        let pw = PlanarWeights::from_row_major(&w, m, k, gs);
+        let x = gen_activations(k);
+        let act_scale = 1.0 / 127.0;
+
+        let mut y_scalar = vec![0.0f32; m];
+        let mut y_parallel = vec![0.0f32; m];
+        gemv_scalar_ref(&pw, &x, act_scale, &mut y_scalar);
+        cpu::gemv_parallel(&pw, &x, act_scale, &mut y_parallel);
+
+        for i in 0..m {
+            let diff = (y_scalar[i] - y_parallel[i]).abs();
+            assert!(
+                diff < 1e-4,
+                "parallel mismatch at [{}x{}] idx {}: scalar={}, parallel={}, diff={}",
+                m, k, i, y_scalar[i], y_parallel[i], diff
+            );
+        }
+    }
+}
+
 /// Uniform positive weights: every weight = +1.
 #[test]
 fn triangle_uniform_positive() {

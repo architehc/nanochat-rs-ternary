@@ -52,7 +52,6 @@ rand = "0.8"
 
 [dev-dependencies]
 criterion = { workspace = true }
-nanochat-train = { path = "crates/nanochat-train" }
 tempfile = "3"
 candle-core = "0.9"
 candle-nn = "0.9"
