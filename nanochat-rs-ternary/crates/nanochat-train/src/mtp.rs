@@ -68,7 +68,11 @@ impl MultiTokenPrediction {
     /// Returns `(MTPLoss, Tensor)` where the `Tensor` is the differentiable total
     /// loss that stays on the computational graph (for backprop), and `MTPLoss`
     /// contains diagnostic f32 scalars extracted separately for logging only.
-    pub fn compute_loss(&self, predictions: &[Tensor], targets: &[Tensor]) -> Result<(MTPLoss, Tensor)> {
+    pub fn compute_loss(
+        &self,
+        predictions: &[Tensor],
+        targets: &[Tensor],
+    ) -> Result<(MTPLoss, Tensor)> {
         let mut total_loss_val = 0.0_f32;
         let mut primary_loss_val = 0.0_f32;
         let mut aux_loss_val = 0.0_f32;
@@ -99,16 +103,18 @@ impl MultiTokenPrediction {
             });
         }
 
-        let total_tensor = total_loss_tensor.unwrap_or_else(|| {
-            Tensor::new(&[0.0f32], predictions[0].device()).unwrap()
-        });
+        let total_tensor = total_loss_tensor
+            .unwrap_or_else(|| Tensor::new(&[0.0f32], predictions[0].device()).unwrap());
 
-        Ok((MTPLoss {
-            total: total_loss_val,
-            primary: primary_loss_val,
-            auxiliary: aux_loss_val,
-            n_tokens: predictions.len(),
-        }, total_tensor))
+        Ok((
+            MTPLoss {
+                total: total_loss_val,
+                primary: primary_loss_val,
+                auxiliary: aux_loss_val,
+                n_tokens: predictions.len(),
+            },
+            total_tensor,
+        ))
     }
 
     pub fn n_future(&self) -> usize {

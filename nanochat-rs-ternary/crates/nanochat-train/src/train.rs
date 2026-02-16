@@ -174,8 +174,9 @@ impl Trainer {
         let bytes = bincode::serialize(&state)
             .map_err(|e| candle_core::Error::Msg(format!("optimizer state serialize: {}", e)))?;
         let path = format!("{}/optimizer_state.bin", checkpoint_dir);
-        std::fs::write(&path, bytes)
-            .map_err(|e| candle_core::Error::Msg(format!("optimizer state write {}: {}", path, e)))?;
+        std::fs::write(&path, bytes).map_err(|e| {
+            candle_core::Error::Msg(format!("optimizer state write {}: {}", path, e))
+        })?;
 
         // Save MTP parameters if present
         if let Some(ref mtp_vm) = self.mtp_varmap {
@@ -238,7 +239,10 @@ impl Trainer {
                 })?;
                 tracing::info!("MTP state restored from {}", mtp_path);
             } else {
-                tracing::info!("MTP state file not found at {}; using fresh MTP parameters", mtp_path);
+                tracing::info!(
+                    "MTP state file not found at {}; using fresh MTP parameters",
+                    mtp_path
+                );
             }
         }
 
@@ -627,7 +631,8 @@ impl Trainer {
 
             // Compute MTP loss
             if !mtp_preds_flat.is_empty() {
-                let (mtp_loss_info, mtp_loss_tensor) = mtp.compute_loss(&mtp_preds_flat, &mtp_targets_flat)?;
+                let (mtp_loss_info, mtp_loss_tensor) =
+                    mtp.compute_loss(&mtp_preds_flat, &mtp_targets_flat)?;
                 // Scale by MTP weight and add directly to loss (preserves gradient flow)
                 let mtp_weighted_tensor = (mtp_loss_tensor * self.config.mtp_weight)?;
                 loss = (loss + mtp_weighted_tensor)?;

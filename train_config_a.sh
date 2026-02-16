@@ -30,10 +30,11 @@ export OMP_PLACES=cores
 export MALLOC_CONF="background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000"
 
 # Paths
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nanochat-rs-ternary"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${PROJECT_DIR}/data"
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/config_a"
-CONFIG_FILE="${PROJECT_DIR}/configs/config_a_threadripper_blackwell.toml"
+CONFIG_FILE="${SCRIPT_DIR}/config_a_threadripper_blackwell.toml"
 
 mkdir -p "${CHECKPOINT_DIR}"
 
@@ -48,7 +49,15 @@ echo ""
 echo -e "${YELLOW}=== Stage 1: Data Preprocessing ===${NC}"
 if [ ! -f "${DATA_DIR}/processed/train_verified.bin" ]; then
     echo "Preprocessing training data with semantic verification..."
-    cargo run --release --example preprocess_data --         --input "${DATA_DIR}/raw"         --output "${DATA_DIR}/processed"         --config "${CONFIG_FILE}"         --workers 64         --verify-compilation         --min-compile-rate 0.85         --numa-aware         --use-semantic-verification
+    cargo run -p nanochat-train --release -- preprocess \
+        --input "${DATA_DIR}/raw" \
+        --output "${DATA_DIR}/processed" \
+        --config "${CONFIG_FILE}" \
+        --workers 64 \
+        --verify-compilation \
+        --min-compile-rate 0.85 \
+        --numa-aware \
+        --use-semantic-verification
     echo -e "${GREEN}Data preprocessing complete!${NC}"
 else
     echo -e "${GREEN}Preprocessed data found, skipping...${NC}"
@@ -62,7 +71,20 @@ echo "This stage will take approximately 4-5 days."
 echo ""
 
 # Run with numactl for NUMA optimization
-numactl --interleave=all cargo run --release --example train_looplm --     --config "${CONFIG_FILE}"     --data "${DATA_DIR}/processed"     --checkpoint-dir "${CHECKPOINT_DIR}/stage1"     --n-loops 4     --entropy-weight 0.05     --batch-size 32     --seq-len 8192     --total-steps 100000     --eval-every 5000     --save-every 1000     --numa-aware     --preferred-kernel AVX512     2>&1 | tee "${CHECKPOINT_DIR}/stage1/training.log"
+numactl --interleave=all cargo run -p nanochat-train --release -- train \
+    --config "${CONFIG_FILE}" \
+    --data-path "${DATA_DIR}/processed" \
+    --checkpoint-dir "${CHECKPOINT_DIR}/stage1" \
+    --n-loops 4 \
+    --entropy-weight 0.05 \
+    --batch-size 32 \
+    --seq-len 8192 \
+    --total-steps 100000 \
+    --eval-every 5000 \
+    --save-every 1000 \
+    --numa-aware \
+    --preferred-kernel AVX512 \
+    2>&1 | tee "${CHECKPOINT_DIR}/stage1/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo -e "${RED}Stage 1 training failed! Check logs.${NC}"
@@ -77,7 +99,17 @@ echo -e "${YELLOW}=== Stage 3: Compiler-Verified MaxRL Fine-tuning (50K steps) =
 echo "Fine-tuning with compiler feedback and semantic verification..."
 echo ""
 
-numactl --interleave=all cargo run --release --example train_maxrl_verified --     --config "${CONFIG_FILE}"     --base-checkpoint "${CHECKPOINT_DIR}/stage1/final"     --checkpoint-dir "${CHECKPOINT_DIR}/stage2"     --compiler-verification     --semantic-analysis     --reward-threshold 0.9     --total-steps 50000     --eval-every 2500     --save-every 1000     2>&1 | tee "${CHECKPOINT_DIR}/stage2/training.log"
+numactl --interleave=all cargo run -p nanochat-train --release -- train \
+    --config "${CONFIG_FILE}" \
+    --base-checkpoint "${CHECKPOINT_DIR}/stage1/final" \
+    --checkpoint-dir "${CHECKPOINT_DIR}/stage2" \
+    --compiler-verification \
+    --semantic-analysis \
+    --reward-threshold 0.9 \
+    --total-steps 50000 \
+    --eval-every 2500 \
+    --save-every 1000 \
+    2>&1 | tee "${CHECKPOINT_DIR}/stage2/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo -e "${RED}Stage 2 training failed! Check logs.${NC}"
@@ -92,7 +124,17 @@ echo -e "${YELLOW}=== Stage 4: Long-Context Training (20K steps, 64K seq len) ==
 echo "Training with extended context length..."
 echo ""
 
-numactl --interleave=all cargo run --release --example train_long_context --     --config "${CONFIG_FILE}"     --base-checkpoint "${CHECKPOINT_DIR}/stage2/final"     --checkpoint-dir "${CHECKPOINT_DIR}/stage3"     --seq-len 65536     --total-steps 20000     --batch-size 4     --gradient-accumulation 8     --eval-every 2000     --save-every 1000     2>&1 | tee "${CHECKPOINT_DIR}/stage3/training.log"
+numactl --interleave=all cargo run -p nanochat-train --release -- train \
+    --config "${CONFIG_FILE}" \
+    --base-checkpoint "${CHECKPOINT_DIR}/stage2/final" \
+    --checkpoint-dir "${CHECKPOINT_DIR}/stage3" \
+    --seq-len 65536 \
+    --total-steps 20000 \
+    --batch-size 4 \
+    --gradient-accumulation 8 \
+    --eval-every 2000 \
+    --save-every 1000 \
+    2>&1 | tee "${CHECKPOINT_DIR}/stage3/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo -e "${RED}Stage 3 training failed! Check logs.${NC}"
@@ -104,7 +146,11 @@ echo ""
 
 # Export to GGUF
 echo -e "${YELLOW}=== Exporting to GGUF Format ===${NC}"
-cargo run --release --example export_gguf --     --checkpoint "${CHECKPOINT_DIR}/stage3/final"     --output "${PROJECT_DIR}/models/nanochat-7b-config-a.gguf"     --quantize ternary     --group-size 128
+cargo run -p nanochat-train --release -- export \
+    --checkpoint "${CHECKPOINT_DIR}/stage3/final" \
+    --output "${PROJECT_DIR}/models/nanochat-7b-config-a.gguf" \
+    --quantize ternary \
+    --group-size 128
 
 echo -e "${GREEN}Export complete!${NC}"
 echo ""

@@ -165,14 +165,18 @@ impl AsyncDataLoader {
                         seq_len,
                         "async_loader: sample {} has seq_len {} but first sample had {}, \
                          all samples in a batch must have uniform length",
-                        idx, inp.len(), seq_len,
+                        idx,
+                        inp.len(),
+                        seq_len,
                     );
                 }
                 assert_eq!(
                     inp.len(),
                     tgt.len(),
                     "async_loader: sample {} input len {} != target len {}",
-                    idx, inp.len(), tgt.len(),
+                    idx,
+                    inp.len(),
+                    tgt.len(),
                 );
                 input_ids.extend_from_slice(&inp);
                 target_ids.extend_from_slice(&tgt);
@@ -359,18 +363,14 @@ mod tests {
         let dataset = Arc::new(SyntheticDataset::new(100, 16, 20, 42));
         let device = Device::Cpu;
 
-        let loader = AsyncDataLoader::new(
-            Arc::clone(&dataset), 8, false, 42, 2, 4, device,
-        );
+        let loader = AsyncDataLoader::new(Arc::clone(&dataset), 8, false, 42, 2, 4, device);
 
         // n_batches should be ceil(20/8) = 3, not prefetch_size (4)
         assert_eq!(loader.n_batches(), 3);
 
         // Also test non-evenly-divisible case
         let dataset2 = Arc::new(SyntheticDataset::new(100, 16, 50, 42));
-        let loader2 = AsyncDataLoader::new(
-            dataset2, 8, false, 42, 2, 16, Device::Cpu,
-        );
+        let loader2 = AsyncDataLoader::new(dataset2, 8, false, 42, 2, 16, Device::Cpu);
         // n_batches should be ceil(50/8) = 7, not prefetch_size (16)
         assert_eq!(loader2.n_batches(), 7);
     }

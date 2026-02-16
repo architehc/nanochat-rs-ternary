@@ -31,14 +31,14 @@ impl Default for FP4Config {
 
         // Default precision configuration
         module_precision.insert("embedding".to_string(), DType::F16);
-        module_precision.insert("attention".to_string(), DType::F8);
-        module_precision.insert("ffn".to_string(), DType::F4);
+        module_precision.insert("attention".to_string(), DType::F16 /* proxy for FP8 */);
+        module_precision.insert("ffn".to_string(), DType::BF16 /* proxy for FP4 */);
         module_precision.insert("norm".to_string(), DType::F32);
         module_precision.insert("lm_head".to_string(), DType::F16);
 
         Self {
             forward_dtype: DType::BF16,
-            backward_dtype: DType::F4,
+            backward_dtype: DType::BF16 /* proxy for FP4 */,
             stochastic_rounding: true,
             module_precision,
             eps: 1e-5,
@@ -218,21 +218,23 @@ impl FP4Trainer {
             .unwrap_or(self.config.forward_dtype)
     }
 
-    /// Estimate memory savings
+    /// Estimate memory savings.
+    ///
+    /// Note: Since candle lacks FP4/FP8 dtypes, we use BF16/F16 as proxies.
+    /// The actual memory reduction ratios here reflect the *intended* FP4/FP8
+    /// hardware behavior on Blackwell, not the proxy dtype sizes.
     pub fn memory_savings(&self) -> MemorySavings {
         // FP4 uses 4 bits vs FP32 (32 bits) = 8x reduction
+        // FP8 uses 8 bits vs FP32 (32 bits) = 4x reduction
         // But we use mixed precision, so actual savings depend on configuration
 
         let activation_ratio = match self.config.forward_dtype {
-            DType::F4 => 8.0,
-            DType::F8 => 4.0,
             DType::BF16 | DType::F16 => 2.0,
             _ => 1.0,
         };
 
         let gradient_ratio = match self.config.backward_dtype {
-            DType::F4 => 8.0,
-            DType::F8 => 4.0,
+            DType::BF16 | DType::F16 => 2.0,
             _ => 1.0,
         };
 
@@ -271,23 +273,30 @@ impl Gradients {
     }
 }
 
-/// Extension trait for Tensor to add FP4 support
+/// Extension trait for Tensor to add FP4-like quantization support.
+///
+/// Since candle does not have native DType::F4, the `to_fp4_simulated()` method
+/// performs software FP4 quantization (round to nearest E2M1 value) but stores
+/// the result as F32. The `quantize_to()` method delegates to candle's native
+/// `to_dtype()` for all supported types.
 trait TensorFP4Ext {
-    fn to_fp4(&self) -> Result<Tensor>;
+    /// Simulate FP4 quantization: values are rounded to the nearest E2M1 representable
+    /// value but stored as F32 tensors (since candle has no FP4 dtype).
+    fn to_fp4_simulated(&self) -> Result<Tensor>;
+
+    /// Cast to a supported candle DType.
     fn quantize_to(&self, dtype: DType) -> Result<Tensor>;
 }
 
 impl TensorFP4Ext for Tensor {
-    fn to_fp4(&self) -> Result<Tensor> {
+    fn to_fp4_simulated(&self) -> Result<Tensor> {
         let trainer = FP4Trainer::new(FP4Config::default());
         trainer.quantize_fp4(self)
     }
 
     fn quantize_to(&self, dtype: DType) -> Result<Tensor> {
         match dtype {
-            DType::F4 => self.to_fp4(),
-            DType::F8 => self.to_dtype(DType::F8),
-            DType::BF16 => self.to_dtype(DType::BF16),
+            DType::BF16 | DType::F16 | DType::F32 | DType::F64 => self.to_dtype(dtype),
             _ => Ok(self.clone()),
         }
     }

@@ -118,7 +118,13 @@ fn bench_gemv_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("gemv_scalar_vs_ffi");
 
     // Focus on the production-critical shapes
-    let shapes: &[(usize, usize)] = &[(2048, 2048), (4096, 4096), (4096, 11008), (11008, 4096), (8192, 8192)];
+    let shapes: &[(usize, usize)] = &[
+        (2048, 2048),
+        (4096, 4096),
+        (4096, 11008),
+        (11008, 4096),
+        (8192, 8192),
+    ];
 
     for &(m, k) in shapes {
         let w = gen_weights(m, k);
@@ -151,7 +157,13 @@ fn bench_gemv_parallel(c: &mut Criterion) {
     let mut group = c.benchmark_group("gemv_parallel");
 
     // Production-critical shapes where parallel matters (large M)
-    let shapes: &[(usize, usize)] = &[(2048, 2048), (4096, 4096), (4096, 11008), (11008, 4096), (8192, 8192)];
+    let shapes: &[(usize, usize)] = &[
+        (2048, 2048),
+        (4096, 4096),
+        (4096, 11008),
+        (11008, 4096),
+        (8192, 8192),
+    ];
 
     for &(m, k) in shapes {
         let w = gen_weights(m, k);
@@ -181,7 +193,13 @@ fn bench_gemv_parallel(c: &mut Criterion) {
 fn bench_gemv_single_vs_parallel(c: &mut Criterion) {
     let mut group = c.benchmark_group("gemv_single_vs_parallel");
 
-    let shapes: &[(usize, usize)] = &[(2048, 2048), (4096, 4096), (4096, 11008), (11008, 4096), (8192, 8192)];
+    let shapes: &[(usize, usize)] = &[
+        (2048, 2048),
+        (4096, 4096),
+        (4096, 11008),
+        (11008, 4096),
+        (8192, 8192),
+    ];
 
     for &(m, k) in shapes {
         let w = gen_weights(m, k);

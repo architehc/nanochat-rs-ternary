@@ -105,7 +105,11 @@ impl InferenceEngine {
     ///
     /// Returns: (generated token IDs not including prompt, finish reason).
     /// FinishReason::Length when max_tokens is reached, FinishReason::Stop otherwise.
-    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> (Vec<u32>, FinishReason) {
+    pub fn generate(
+        &mut self,
+        prompt_ids: &[u32],
+        params: &SamplingParams,
+    ) -> (Vec<u32>, FinishReason) {
         let mut tokens = Vec::new();
         let mut reason = FinishReason::Stop;
         self.generate_streaming(prompt_ids, params, |tok| {
@@ -220,7 +224,11 @@ pub enum EngineHandle {
 }
 
 impl EngineHandle {
-    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> (Vec<u32>, FinishReason) {
+    pub fn generate(
+        &mut self,
+        prompt_ids: &[u32],
+        params: &SamplingParams,
+    ) -> (Vec<u32>, FinishReason) {
         match self {
             EngineHandle::Standard(engine) => engine.generate(prompt_ids, params),
             EngineHandle::Numa(engine) => engine.generate(prompt_ids, params),
@@ -480,7 +488,11 @@ impl NumaInferenceEngine {
     }
 
     /// Generate tokens autoregressively with NUMA thread-pool dispatch.
-    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> (Vec<u32>, FinishReason) {
+    pub fn generate(
+        &mut self,
+        prompt_ids: &[u32],
+        params: &SamplingParams,
+    ) -> (Vec<u32>, FinishReason) {
         let mut tokens = Vec::new();
         let mut reason = FinishReason::Stop;
         self.generate_streaming(prompt_ids, params, |tok| {

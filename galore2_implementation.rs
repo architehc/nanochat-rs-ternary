@@ -104,9 +104,12 @@ impl<OPT: Optimizer> GaLore2Optimizer<OPT> {
         // Get or create projection
         if let Some(proj) = self.projections.get(name) {
             // Project gradient: g_proj = Q^T @ g @ P
+            // proj.q stores U[:, :rank] (m x rank), so we transpose to get Q^T (rank x m)
+            // proj.p stores V[:, :rank] (n x rank), used directly as P
             // For efficiency, we compute: (Q^T @ g) @ P
-            let temp = proj.q.matmul(grad)?;  // Q^T @ g
-            let projected = temp.matmul(&proj.p)?;  // (Q^T @ g) @ P
+            let q_t = proj.q.t()?;                   // rank x m
+            let temp = q_t.matmul(grad)?;             // rank x n
+            let projected = temp.matmul(&proj.p)?;    // rank x rank
 
             // Scale to maintain gradient magnitude
             Ok(projected.mul(self.scale)?)
@@ -304,12 +307,15 @@ impl QuantizedMuon {
     }
 }
 
-/// Placeholder for MuonOptimizer - would integrate with existing implementation
+/// TODO: This is a placeholder stub for MuonOptimizer.
+/// The real implementation lives in nanochat-rs-ternary/crates/nanochat-train/src/optim.rs.
+/// This stub only exists so that GaLore2Optimizer and QuantizedMuon can compile
+/// without pulling in the full training crate dependency.
 pub struct MuonOptimizer;
 
 impl Optimizer for MuonOptimizer {
     fn step(&mut self, _grads: &HashMap<String, Tensor>) -> Result<()> {
-        // Implementation would be from existing nanochat-rs-ternary
+        // TODO: Replace with real Muon optimizer (Nesterov momentum on orthogonalized gradients)
         Ok(())
     }
 

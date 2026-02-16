@@ -381,7 +381,12 @@ mod tests {
     fn test_attention_forward_batch_matches_sequential() {
         let config = ModelConfig::d20();
         let attn = Attention::new_random(&config);
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
+        let rope = RopeFreqs::new(
+            config.head_dim(),
+            config.max_seq_len,
+            config.rope_theta,
+            config.rope_scale,
+        );
         let dim = config.dim;
         let seq_len = 4;
 
@@ -436,7 +441,12 @@ mod tests {
     fn test_attention_forward() {
         let config = ModelConfig::d20();
         let attn = Attention::new_random(&config);
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
+        let rope = RopeFreqs::new(
+            config.head_dim(),
+            config.max_seq_len,
+            config.rope_theta,
+            config.rope_scale,
+        );
         let mut cache = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
 
         let x = vec![0.1f32; config.dim];

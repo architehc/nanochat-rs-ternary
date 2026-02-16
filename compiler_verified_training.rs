@@ -159,6 +159,10 @@ impl SemanticVerifier {
         let temp_path = temp_file.path().to_string_lossy().to_string();
 
         // Run rustc
+        // Note: std::process::Command does not have a .timeout() method.
+        // We spawn the process and use wait_with_output() instead.
+        // For a hard timeout, a more sophisticated approach (e.g., spawning
+        // a thread with a kill timer) would be needed.
         let output = Command::new("rustc")
             .args(&[
                 "--crate-type", "lib",
@@ -166,7 +170,6 @@ impl SemanticVerifier {
                 "-o", "/dev/null",
                 &temp_path,
             ])
-            .timeout(std::time::Duration::from_secs(self.compile_timeout))
             .output();
 
         let compile_time_ms = start.elapsed().as_millis() as u64;
@@ -255,13 +258,32 @@ impl SemanticVerifier {
             .collect()
     }
 
-    /// Batch verification for training data
+    /// Batch verification for training data.
+    ///
+    /// Note: This performs verification without using the cache in parallel,
+    /// then updates the cache sequentially afterward. This avoids a data race
+    /// that would occur if par_iter tried to call &mut self.verify() concurrently.
     pub fn verify_batch(&mut self, codes: &[String]) -> Vec<VerificationResult> {
         use rayon::prelude::*;
 
-        codes.par_iter()
-            .map(|code| self.verify(code))
-            .collect()
+        // First, collect results in parallel using only the immutable verification logic.
+        // We cannot call self.verify() in par_iter because it takes &mut self (cache writes).
+        let results: Vec<VerificationResult> = codes.par_iter()
+            .map(|code| {
+                // Check cache first (read-only, safe to share via immutable ref)
+                // Since we can't access &mut self here, we skip the cache and just verify.
+                self.perform_verification(code)
+            })
+            .collect();
+
+        // Then update the cache sequentially
+        for (code, result) in codes.iter().zip(results.iter()) {
+            if self.cache.len() < self.max_cache_size {
+                self.cache.insert(code.clone(), result.clone());
+            }
+        }
+
+        results
     }
 
     /// Get cache statistics
@@ -335,10 +357,11 @@ impl<'ast> Visit<'ast> for AstAnalyzer {
 
         // Check for unsafe best practices
         if self.current_scope.is_nested_unsafe {
+            let span = node.unsafe_token.span;
             self.issues.push(SemanticIssue {
                 kind: IssueKind::NestedUnsafe,
                 message: "Nested unsafe blocks detected".to_string(),
-                span: node.unsafe_token.span,
+                span: format!("line {}, col {}", span.start().line, span.start().column),
             });
         }
 
@@ -611,7 +634,10 @@ pub struct CompilerError {
 pub struct SemanticIssue {
     pub kind: IssueKind,
     pub message: String,
-    pub span: proc_macro2::Span,
+    /// String representation of the source span (e.g., "line 10, col 5").
+    /// We store this as a String rather than proc_macro2::Span because
+    /// Span does not implement Serialize/Deserialize.
+    pub span: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

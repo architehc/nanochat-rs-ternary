@@ -117,11 +117,22 @@ pub fn save_mhc_file<P: AsRef<Path>>(
 ) -> io::Result<()> {
     for layer in layers {
         match (n_streams, layer) {
-            (2, MhcLayerParams::N2(_)) => {},
-            (4, MhcLayerParams::N4(_)) => {},
-            _ => return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                format!("n_streams={} but layer variant is {}", n_streams,
-                        if matches!(layer, MhcLayerParams::N2(_)) { "N2" } else { "N4" }))),
+            (2, MhcLayerParams::N2(_)) => {}
+            (4, MhcLayerParams::N4(_)) => {}
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "n_streams={} but layer variant is {}",
+                        n_streams,
+                        if matches!(layer, MhcLayerParams::N2(_)) {
+                            "N2"
+                        } else {
+                            "N4"
+                        }
+                    ),
+                ))
+            }
         }
     }
 

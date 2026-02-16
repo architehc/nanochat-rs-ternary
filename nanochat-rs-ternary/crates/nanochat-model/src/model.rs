@@ -58,7 +58,12 @@ impl NanochatModel {
             eprintln!("WARNING: gated_attention is configured but not yet implemented; ignoring");
         }
 
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
+        let rope = RopeFreqs::new(
+            config.head_dim(),
+            config.max_seq_len,
+            config.rope_theta,
+            config.rope_scale,
+        );
 
         // Build architecture based on loop_config
         let (
@@ -192,7 +197,10 @@ impl NanochatModel {
         // Extract config from GGUF metadata
         let config = Self::config_from_gguf(&gguf)?;
         config.validate().map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("invalid model config: {e}"))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid model config: {e}"),
+            )
         })?;
 
         if config.gated_attention {
@@ -466,7 +474,12 @@ impl NanochatModel {
         };
 
         // RoPE
-        let rope = RopeFreqs::new(config.head_dim(), config.max_seq_len, config.rope_theta, config.rope_scale);
+        let rope = RopeFreqs::new(
+            config.head_dim(),
+            config.max_seq_len,
+            config.rope_theta,
+            config.rope_scale,
+        );
 
         Ok(Self {
             tok_embed,
@@ -990,7 +1003,8 @@ impl NanochatModel {
     /// Returns true if the last forward_token() or forward_sequence_batched() call
     /// encountered an error and produced degraded output.
     pub fn last_forward_was_degraded(&self) -> bool {
-        self.last_forward_degraded.load(std::sync::atomic::Ordering::Relaxed)
+        self.last_forward_degraded
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Returns error context for the most recent degraded forward pass.
@@ -999,12 +1013,14 @@ impl NanochatModel {
     }
 
     fn clear_forward_error_state(&self) {
-        self.last_forward_degraded.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.last_forward_degraded
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         *self.last_forward_error.lock().unwrap() = None;
     }
 
     fn mark_forward_degraded(&self, message: impl Into<String>) {
-        self.last_forward_degraded.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.last_forward_degraded
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         *self.last_forward_error.lock().unwrap() = Some(message.into());
     }
 

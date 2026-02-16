@@ -1,7 +1,7 @@
 //! LoopLM (Looped Language Model) Implementation for nanochat-rs-ternary
 //! Based on "Scaling Latent Reasoning via Looped Language Models" (arXiv:2510.25741)
 
-use candle_core::{Result, Tensor, DType};
+use candle_core::{Result, Tensor, DType, D, Device};
 use candle_nn::{Linear, Module, VarBuilder};
 use serde::Deserialize;
 
@@ -60,14 +60,23 @@ impl ExitGate {
         Ok(Self { linear, temperature })
     }
 
-    /// Compute exit probability for current loop
-    pub fn forward(&self, hidden: &Tensor) -> Result<f64> {
+    /// Compute exit probability for current loop.
+    /// Returns a Tensor (not a scalar f64) to preserve gradient tracking
+    /// for the entropy regularization loss term.
+    pub fn forward(&self, hidden: &Tensor) -> Result<Tensor> {
         // Global average pooling over sequence
         let pooled = hidden.mean(1)?;  // [batch, dim]
         let logits = self.linear.forward(&pooled)?;  // [batch, 1]
         let prob = candle_nn::ops::sigmoid(&logits)?;
-        let prob_val = prob.to_vec1::<f32>()?[0] as f64;
-        Ok(prob_val)
+        // Return mean probability across batch as a scalar tensor (keeps gradient)
+        prob.mean_all()
+    }
+
+    /// Extract scalar value for inference-time early exit decisions.
+    /// This detaches from the computation graph.
+    pub fn forward_scalar(&self, hidden: &Tensor) -> Result<f64> {
+        let prob_tensor = self.forward(hidden)?;
+        Ok(prob_tensor.to_scalar::<f32>()? as f64)
     }
 }
 
@@ -172,7 +181,8 @@ impl LoopLM {
     }
 
     /// Forward pass with iterative computation (training)
-    pub fn forward_train(&self, input_ids: &Tensor) -> Result<(Tensor, Vec<f64>)> {
+    /// Returns logits and exit probability Tensors (gradient-tracked for entropy regularization).
+    pub fn forward_train(&self, input_ids: &Tensor) -> Result<(Tensor, Vec<Tensor>)> {
         let (batch_size, seq_len) = input_ids.dims2()?;
 
         // Embeddings
@@ -186,16 +196,16 @@ impl LoopLM {
         // Create causal mask
         let mask = self.create_causal_mask(seq_len, hidden.device())?;
 
-        // Track exit probabilities
+        // Track exit probabilities as Tensors (preserves gradient tracking)
         let mut exit_probs = Vec::new();
 
         // Apply shared blocks recurrently
-        for loop_idx in 0..self.config.n_loops {
+        for _loop_idx in 0..self.config.n_loops {
             for block in &self.shared_blocks {
                 hidden = block.forward(&hidden, Some(&mask))?;
             }
 
-            // Compute exit probability
+            // Compute exit probability (returns Tensor to keep gradient)
             let exit_prob = self.exit_gate.forward(&hidden)?;
             exit_probs.push(exit_prob);
         }
@@ -232,8 +242,8 @@ impl LoopLM {
                 hidden = block.forward(&hidden, Some(&mask))?;
             }
 
-            // Check early exit condition
-            let exit_prob = self.exit_gate.forward(&hidden)?;
+            // Check early exit condition (use scalar extraction for inference decisions)
+            let exit_prob = self.exit_gate.forward_scalar(&hidden)?;
             if exit_prob > exit_threshold {
                 tracing::info!("Early exit at loop {}", loop_idx);
                 break;
@@ -245,31 +255,52 @@ impl LoopLM {
         Ok(logits)
     }
 
-    /// Compute LoopLM training loss with entropy regularization
+    /// Compute LoopLM training loss with entropy regularization.
+    /// exit_probs are Tensors (not f64) so gradients flow through the entropy term.
     pub fn compute_loss(
         &self,
         logits: &Tensor,
         targets: &Tensor,
-        exit_probs: &[f64],
+        exit_probs: &[Tensor],
     ) -> Result<LoopLMLoss> {
         // Standard cross-entropy loss
         let log_probs = candle_nn::ops::log_softmax(logits, D::Minus1)?;
-        let nll_loss = candle_nn::losses::cross_entropy(&log_probs, targets)?;
+        let nll_loss_tensor = candle_nn::losses::cross_entropy(&log_probs, targets)?;
 
-        // Entropy regularization for exit probabilities
-        // Encourages uniform distribution over exit steps
-        let exit_entropy = compute_entropy(exit_probs);
+        // Entropy regularization for exit probabilities (as Tensors for gradient flow)
+        // Stack exit probs into a single tensor and normalize to form a distribution
+        let exit_stack = Tensor::stack(exit_probs, 0)?; // [n_loops]
+        let exit_dist = candle_nn::ops::softmax(&exit_stack, 0)?; // normalize to distribution
+
+        // Compute entropy: H = -sum(p * log(p + eps))
+        let eps_tensor = Tensor::new(1e-8f32, exit_dist.device())?;
+        let log_exit = (exit_dist.broadcast_add(&eps_tensor))?.log()?;
+        let entropy_tensor = (exit_dist.broadcast_mul(&log_exit))?.neg()?.sum_all()?;
+
+        // Uniform entropy (scalar, no gradient needed)
         let uniform_entropy = compute_uniform_entropy(exit_probs.len());
-        let entropy_penalty = (uniform_entropy - exit_entropy).abs();
 
-        // Total loss
-        let total_loss = nll_loss + self.config.entropy_weight * entropy_penalty;
+        // Entropy penalty: push toward uniform
+        let uniform_tensor = Tensor::new(uniform_entropy as f32, entropy_tensor.device())?;
+        let entropy_penalty_tensor = (uniform_tensor.sub(&entropy_tensor))?.abs()?;
+
+        // Total loss = NLL + weight * entropy_penalty (all as Tensors)
+        let weight_tensor = Tensor::new(self.config.entropy_weight as f32, nll_loss_tensor.device())?;
+        let total_loss_tensor = nll_loss_tensor.add(&(weight_tensor.broadcast_mul(&entropy_penalty_tensor))?)?;
+
+        // Extract scalar values for logging
+        let total = total_loss_tensor.to_scalar::<f32>()? as f64;
+        let nll = nll_loss_tensor.to_scalar::<f32>()? as f64;
+        let entropy_penalty = entropy_penalty_tensor.to_scalar::<f32>()? as f64;
+        let exit_entropy = entropy_tensor.to_scalar::<f32>()? as f64;
 
         Ok(LoopLMLoss {
-            total: total_loss,
-            nll: nll_loss,
+            total,
+            nll,
             entropy_penalty,
             exit_entropy,
+            // Keep the tensor for backward pass
+            total_loss_tensor,
         })
     }
 
@@ -288,6 +319,9 @@ pub struct LoopLMLoss {
     pub nll: f64,
     pub entropy_penalty: f64,
     pub exit_entropy: f64,
+    /// The total loss as a Tensor for calling .backward() with gradient flow
+    /// through the exit gate entropy regularization term.
+    pub total_loss_tensor: Tensor,
 }
 
 /// Compute entropy of exit probability distribution
@@ -416,5 +450,3 @@ impl LayerNorm {
     }
 }
 
-use candle_core::D;
-use candle_core::Device;

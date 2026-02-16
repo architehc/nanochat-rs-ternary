@@ -22,7 +22,7 @@ export OMP_PROC_BIND=spread
 export OMP_PLACES=cores
 export RAYON_NUM_THREADS=112
 
-PROJECT_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nanochat-rs-ternary"
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/1b_epyc_$(date +%Y%m%d_%H%M%S)"
 DATA_PATH="${PROJECT_DIR}/data/rust_tokens_large.bin"
 

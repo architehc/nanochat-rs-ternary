@@ -2,8 +2,8 @@
 //! Based on: "What Language Model Architecture and Pretraining Objective Work Best for Zero-Shot Generalization?" (arXiv:2204.05832)
 //! and Collider: "Cross-layer Activation Sparsity for Token Filtering" (arXiv:2502.00340)
 
-use candle_core::{Result, Tensor, DType};
-use candle_nn::{Linear, Module};
+use candle_core::{Result, Tensor, DType, D};
+use candle_nn::{Linear, Module, VarBuilder};
 use std::collections::HashMap;
 
 /// Multi-Token Prediction for denser training signals
@@ -272,8 +272,10 @@ impl Collider {
         }
 
         // Index select to get dense matrices
-        let a_dense = a.index_select(&Tensor::new(kept_indices.clone(), a.device())?, 0)?;
-        let b_dense = b.index_select(&Tensor::new(kept_indices, b.device())?, 0)?;
+        let indices_a = Tensor::new(kept_indices.clone(), a.device())?;
+        let indices_b = Tensor::new(kept_indices, b.device())?;
+        let a_dense = a.index_select(&indices_a, 0)?;
+        let b_dense = b.index_select(&indices_b, 0)?;
 
         Ok((a_dense, b_dense))
     }
@@ -412,5 +414,3 @@ pub struct TrainingOutput {
     pub collider_stats: Option<ColliderStats>,
 }
 
-use candle_core::D;
-use candle_nn::VarBuilder;

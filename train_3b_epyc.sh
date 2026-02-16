@@ -35,10 +35,11 @@ export NUMACTL_MEMORY_POLICY=interleave
 # CUDA optimizations for RTX 4090
 export CUDA_LAUNCH_BLOCKING=0
 
-PROJECT_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nanochat-rs-ternary"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${PROJECT_DIR}/data"
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/3b_epyc"
-CONFIG_FILE="/home/habitat/ternary-clawd/training_config_3b_epyc.toml"
+CONFIG_FILE="${SCRIPT_DIR}/training_config_3b_epyc.toml"
 LOG_FILE="${CHECKPOINT_DIR}/training.log"
 
 mkdir -p "${CHECKPOINT_DIR}"
@@ -83,7 +84,7 @@ echo ""
 
 # Run with numactl for NUMA optimization
 cd "${PROJECT_DIR}"
-numactl --interleave=all cargo run --release --bin train_rust_maxgpu -- \
+numactl --interleave=all cargo run --release --example train_rust_maxgpu -- \
     --data "${DATA_DIR}/rust_maxgpu_tokenized.bin" \
     --checkpoint-dir "${CHECKPOINT_DIR}" \
     --config "${CONFIG_FILE}" \
@@ -109,7 +110,7 @@ echo ""
 
 # Export to GGUF
 echo -e "${YELLOW}=== Exporting to GGUF Format ===${NC}"
-cargo run --release --example export_model -- \
+cargo run -p nanochat-train --release -- export \
     --checkpoint "${CHECKPOINT_DIR}/checkpoint_150000" \
     --output "${PROJECT_DIR}/models/nanochat-3b-epyc.gguf" \
     --quantize ternary \

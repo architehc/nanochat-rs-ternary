@@ -31,10 +31,11 @@ export CPU_AFFINITY="0-111"
 # Memory policy
 export NUCTL_MEMORY_POLICY=interleave
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nanochat-rs-ternary"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${PROJECT_DIR}/data"
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/config_c"
-CONFIG_FILE="${PROJECT_DIR}/configs/config_c_duel_epyc_4090.toml"
+CONFIG_FILE="${SCRIPT_DIR}/config_c_dual_epyc_4090.toml"
 
 mkdir -p "${CHECKPOINT_DIR}"
 
@@ -48,7 +49,15 @@ echo ""
 echo -e "${YELLOW}=== Stage 1: Data Preprocessing ===${NC}"
 if [ ! -f "${DATA_DIR}/processed/train_verified.bin" ]; then
     echo "Preprocessing with 112 workers..."
-    numactl --interleave=all cargo run --release --example preprocess_data --         --input "${DATA_DIR}/raw"         --output "${DATA_DIR}/processed"         --config "${CONFIG_FILE}"         --workers 112         --verify-compilation         --min-compile-rate 0.87         --numa-aware         --use-semantic-verification
+    numactl --interleave=all cargo run -p nanochat-train --release -- preprocess \
+        --input "${DATA_DIR}/raw" \
+        --output "${DATA_DIR}/processed" \
+        --config "${CONFIG_FILE}" \
+        --workers 112 \
+        --verify-compilation \
+        --min-compile-rate 0.87 \
+        --numa-aware \
+        --use-semantic-verification
     echo -e "${GREEN}Data preprocessing complete!${NC}"
 else
     echo -e "${GREEN}Preprocessed data found, skipping...${NC}"
@@ -61,7 +70,20 @@ echo "Starting training with massive CPU parallelism..."
 echo "This stage will take approximately 4-5 days."
 echo ""
 
-numactl --interleave=all cargo run --release --example train_looplm --     --config "${CONFIG_FILE}"     --data "${DATA_DIR}/processed"     --checkpoint-dir "${CHECKPOINT_DIR}/stage1"     --n-loops 4     --entropy-weight 0.06     --batch-size 24     --seq-len 6144     --total-steps 120000     --eval-every 5000     --save-every 1000     --numa-aware     --preferred-kernel AVX2     2>&1 | tee "${CHECKPOINT_DIR}/stage1/training.log"
+numactl --interleave=all cargo run -p nanochat-train --release -- train \
+    --config "${CONFIG_FILE}" \
+    --data-path "${DATA_DIR}/processed" \
+    --checkpoint-dir "${CHECKPOINT_DIR}/stage1" \
+    --n-loops 4 \
+    --entropy-weight 0.06 \
+    --batch-size 24 \
+    --seq-len 6144 \
+    --total-steps 120000 \
+    --eval-every 5000 \
+    --save-every 1000 \
+    --numa-aware \
+    --preferred-kernel AVX2 \
+    2>&1 | tee "${CHECKPOINT_DIR}/stage1/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo -e "${RED}Stage 1 training failed! Check logs.${NC}"
@@ -76,7 +98,17 @@ echo -e "${YELLOW}=== Stage 3: Compiler-Verified MaxRL (60K steps) ===${NC}"
 echo "Fine-tuning with compiler feedback..."
 echo ""
 
-numactl --interleave=all cargo run --release --example train_maxrl_verified --     --config "${CONFIG_FILE}"     --base-checkpoint "${CHECKPOINT_DIR}/stage1/final"     --checkpoint-dir "${CHECKPOINT_DIR}/stage2"     --compiler-verification     --semantic-analysis     --reward-threshold 0.90     --total-steps 60000     --eval-every 3000     --save-every 1000     2>&1 | tee "${CHECKPOINT_DIR}/stage2/training.log"
+numactl --interleave=all cargo run -p nanochat-train --release -- train \
+    --config "${CONFIG_FILE}" \
+    --base-checkpoint "${CHECKPOINT_DIR}/stage1/final" \
+    --checkpoint-dir "${CHECKPOINT_DIR}/stage2" \
+    --compiler-verification \
+    --semantic-analysis \
+    --reward-threshold 0.90 \
+    --total-steps 60000 \
+    --eval-every 3000 \
+    --save-every 1000 \
+    2>&1 | tee "${CHECKPOINT_DIR}/stage2/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo -e "${RED}Stage 2 training failed! Check logs.${NC}"
@@ -88,7 +120,11 @@ echo ""
 
 # Export
 echo -e "${YELLOW}=== Exporting to GGUF Format ===${NC}"
-cargo run --release --example export_gguf --     --checkpoint "${CHECKPOINT_DIR}/stage2/final"     --output "${PROJECT_DIR}/models/nanochat-5b-config-c.gguf"     --quantize ternary     --group-size 128
+cargo run -p nanochat-train --release -- export \
+    --checkpoint "${CHECKPOINT_DIR}/stage2/final" \
+    --output "${PROJECT_DIR}/models/nanochat-5b-config-c.gguf" \
+    --quantize ternary \
+    --group-size 128
 
 echo -e "${GREEN}Export complete!${NC}"
 echo ""

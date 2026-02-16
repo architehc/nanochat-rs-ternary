@@ -485,7 +485,7 @@ impl ModelConfig {
         if self.n_kv_heads > self.n_heads {
             return Err("n_kv_heads must be <= n_heads".into());
         }
-        if self.dim % self.n_heads != 0 {
+        if !self.dim.is_multiple_of(self.n_heads) {
             return Err("dim must be divisible by n_heads".into());
         }
         if self.group_size == 0 {

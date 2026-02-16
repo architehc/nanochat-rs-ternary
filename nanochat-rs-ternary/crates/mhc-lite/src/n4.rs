@@ -109,11 +109,26 @@ impl MhcLiteN4 {
         post_logits: [f32; 4],
         post_bias: [f32; 4],
     ) -> Self {
-        debug_assert!(res_logits.iter().all(|v| v.is_finite()), "res_logits must be finite");
-        debug_assert!(pre_logits.iter().all(|v| v.is_finite()), "pre_logits must be finite");
-        debug_assert!(pre_bias.iter().all(|v| v.is_finite()), "pre_bias must be finite");
-        debug_assert!(post_logits.iter().all(|v| v.is_finite()), "post_logits must be finite");
-        debug_assert!(post_bias.iter().all(|v| v.is_finite()), "post_bias must be finite");
+        debug_assert!(
+            res_logits.iter().all(|v| v.is_finite()),
+            "res_logits must be finite"
+        );
+        debug_assert!(
+            pre_logits.iter().all(|v| v.is_finite()),
+            "pre_logits must be finite"
+        );
+        debug_assert!(
+            pre_bias.iter().all(|v| v.is_finite()),
+            "pre_bias must be finite"
+        );
+        debug_assert!(
+            post_logits.iter().all(|v| v.is_finite()),
+            "post_logits must be finite"
+        );
+        debug_assert!(
+            post_bias.iter().all(|v| v.is_finite()),
+            "post_bias must be finite"
+        );
         Self {
             res_logits,
             pre_logits,
@@ -167,7 +182,10 @@ impl MhcLiteN4 {
     /// Output: [batch, C]
     pub fn prepare_input(&self, x: &[f32], dim_c: usize) -> Vec<f32> {
         assert!(dim_c > 0, "dim_c must be positive");
-        assert!(x.len() % (4 * dim_c) == 0, "input must be multiple of 4 * dim_c");
+        assert!(
+            x.len().is_multiple_of(4 * dim_c),
+            "input must be multiple of 4 * dim_c"
+        );
         let h_pre = self.h_pre();
         let batch = x.len() / (4 * dim_c);
         let mut out = vec![0.0f32; batch * dim_c];
@@ -238,7 +256,10 @@ impl MhcLiteN4 {
 
     /// Initialize: duplicate single stream to n=4 streams
     pub fn expand_input(x: &[f32], dim_c: usize) -> Vec<f32> {
-        assert!(x.len() % dim_c == 0, "input length must be multiple of dim_c");
+        assert!(
+            x.len().is_multiple_of(dim_c),
+            "input length must be multiple of dim_c"
+        );
         let batch = x.len() / dim_c;
         let mut out = vec![0.0f32; batch * 4 * dim_c];
         for b in 0..batch {
@@ -253,7 +274,10 @@ impl MhcLiteN4 {
 
     /// Collapse: average 4 streams -> 1
     pub fn collapse_output(x: &[f32], dim_c: usize) -> Vec<f32> {
-        assert!(x.len() % (4 * dim_c) == 0, "input length must be multiple of 4 * dim_c");
+        assert!(
+            x.len().is_multiple_of(4 * dim_c),
+            "input length must be multiple of 4 * dim_c"
+        );
         let batch = x.len() / (4 * dim_c);
         let mut out = vec![0.0f32; batch * dim_c];
         for b in 0..batch {

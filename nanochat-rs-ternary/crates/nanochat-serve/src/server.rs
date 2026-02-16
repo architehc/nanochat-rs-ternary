@@ -191,10 +191,7 @@ async fn chat_completions(
     }
 }
 
-async fn non_stream_completion(
-    state: Arc<AppState>,
-    req: ChatCompletionRequest,
-) -> Response {
+async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest) -> Response {
     metrics::INFERENCE_REQUESTS.inc();
 
     let model_name = state.model_name.clone();
@@ -224,7 +221,10 @@ async fn non_stream_completion(
                 .encode(prompt.as_str(), false)
                 .map_err(|err| {
                     eprintln!("ERROR: tokenizer encode failed: {}", err);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "failed to tokenize prompt".to_string())
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to tokenize prompt".to_string(),
+                    )
                 })?
                 .get_ids()
                 .to_vec();
@@ -232,33 +232,47 @@ async fn non_stream_completion(
 
             // Validate prompt length to prevent RoPE assert panics
             if prompt_len >= max_seq_len {
-                return Err((StatusCode::BAD_REQUEST, format!(
-                    "Prompt too long: {} tokens exceeds model limit of {}",
-                    prompt_len, max_seq_len
-                )));
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Prompt too long: {} tokens exceeds model limit of {}",
+                        prompt_len, max_seq_len
+                    ),
+                ));
             }
 
             let vs = state.vocab_size;
             if prompt_ids.iter().any(|&t| t >= vs) {
-                return Err((StatusCode::BAD_REQUEST, format!(
-                    "tokenizer produced token id outside model vocab (vocab_size={})",
-                    vs
-                )));
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "tokenizer produced token id outside model vocab (vocab_size={})",
+                        vs
+                    ),
+                ));
             }
             let token_ids = prompt_ids;
             if state.engines.is_empty() {
-                return Err((StatusCode::INTERNAL_SERVER_ERROR, "no inference engines are available".to_string()));
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "no inference engines are available".to_string(),
+                ));
             }
             let engine_idx =
                 state.next_engine.fetch_add(1, Ordering::Relaxed) % state.engines.len();
-            let engine_lock = state
-                .engines
-                .get(engine_idx)
-                .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "engine index out of range".to_string()))?;
+            let engine_lock = state.engines.get(engine_idx).ok_or_else(|| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "engine index out of range".to_string(),
+                )
+            })?;
 
-            let mut engine = engine_lock
-                .lock()
-                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "internal engine state unavailable".to_string()))?;
+            let mut engine = engine_lock.lock().map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal engine state unavailable".to_string(),
+                )
+            })?;
             let (output_ids, finish_reason) = engine.generate(&token_ids, &params);
             let output_len = output_ids.len();
 
@@ -287,16 +301,32 @@ async fn non_stream_completion(
 
             let text = state.tokenizer.decode(&output_ids, true).map_err(|err| {
                 eprintln!("ERROR: tokenizer decode failed: {}", err);
-                (StatusCode::INTERNAL_SERVER_ERROR, "failed to decode generated tokens".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to decode generated tokens".to_string(),
+                )
             })?;
 
-            Ok((text, prompt_len, output_len, finish_reason, degraded, degraded_reason))
+            Ok((
+                text,
+                prompt_len,
+                output_len,
+                finish_reason,
+                degraded,
+                degraded_reason,
+            ))
         }),
     )
     .await;
 
-    let (generated_text, prompt_tokens, completion_tokens, finish_reason, degraded, degraded_reason) = match result
-    {
+    let (
+        generated_text,
+        prompt_tokens,
+        completion_tokens,
+        finish_reason,
+        degraded,
+        degraded_reason,
+    ) = match result {
         Ok(Ok(Ok(data))) => data,
         Ok(Ok(Err((status, err)))) => {
             metrics::INFERENCE_ERRORS.inc();
@@ -305,14 +335,19 @@ async fn non_stream_completion(
         Ok(Err(join_err)) => {
             metrics::INFERENCE_ERRORS.inc();
             eprintln!("ERROR: non_stream spawn_blocking join failed: {}", join_err);
-            return error_json(StatusCode::INTERNAL_SERVER_ERROR, "internal request failure").into_response();
+            return error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal request failure",
+            )
+            .into_response();
         }
         Err(_) => {
             metrics::INFERENCE_ERRORS.inc();
             return error_json(
                 StatusCode::REQUEST_TIMEOUT,
                 &format!("request timed out after {}s", request_timeout.as_secs()),
-            ).into_response();
+            )
+            .into_response();
         }
     };
 
@@ -348,7 +383,8 @@ async fn non_stream_completion(
             finish_reason: finish_reason.as_str().to_string(),
         }],
         usage: Usage::new(prompt_tokens, completion_tokens),
-    }).into_response()
+    })
+    .into_response()
 }
 
 async fn stream_completion(

@@ -46,11 +46,16 @@ pub struct MhcLiteN2 {
 }
 
 impl MhcLiteN2 {
-    /// Create with identity initialization (alpha=1 → pure identity residual)
+    /// Create with balanced initialization (alpha=0.5 → equal identity/swap mixing)
+    ///
+    /// NOTE: Do NOT use alpha_logit=5.0 here. sigmoid(5.0)≈0.993 causes near-identity
+    /// bypass, allowing input embeddings to skip all transformer layers unchanged.
+    /// With weight tying this produces logit[token_id] = ||embedding||² instead of
+    /// predicting the next token. sigmoid(0.0)=0.5 gives balanced mixing.
     pub fn new_identity() -> Self {
         Self {
-            // Large positive logit → sigmoid ≈ 1 → identity matrix
-            alpha_logit: 5.0,
+            // Balanced logit → sigmoid = 0.5 → equal identity/swap mixing
+            alpha_logit: 0.0,
             // Equal mixing for pre/post, biased toward identity-like behavior
             pre_logits: [0.0, 0.0],
             pre_bias: [0.5, 0.5],
@@ -106,7 +111,18 @@ impl MhcLiteN2 {
     /// Prepare layer input: mix 2 streams → 1 stream
     /// Input:  x = [batch, 2*C] (two streams concatenated)
     /// Output: [batch, C]
+    ///
+    /// # Panics
+    /// Panics if `dim_c == 0` or `x.len()` is not a multiple of `2 * dim_c`.
     pub fn prepare_input(&self, x: &[f32], dim_c: usize) -> Vec<f32> {
+        assert!(dim_c > 0, "dim_c must be > 0");
+        assert!(
+            x.len() % (2 * dim_c) == 0,
+            "x.len() ({}) must be a multiple of 2*dim_c ({})",
+            x.len(),
+            2 * dim_c
+        );
+
         let h_pre = self.h_pre();
         let batch = x.len() / (2 * dim_c);
         let mut out = vec![0.0f32; batch * dim_c];
@@ -129,10 +145,29 @@ impl MhcLiteN2 {
     /// x:            [batch, 2*C]  (two streams)
     /// layer_output: [batch, C]    (single stream from layer F)
     /// Returns:      [batch, 2*C]  (two streams)
+    ///
+    /// # Panics
+    /// Panics if `dim_c == 0`, `x.len()` is not a multiple of `2 * dim_c`,
+    /// or `layer_output.len()` does not match `batch * dim_c`.
     pub fn apply(&self, x: &[f32], layer_output: &[f32], dim_c: usize) -> Vec<f32> {
+        assert!(dim_c > 0, "dim_c must be > 0");
+        assert!(
+            x.len() % (2 * dim_c) == 0,
+            "x.len() ({}) must be a multiple of 2*dim_c ({})",
+            x.len(),
+            2 * dim_c
+        );
+        let batch = x.len() / (2 * dim_c);
+        assert_eq!(
+            layer_output.len(),
+            batch * dim_c,
+            "layer_output.len() ({}) must equal batch*dim_c ({})",
+            layer_output.len(),
+            batch * dim_c
+        );
+
         let h_res = self.h_res();
         let h_post = self.h_post();
-        let batch = x.len() / (2 * dim_c);
         let mut out = vec![0.0f32; batch * 2 * dim_c];
 
         for b in 0..batch {
@@ -315,7 +350,18 @@ impl MhcLiteN4 {
     /// Prepare layer input: mix 4 streams → 1 stream
     /// Input:  [batch, 4*C]
     /// Output: [batch, C]
+    ///
+    /// # Panics
+    /// Panics if `dim_c == 0` or `x.len()` is not a multiple of `4 * dim_c`.
     pub fn prepare_input(&self, x: &[f32], dim_c: usize) -> Vec<f32> {
+        assert!(dim_c > 0, "dim_c must be > 0");
+        assert!(
+            x.len() % (4 * dim_c) == 0,
+            "x.len() ({}) must be a multiple of 4*dim_c ({})",
+            x.len(),
+            4 * dim_c
+        );
+
         let h_pre = self.h_pre();
         let batch = x.len() / (4 * dim_c);
         let mut out = vec![0.0f32; batch * dim_c];
@@ -340,10 +386,29 @@ impl MhcLiteN4 {
     /// x:            [batch, 4*C]
     /// layer_output: [batch, C]
     /// Returns:      [batch, 4*C]
+    ///
+    /// # Panics
+    /// Panics if `dim_c == 0`, `x.len()` is not a multiple of `4 * dim_c`,
+    /// or `layer_output.len()` does not match `batch * dim_c`.
     pub fn apply(&self, x: &[f32], layer_output: &[f32], dim_c: usize) -> Vec<f32> {
+        assert!(dim_c > 0, "dim_c must be > 0");
+        assert!(
+            x.len() % (4 * dim_c) == 0,
+            "x.len() ({}) must be a multiple of 4*dim_c ({})",
+            x.len(),
+            4 * dim_c
+        );
+        let batch = x.len() / (4 * dim_c);
+        assert_eq!(
+            layer_output.len(),
+            batch * dim_c,
+            "layer_output.len() ({}) must equal batch*dim_c ({})",
+            layer_output.len(),
+            batch * dim_c
+        );
+
         let h_res = self.h_res();
         let h_post = self.h_post();
-        let batch = x.len() / (4 * dim_c);
         let mut out = vec![0.0f32; batch * 4 * dim_c];
 
         for b in 0..batch {
@@ -644,11 +709,12 @@ mod tests {
     fn test_n2_identity_init() {
         let mhc = MhcLiteN2::new_identity();
         let h = mhc.h_res();
-        // Should be close to identity
-        assert!((h[0][0] - 1.0).abs() < 0.02);
-        assert!(h[0][1].abs() < 0.02);
-        assert!(h[1][0].abs() < 0.02);
-        assert!((h[1][1] - 1.0).abs() < 0.02);
+        // With alpha_logit=0.0: sigmoid(0.0)=0.5, so H_res = [[0.5, 0.5], [0.5, 0.5]]
+        // This gives balanced mixing, not identity bypass
+        assert!((h[0][0] - 0.5).abs() < 0.01, "Expected ~0.5, got {}", h[0][0]);
+        assert!((h[0][1] - 0.5).abs() < 0.01, "Expected ~0.5, got {}", h[0][1]);
+        assert!((h[1][0] - 0.5).abs() < 0.01, "Expected ~0.5, got {}", h[1][0]);
+        assert!((h[1][1] - 0.5).abs() < 0.01, "Expected ~0.5, got {}", h[1][1]);
         verify_doubly_stochastic_2x2(&h, 1e-6).unwrap();
     }
 

@@ -201,7 +201,12 @@ fn triangle_parallel_matches_scalar() {
             assert!(
                 diff < 1e-4,
                 "parallel mismatch at [{}x{}] idx {}: scalar={}, parallel={}, diff={}",
-                m, k, i, y_scalar[i], y_parallel[i], diff
+                m,
+                k,
+                i,
+                y_scalar[i],
+                y_parallel[i],
+                diff
             );
         }
     }

@@ -114,13 +114,19 @@ impl GgufFile {
         if n_tensors_u64 > MAX_ENTRIES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("n_tensors {} exceeds maximum allowed {}", n_tensors_u64, MAX_ENTRIES),
+                format!(
+                    "n_tensors {} exceeds maximum allowed {}",
+                    n_tensors_u64, MAX_ENTRIES
+                ),
             ));
         }
         if n_metadata_u64 > MAX_ENTRIES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("n_metadata {} exceeds maximum allowed {}", n_metadata_u64, MAX_ENTRIES),
+                format!(
+                    "n_metadata {} exceeds maximum allowed {}",
+                    n_metadata_u64, MAX_ENTRIES
+                ),
             ));
         }
         let n_tensors = usize::try_from(n_tensors_u64).map_err(|_| {
