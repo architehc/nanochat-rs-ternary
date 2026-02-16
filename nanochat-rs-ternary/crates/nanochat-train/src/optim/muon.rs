@@ -45,9 +45,8 @@ pub fn newton_schulz_orthogonalize(g: &Tensor, ns_steps: usize) -> Result<Tensor
         x = x.t()?;
     }
 
-    // Scale by aspect ratio
-    let scale = (rows.max(1) as f64 / cols.max(1) as f64).sqrt().max(1.0);
-    x = (&x * scale)?;
+    // Keep the nearest orthogonal/polar factor as-is.
+    // Post-scaling by aspect ratio breaks orthonormality for rectangular matrices.
 
     Ok(x)
 }
@@ -269,7 +268,7 @@ mod tests {
     #[test]
     fn test_newton_schulz_orthogonal() -> Result<()> {
         let device = Device::Cpu;
-        // Use square matrix so aspect-ratio scaling = 1.0
+        // Square case should converge near an orthogonal matrix.
         let g = Tensor::randn(0.0f32, 1.0, (16, 16), &device)?;
         let orth = newton_schulz_orthogonalize(&g, 5)?;
 
@@ -285,6 +284,43 @@ mod tests {
             .to_scalar::<f32>()?;
         // Relaxed tolerance — NS with 5 steps is approximate
         assert!(diff < 0.5, "orth^T @ orth should be ~I, max diff: {}", diff);
+        Ok(())
+    }
+
+    #[test]
+    fn test_newton_schulz_rectangular_preserves_orthogonality() -> Result<()> {
+        let device = Device::Cpu;
+
+        // Tall matrix: columns should be orthonormal.
+        let g_tall = Tensor::randn(0.0f32, 1.0, (32, 8), &device)?;
+        let q_tall = newton_schulz_orthogonalize(&g_tall, 5)?;
+        let gram_tall = q_tall.t()?.matmul(&q_tall)?;
+        let i_tall = Tensor::eye(8, DType::F32, &device)?;
+        let diff_tall = (&gram_tall - &i_tall)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            diff_tall < 0.6,
+            "tall matrix orthogonality drift: {}",
+            diff_tall
+        );
+
+        // Wide matrix: rows should be orthonormal.
+        let g_wide = Tensor::randn(0.0f32, 1.0, (8, 32), &device)?;
+        let q_wide = newton_schulz_orthogonalize(&g_wide, 5)?;
+        let gram_wide = q_wide.matmul(&q_wide.t()?)?;
+        let i_wide = Tensor::eye(8, DType::F32, &device)?;
+        let diff_wide = (&gram_wide - &i_wide)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            diff_wide < 0.6,
+            "wide matrix orthogonality drift: {}",
+            diff_wide
+        );
+
         Ok(())
     }
 

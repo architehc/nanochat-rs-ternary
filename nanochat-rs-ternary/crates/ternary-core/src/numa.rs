@@ -201,19 +201,7 @@ impl<T: Copy + Default> NumaVec<T> {
             .expect("NumaVec allocation size overflow");
         let required_align = std::mem::align_of::<T>().max(128);
 
-        let (ptr, alloc_kind) = if let Some(numa_ptr) = NumaAllocator::alloc_on_node(size, node) {
-            // Enable huge pages for large allocations
-            if size >= 2 * 1024 * 1024 {
-                // 2MB threshold
-                NumaAllocator::enable_huge_pages(numa_ptr, size);
-            }
-            assert!(
-                (numa_ptr as usize).is_multiple_of(std::mem::align_of::<T>()),
-                "NUMA allocation not aligned for target type"
-            );
-            (numa_ptr as *mut T, AllocKind::NumaMmap { size })
-        } else {
-            // Fallback to standard aligned allocation
+        let alloc_std = |size: usize, required_align: usize| -> (*mut T, AllocKind) {
             let layout = Layout::from_size_align(size, required_align)
                 .expect("invalid fallback layout for NumaVec");
             let ptr = unsafe { std::alloc::alloc(layout) as *mut T };
@@ -222,6 +210,46 @@ impl<T: Copy + Default> NumaVec<T> {
             }
             (ptr, AllocKind::StdAlloc { layout })
         };
+
+        let (ptr, alloc_kind) = if let Some(numa_ptr) = NumaAllocator::alloc_on_node(size, node) {
+            // Enable huge pages for large allocations
+            if size >= 2 * 1024 * 1024 {
+                // 2MB threshold
+                NumaAllocator::enable_huge_pages(numa_ptr, size);
+            }
+            if !(numa_ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
+                log::warn!(
+                    "NUMA allocation returned misaligned pointer for T (align={}), falling back to std alloc",
+                    std::mem::align_of::<T>()
+                );
+                unsafe {
+                    NumaAllocator::dealloc(numa_ptr, size);
+                }
+                alloc_std(size, required_align)
+            } else {
+                (numa_ptr as *mut T, AllocKind::NumaMmap { size })
+            }
+        } else {
+            // Fallback to standard aligned allocation
+            alloc_std(size, required_align)
+        };
+
+        // Validate pointer alignment before unsafe writes.
+        if ptr.is_null() || !(ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
+            match &alloc_kind {
+                AllocKind::NumaMmap { size } => unsafe {
+                    NumaAllocator::dealloc(ptr as *mut u8, *size);
+                },
+                AllocKind::StdAlloc { layout } => unsafe {
+                    std::alloc::dealloc(ptr as *mut u8, *layout);
+                },
+                AllocKind::None => {}
+            }
+            panic!(
+                "NumaVec allocation produced invalid pointer (null or misaligned for align={})",
+                std::mem::align_of::<T>()
+            );
+        }
 
         // Initialize with default values (first-touch policy)
         unsafe {

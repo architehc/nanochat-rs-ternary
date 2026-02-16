@@ -324,6 +324,7 @@ pub fn quantize_row_q1_58(
         .ok_or_else(|| "rows*total_bytes_per_row overflow in quantize_row_q1_58".to_string())?;
 
     let mut result = Vec::with_capacity(total_capacity);
+    let group_bytes = group_size / 4;
 
     for r in 0..rows {
         let row_start = r * cols;
@@ -339,11 +340,19 @@ pub fn quantize_row_q1_58(
             let group_end = group_start + group_size;
             let group_weights = &row_weights[group_start..group_end];
 
-            let (packed, scale) = pack_group(group_weights);
-            let group_bytes = group_size / 4;
+            // Inline quantization to avoid per-group temporary allocations.
+            let asum: f32 = group_weights.iter().map(|w| w.abs()).sum();
+            let scale = asum / group_size as f32;
+            let inv = if scale > 1e-10 { 1.0 / scale } else { 0.0 };
+
             let dst_start = packed_offset + g * group_bytes;
-            let dst_end = dst_start + group_bytes;
-            result[dst_start..dst_end].copy_from_slice(&packed);
+            for (j, chunk) in group_weights.chunks_exact(4).enumerate() {
+                let t0 = quantize_one(chunk[0], inv);
+                let t1 = quantize_one(chunk[1], inv);
+                let t2 = quantize_one(chunk[2], inv);
+                let t3 = quantize_one(chunk[3], inv);
+                result[dst_start + j] = pack_4(t0, t1, t2, t3);
+            }
 
             let scale_bytes = scale.to_le_bytes();
             let scale_start = scales_offset + g * 4;

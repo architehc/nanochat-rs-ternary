@@ -3,6 +3,7 @@
 //! Includes both a standard `InferenceEngine` and a NUMA-aware `NumaInferenceEngine`
 //! for dual-socket systems (e.g. dual AMD EPYC 9654). The NUMA engine provides
 //! per-request/thread-pool dispatch for prefill/decode on detected node pools.
+//! It does not currently hard-pin worker threads to NUMA nodes.
 
 use nanochat_model::config::ModelConfig;
 use nanochat_model::model::NanochatModel;
@@ -270,6 +271,7 @@ impl NumaConfig {
 /// - Detects NUMA topology and builds per-node thread pools.
 /// - Uses NUMA-aware weight allocation where available.
 /// - Dispatches prefill/decode work onto per-node thread pools.
+/// - Does not currently enforce CPU affinity pinning for those pools.
 /// - Does not yet split a single forward pass per layer across nodes.
 pub struct NumaInferenceEngine {
     pub model: NanochatModel,
@@ -451,7 +453,7 @@ impl NumaInferenceEngine {
     pub fn numa_status(&self) -> String {
         if self.numa_config.numa_active {
             format!(
-                "NUMA active: {} nodes, {} threads/node, decode dispatch enabled, layer split metadata {}/{}",
+                "NUMA active: {} nodes, {} threads/node, decode dispatch via pools (no affinity pinning), layer split metadata {}/{}",
                 self.numa_config.num_nodes,
                 self.numa_config.threads_per_node,
                 self.layer_split,
