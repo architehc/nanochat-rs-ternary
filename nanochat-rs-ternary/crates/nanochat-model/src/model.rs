@@ -263,10 +263,49 @@ impl NanochatModel {
                     });
                 }
 
+                let shared_expert = if config.use_shared_expert {
+                    let gate = gguf
+                        .load_planar_weights(
+                            &format!("{prefix}.ffn.shared_expert.w_gate.weight"),
+                            group_size,
+                        )
+                        .ok();
+                    let up = gguf
+                        .load_planar_weights(
+                            &format!("{prefix}.ffn.shared_expert.w_up.weight"),
+                            group_size,
+                        )
+                        .ok();
+                    let down = gguf
+                        .load_planar_weights(
+                            &format!("{prefix}.ffn.shared_expert.w_down.weight"),
+                            group_size,
+                        )
+                        .ok();
+                    match (gate, up, down) {
+                        (Some(w_gate), Some(w_up), Some(w_down)) => Some(FeedForward {
+                            w_gate: BitLinear::new(w_gate),
+                            w_up: BitLinear::new(w_up),
+                            w_down: BitLinear::new(w_down),
+                            ffn_dim: config.ffn_dim(),
+                        }),
+                        _ => {
+                            eprintln!(
+                                "WARNING: shared expert requested but missing for '{}'; continuing without shared expert",
+                                prefix
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 FfnLayer::Moe(Box::new(MoeExperts {
                     router,
                     experts,
                     n_active,
+                    shared_expert,
                 }))
             } else {
                 let w_gate = BitLinear::new(
@@ -738,7 +777,24 @@ impl NanochatModel {
 
     fn extract_mhc_n2(layers: &[mhc_lite::MhcLayerParams], idx: usize) -> io::Result<MhcLiteN2> {
         match layers.get(idx) {
-            Some(mhc_lite::MhcLayerParams::N2(mhc)) => Ok(mhc.clone()),
+            Some(mhc_lite::MhcLayerParams::N2(mhc)) => {
+                if !mhc.alpha_logit.is_finite() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("non-finite alpha_logit in mHC layer {idx}"),
+                    ));
+                }
+                if mhc.alpha_logit.abs() > 20.0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "alpha_logit out of allowed range in mHC layer {idx}: {}",
+                            mhc.alpha_logit
+                        ),
+                    ));
+                }
+                Ok(mhc.clone())
+            }
             Some(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("expected N2 mHC at index {idx}"),

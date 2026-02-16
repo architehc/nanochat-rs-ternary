@@ -1,8 +1,9 @@
 //! Inference engine: KV-cache management, sampling, text generation.
 //!
 //! Includes both a standard `InferenceEngine` and a NUMA-aware `NumaInferenceEngine`
-//! for dual-socket systems (e.g. dual AMD EPYC 9654). The NUMA engine splits model
-//! layers across sockets with dedicated rayon thread pools per NUMA node.
+//! for dual-socket systems (e.g. dual AMD EPYC 9654). The NUMA engine currently
+//! provides NUMA-aware memory placement and topology reporting; per-layer dispatch
+//! is not yet wired into the model forward path.
 
 use nanochat_model::config::ModelConfig;
 use nanochat_model::model::NanochatModel;
@@ -221,15 +222,10 @@ impl NumaConfig {
 
 /// NUMA-aware inference engine for dual-socket systems.
 ///
-/// Splits model layers across NUMA nodes:
-/// - Layers 0..N/2 run on node 0's thread pool
-/// - Layers N/2..N run on node 1's thread pool
-///
-/// Each node has a dedicated rayon ThreadPool pinned to the socket's cores.
-/// Weight memory for each layer set is allocated on the corresponding NUMA node
-/// via `AlignedVec::new_on_node()`.
-///
-/// Falls back to single-pool execution if NUMA is not available.
+/// Current behavior:
+/// - Detects NUMA topology and builds per-node thread pools.
+/// - Uses NUMA-aware weight allocation where available.
+/// - Runs generation through the standard model path (no per-layer pool dispatch yet).
 pub struct NumaInferenceEngine {
     pub model: NanochatModel,
     pub eot_token: u32,
@@ -300,11 +296,9 @@ impl NumaInferenceEngine {
         }
     }
 
-    /// Generate tokens autoregressively with NUMA-aware layer dispatch.
+    /// Generate tokens autoregressively with NUMA-aware memory placement.
     ///
-    /// Each layer's forward pass is dispatched to the thread pool of the NUMA
-    /// node that owns that layer's weights. This ensures weight memory accesses
-    /// use local DRAM bandwidth rather than crossing the inter-socket link.
+    /// NOTE: Per-layer NUMA thread-pool dispatch is not implemented yet.
     pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> Vec<u32> {
         // The actual NUMA dispatch for individual layer forward passes would require
         // deeper integration with the model's per-layer forward. For now, we use
@@ -369,7 +363,7 @@ impl NumaInferenceEngine {
     pub fn numa_status(&self) -> String {
         if self.numa_config.numa_active {
             format!(
-                "NUMA active: {} nodes, {} threads/node, layers split at {}/{}",
+                "NUMA active: {} nodes, {} threads/node, layer split metadata {}/{} (dispatch not wired)",
                 self.numa_config.num_nodes,
                 self.numa_config.threads_per_node,
                 self.layer_split,

@@ -63,6 +63,8 @@ pub struct MoeExperts {
     pub experts: Vec<FeedForward>,
     /// Number of active experts per token (top-k)
     pub n_active: usize,
+    /// Optional shared expert that is always active.
+    pub shared_expert: Option<FeedForward>,
 }
 
 impl MoeExperts {
@@ -86,11 +88,17 @@ impl MoeExperts {
         let experts: Vec<FeedForward> = (0..n_experts)
             .map(|_| FeedForward::new_random(config))
             .collect();
+        let shared_expert = if config.use_shared_expert {
+            Some(FeedForward::new_random(config))
+        } else {
+            None
+        };
 
         Self {
             router,
             experts,
             n_active,
+            shared_expert,
         }
     }
 
@@ -115,6 +123,15 @@ impl MoeExperts {
         let dim = x.len();
         for v in out.iter_mut() {
             *v = 0.0;
+        }
+
+        // Shared expert contributes for every token when configured.
+        if let Some(shared) = &self.shared_expert {
+            let mut shared_out = vec![0.0f32; dim];
+            shared.forward(x, &mut shared_out);
+            for j in 0..dim {
+                out[j] += shared_out[j];
+            }
         }
 
         let mut expert_out = vec![0.0f32; dim];
@@ -255,7 +272,9 @@ mod tests {
         let mut config = ModelConfig::test_config(128, 2, 4, 256);
         config.n_experts = Some(8);
         config.n_active_experts = Some(2);
+        config.use_shared_expert = true;
         let moe = MoeExperts::new_random(&config);
+        assert!(moe.shared_expert.is_some());
 
         let x = vec![0.1f32; config.dim];
         let mut out = vec![0.0f32; config.dim];

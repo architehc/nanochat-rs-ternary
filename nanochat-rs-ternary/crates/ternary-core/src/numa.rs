@@ -9,6 +9,7 @@
 //! - First-touch allocation policy
 //! - Huge pages for reduced TLB pressure
 
+use std::alloc::{handle_alloc_error, Layout};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static NUMA_AVAILABLE: AtomicBool = AtomicBool::new(false);
@@ -172,28 +173,54 @@ impl NumaAllocator {
 pub struct NumaVec<T> {
     ptr: *mut T,
     len: usize,
-    capacity: usize,
     node: i32,
+    alloc_kind: AllocKind,
+}
+
+enum AllocKind {
+    NumaMmap { size: usize },
+    StdAlloc { layout: Layout },
+    None,
 }
 
 impl<T: Copy + Default> NumaVec<T> {
     /// Create a new NUMA-aware vector on the specified node.
     pub fn new_on_node(capacity: usize, node: i32) -> Self {
-        let size = capacity * std::mem::size_of::<T>();
+        if capacity == 0 || std::mem::size_of::<T>() == 0 {
+            return Self {
+                ptr: std::ptr::NonNull::<T>::dangling().as_ptr(),
+                len: capacity,
+                node,
+                alloc_kind: AllocKind::None,
+            };
+        }
 
-        let ptr = if let Some(numa_ptr) = NumaAllocator::alloc_on_node(size, node) {
+        let elem_size = std::mem::size_of::<T>();
+        let size = capacity
+            .checked_mul(elem_size)
+            .expect("NumaVec allocation size overflow");
+        let required_align = std::mem::align_of::<T>().max(128);
+
+        let (ptr, alloc_kind) = if let Some(numa_ptr) = NumaAllocator::alloc_on_node(size, node) {
             // Enable huge pages for large allocations
             if size >= 2 * 1024 * 1024 {
                 // 2MB threshold
                 NumaAllocator::enable_huge_pages(numa_ptr, size);
             }
-            numa_ptr as *mut T
+            assert!(
+                (numa_ptr as usize).is_multiple_of(std::mem::align_of::<T>()),
+                "NUMA allocation not aligned for target type"
+            );
+            (numa_ptr as *mut T, AllocKind::NumaMmap { size })
         } else {
             // Fallback to standard aligned allocation
-            unsafe {
-                let layout = std::alloc::Layout::from_size_align_unchecked(size, 128);
-                std::alloc::alloc(layout) as *mut T
+            let layout = Layout::from_size_align(size, required_align)
+                .expect("invalid fallback layout for NumaVec");
+            let ptr = unsafe { std::alloc::alloc(layout) as *mut T };
+            if ptr.is_null() {
+                handle_alloc_error(layout);
             }
+            (ptr, AllocKind::StdAlloc { layout })
         };
 
         // Initialize with default values (first-touch policy)
@@ -206,8 +233,8 @@ impl<T: Copy + Default> NumaVec<T> {
         Self {
             ptr,
             len: capacity,
-            capacity,
             node,
+            alloc_kind,
         }
     }
 
@@ -235,11 +262,14 @@ impl<T: Copy + Default> NumaVec<T> {
 
 impl<T> Drop for NumaVec<T> {
     fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            unsafe {
-                let size = self.capacity * std::mem::size_of::<T>();
-                NumaAllocator::dealloc(self.ptr as *mut u8, size);
-            }
+        match &self.alloc_kind {
+            AllocKind::NumaMmap { size } => unsafe {
+                NumaAllocator::dealloc(self.ptr as *mut u8, *size);
+            },
+            AllocKind::StdAlloc { layout } => unsafe {
+                std::alloc::dealloc(self.ptr as *mut u8, *layout);
+            },
+            AllocKind::None => {}
         }
     }
 }

@@ -35,14 +35,52 @@ impl PackedMatrix {
 
     /// Get packed bytes for a specific row.
     pub fn row_bytes(&self, row: usize) -> &[u8] {
+        assert!(
+            row < self.rows,
+            "row index {} out of bounds {}",
+            row,
+            self.rows
+        );
         let bpr = self.bytes_per_row();
-        &self.packed[row * bpr..(row + 1) * bpr]
+        let start = row
+            .checked_mul(bpr)
+            .expect("row_bytes start offset overflow");
+        let end = start
+            .checked_add(bpr)
+            .expect("row_bytes end offset overflow");
+        assert!(
+            end <= self.packed.len(),
+            "row_bytes range [{}..{}) out of packed bounds {}",
+            start,
+            end,
+            self.packed.len()
+        );
+        &self.packed[start..end]
     }
 
     /// Get scales for a specific row.
     pub fn row_scales(&self, row: usize) -> &[f32] {
+        assert!(
+            row < self.rows,
+            "row index {} out of bounds {}",
+            row,
+            self.rows
+        );
         let gpr = self.groups_per_row();
-        &self.scales[row * gpr..(row + 1) * gpr]
+        let start = row
+            .checked_mul(gpr)
+            .expect("row_scales start offset overflow");
+        let end = start
+            .checked_add(gpr)
+            .expect("row_scales end offset overflow");
+        assert!(
+            end <= self.scales.len(),
+            "row_scales range [{}..{}) out of scales bounds {}",
+            start,
+            end,
+            self.scales.len()
+        );
+        &self.scales[start..end]
     }
 }
 
@@ -261,7 +299,10 @@ pub fn quantize_row_q1_58(
     if !cols.is_multiple_of(4) {
         return Err(format!("cols {} must be divisible by 4", cols));
     }
-    if weights.len() != rows * cols {
+    let rows_cols = rows
+        .checked_mul(cols)
+        .ok_or_else(|| "rows*cols overflow in quantize_row_q1_58".to_string())?;
+    if weights.len() != rows_cols {
         return Err(format!(
             "weights.len() {} != rows {} * cols {}",
             weights.len(),
@@ -272,18 +313,26 @@ pub fn quantize_row_q1_58(
 
     let bytes_per_row = cols / 4;
     let groups_per_row = cols / group_size;
-    let scales_bytes_per_row = groups_per_row * 4; // f32 = 4 bytes
-    let total_bytes_per_row = bytes_per_row + scales_bytes_per_row;
+    let scales_bytes_per_row = groups_per_row
+        .checked_mul(4)
+        .ok_or_else(|| "groups_per_row*4 overflow in quantize_row_q1_58".to_string())?;
+    let total_bytes_per_row = bytes_per_row
+        .checked_add(scales_bytes_per_row)
+        .ok_or_else(|| "row byte size overflow in quantize_row_q1_58".to_string())?;
+    let total_capacity = rows
+        .checked_mul(total_bytes_per_row)
+        .ok_or_else(|| "rows*total_bytes_per_row overflow in quantize_row_q1_58".to_string())?;
 
-    let mut result = Vec::with_capacity(rows * total_bytes_per_row);
+    let mut result = Vec::with_capacity(total_capacity);
 
     for r in 0..rows {
         let row_start = r * cols;
         let row_weights = &weights[row_start..row_start + cols];
 
-        // Pack this row
-        let mut row_packed = Vec::with_capacity(bytes_per_row);
-        let mut row_scales = Vec::with_capacity(groups_per_row);
+        let packed_offset = result.len();
+        result.resize(packed_offset + bytes_per_row, 0u8);
+        let scales_offset = result.len();
+        result.resize(scales_offset + scales_bytes_per_row, 0u8);
 
         for g in 0..groups_per_row {
             let group_start = g * group_size;
@@ -291,14 +340,14 @@ pub fn quantize_row_q1_58(
             let group_weights = &row_weights[group_start..group_end];
 
             let (packed, scale) = pack_group(group_weights);
-            row_packed.extend_from_slice(&packed);
-            row_scales.push(scale);
-        }
+            let group_bytes = group_size / 4;
+            let dst_start = packed_offset + g * group_bytes;
+            let dst_end = dst_start + group_bytes;
+            result[dst_start..dst_end].copy_from_slice(&packed);
 
-        // Write row: packed bytes followed by scales
-        result.extend_from_slice(&row_packed);
-        for scale in row_scales {
-            result.extend_from_slice(&scale.to_le_bytes());
+            let scale_bytes = scale.to_le_bytes();
+            let scale_start = scales_offset + g * 4;
+            result[scale_start..scale_start + 4].copy_from_slice(&scale_bytes);
         }
     }
 

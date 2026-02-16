@@ -490,14 +490,19 @@ impl ModelConfig {
                     Some(r) if r <= 0.0 => false,
                     Some(r) if r >= 1.0 => true,
                     Some(r) => {
+                        if self.n_layers == 0 {
+                            return false;
+                        }
                         let n_deltanet = ((self.n_layers as f32) * r).round() as usize;
                         if n_deltanet == 0 {
                             return false;
                         }
-                        // Stride-based interleaved assignment
-                        let stride = self.n_layers as f32 / n_deltanet as f32;
+                        // Integer-safe interleaving: place DeltaNet layers near bin centers.
                         for k in 0..n_deltanet {
-                            let dn_idx = (stride * k as f32 + stride / 2.0).floor() as usize;
+                            let num = (2u128 * k as u128 + 1) * self.n_layers as u128;
+                            let den = 2u128 * n_deltanet as u128;
+                            let dn_idx = usize::try_from(num / den).unwrap_or(usize::MAX);
+                            let dn_idx = dn_idx.min(self.n_layers - 1);
                             if dn_idx == layer_idx {
                                 return true;
                             }
@@ -591,5 +596,15 @@ mod tests {
                 config.group_size
             );
         }
+    }
+
+    #[test]
+    fn test_is_deltanet_layer_large_config_no_overflow() {
+        let mut cfg = ModelConfig::test_config(128, 1_000_000, 8, 1024);
+        cfg.deltanet_ratio = Some(0.5);
+        cfg.layer_sequence = LayerSequence::Interleaved;
+
+        let _ = cfg.is_deltanet_layer(0);
+        let _ = cfg.is_deltanet_layer(cfg.n_layers - 1);
     }
 }

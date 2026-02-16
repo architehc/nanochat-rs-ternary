@@ -3,10 +3,11 @@
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::sse::{Event, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -28,10 +29,30 @@ pub struct AppState {
     pub model_name: String,
     pub vocab_size: u32,
     pub max_seq_len: usize,
+    pub api_key: Option<String>,
+    pub request_timeout: Duration,
+    pub cors_allowed_origin: Option<String>,
 }
 
 /// Build the Axum router.
 pub fn build_router(state: Arc<AppState>) -> Router {
+    let mut cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE]);
+    if let Some(origin) = state.cors_allowed_origin.as_deref() {
+        match HeaderValue::from_str(origin) {
+            Ok(value) => {
+                cors = cors.allow_origin(value);
+            }
+            Err(err) => {
+                eprintln!(
+                    "WARNING: ignoring invalid CORS origin '{}': {}",
+                    origin, err
+                );
+            }
+        }
+    }
+
     Router::new()
         .route("/", get(chat_ui))
         .route("/health", get(health))
@@ -40,7 +61,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/chat/completions", post(chat_completions))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(ConcurrencyLimitLayer::new(128))
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state)
 }
 
@@ -69,6 +90,39 @@ fn error_response(model: String, message: String) -> Json<ChatCompletionResponse
     })
 }
 
+fn unauthorized_response() -> Response {
+    let body = serde_json::json!({
+        "error": {
+            "message": "unauthorized",
+            "type": "authentication_error"
+        }
+    });
+    (StatusCode::UNAUTHORIZED, Json(body)).into_response()
+}
+
+fn is_authorized(headers: &HeaderMap, api_key: Option<&str>) -> bool {
+    let Some(expected) = api_key else {
+        return true;
+    };
+
+    let bearer = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim);
+    if let Some(auth) = bearer {
+        let expected_bearer = format!("Bearer {}", expected);
+        if auth == expected_bearer {
+            return true;
+        }
+    }
+
+    headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .is_some_and(|provided| provided == expected)
+}
+
 async fn chat_ui() -> impl IntoResponse {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -88,7 +142,10 @@ async fn prometheus_metrics() -> impl IntoResponse {
     metrics::render_metrics()
 }
 
-async fn list_models(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+async fn list_models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !is_authorized(&headers, state.api_key.as_deref()) {
+        return unauthorized_response();
+    }
     Json(serde_json::json!({
         "object": "list",
         "data": [{
@@ -97,12 +154,18 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Json<serde_json::Val
             "owned_by": "nanochat"
         }]
     }))
+    .into_response()
 }
 
 async fn chat_completions(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Response {
+    if !is_authorized(&headers, state.api_key.as_deref()) {
+        return unauthorized_response();
+    }
+
     let stream = req.stream.unwrap_or(false);
 
     if stream {
@@ -131,77 +194,89 @@ async fn non_stream_completion(
     };
     let params = req.to_sampling_params();
     let max_seq_len = state.max_seq_len;
+    let request_timeout = state.request_timeout;
 
-    let result = tokio::task::spawn_blocking(move || {
-        let prompt_ids = state
-            .tokenizer
-            .encode(prompt.as_str(), false)
-            .map_err(|err| {
-                eprintln!("ERROR: tokenizer encode failed: {}", err);
-                "failed to tokenize prompt".to_string()
-            })?
-            .get_ids()
-            .to_vec();
-        let prompt_len = prompt_ids.len();
+    let result = tokio::time::timeout(
+        request_timeout,
+        tokio::task::spawn_blocking(move || {
+            let prompt_ids = state
+                .tokenizer
+                .encode(prompt.as_str(), false)
+                .map_err(|err| {
+                    eprintln!("ERROR: tokenizer encode failed: {}", err);
+                    "failed to tokenize prompt".to_string()
+                })?
+                .get_ids()
+                .to_vec();
+            let prompt_len = prompt_ids.len();
 
-        // Validate prompt length to prevent RoPE assert panics
-        if prompt_len >= max_seq_len {
-            return Err(format!(
-                "Prompt too long: {} tokens exceeds model limit of {}",
-                prompt_len, max_seq_len
-            ));
-        }
+            // Validate prompt length to prevent RoPE assert panics
+            if prompt_len >= max_seq_len {
+                return Err(format!(
+                    "Prompt too long: {} tokens exceeds model limit of {}",
+                    prompt_len, max_seq_len
+                ));
+            }
 
-        let vs = state.vocab_size;
-        if prompt_ids.iter().any(|&t| t >= vs) {
-            return Err(format!(
-                "tokenizer produced token id outside model vocab (vocab_size={})",
-                vs
-            ));
-        }
-        let token_ids = prompt_ids;
-        if state.engines.is_empty() {
-            return Err("no inference engines are available".to_string());
-        }
-        let engine_idx = state.next_engine.fetch_add(1, Ordering::Relaxed) % state.engines.len();
-        let engine_lock = state
-            .engines
-            .get(engine_idx)
-            .ok_or_else(|| "engine index out of range".to_string())?;
+            let vs = state.vocab_size;
+            if prompt_ids.iter().any(|&t| t >= vs) {
+                return Err(format!(
+                    "tokenizer produced token id outside model vocab (vocab_size={})",
+                    vs
+                ));
+            }
+            let token_ids = prompt_ids;
+            if state.engines.is_empty() {
+                return Err("no inference engines are available".to_string());
+            }
+            let engine_idx =
+                state.next_engine.fetch_add(1, Ordering::Relaxed) % state.engines.len();
+            let engine_lock = state
+                .engines
+                .get(engine_idx)
+                .ok_or_else(|| "engine index out of range".to_string())?;
 
-        let mut engine = engine_lock
-            .lock()
-            .map_err(|_| "internal engine state unavailable".to_string())?;
-        let output_ids = engine.generate(&token_ids, &params);
-        let output_len = output_ids.len();
+            let mut engine = engine_lock
+                .lock()
+                .map_err(|_| "internal engine state unavailable".to_string())?;
+            let output_ids = engine.generate(&token_ids, &params);
+            let output_len = output_ids.len();
 
-        // Check for degraded state after generation
-        let degraded = engine.model.last_forward_was_degraded();
-        if degraded {
-            eprintln!("WARNING: Non-streaming generation had degraded outputs (LoopLM errors)");
-        }
+            // Check for degraded state after generation
+            let degraded = engine.model.last_forward_was_degraded();
+            if degraded {
+                eprintln!("WARNING: Non-streaming generation had degraded outputs (LoopLM errors)");
+            }
 
-        let text = state.tokenizer.decode(&output_ids, true).map_err(|err| {
-            eprintln!("ERROR: tokenizer decode failed: {}", err);
-            "failed to decode generated tokens".to_string()
-        })?;
+            let text = state.tokenizer.decode(&output_ids, true).map_err(|err| {
+                eprintln!("ERROR: tokenizer decode failed: {}", err);
+                "failed to decode generated tokens".to_string()
+            })?;
 
-        Ok((text, prompt_len, output_len, degraded))
-    })
+            Ok((text, prompt_len, output_len, degraded))
+        }),
+    )
     .await;
 
     let (generated_text, prompt_tokens, completion_tokens, degraded) = match result {
-        Ok(Ok(data)) => data,
-        Ok(Err(err)) => {
+        Ok(Ok(Ok(data))) => data,
+        Ok(Ok(Err(err))) => {
             // Track error
             metrics::INFERENCE_ERRORS.inc();
             return error_response(model_name, err);
         }
-        Err(join_err) => {
+        Ok(Err(join_err)) => {
             // Track error
             metrics::INFERENCE_ERRORS.inc();
             eprintln!("ERROR: non_stream spawn_blocking join failed: {}", join_err);
             return error_response(model_name, "internal request failure".to_string());
+        }
+        Err(_) => {
+            metrics::INFERENCE_ERRORS.inc();
+            return error_response(
+                model_name,
+                format!("request timed out after {}s", request_timeout.as_secs()),
+            );
         }
     };
 
@@ -210,12 +285,9 @@ async fn non_stream_completion(
     // Track generated tokens
     metrics::TOKENS_GENERATED.inc_by(completion_tokens as f64);
 
-    // Determine finish reason based on degraded state
-    let finish_reason = if degraded {
-        "degraded".to_string() // Custom finish reason for degraded outputs
-    } else {
-        "stop".to_string()
-    };
+    if degraded {
+        eprintln!("WARNING: non-stream generation degraded but returning standard finish reason");
+    }
 
     Json(ChatCompletionResponse {
         id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -228,7 +300,7 @@ async fn non_stream_completion(
                 role: Role::Assistant,
                 content: generated_text,
             },
-            finish_reason,
+            finish_reason: "stop".to_string(),
         }],
         usage: Usage::new(prompt_tokens, completion_tokens),
     })
@@ -246,6 +318,7 @@ async fn stream_completion(
     let model_name = state.model_name.clone();
     let request_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
     let max_seq_len = state.max_seq_len;
+    let request_timeout = state.request_timeout;
     let params = req.to_sampling_params();
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(64);
@@ -347,6 +420,7 @@ async fn stream_completion(
         };
 
         let now = unix_timestamp_secs();
+        let started = Instant::now();
 
         // Send initial chunk with role
         let initial = ChatCompletionChunk {
@@ -383,7 +457,35 @@ async fn stream_completion(
 
         let mut token_count = 0usize;
         let mut had_degraded = false;
+        let mut timed_out = false;
         engine.generate_streaming(&token_ids, &params, |tok| {
+            if started.elapsed() >= request_timeout {
+                timed_out = true;
+                metrics::INFERENCE_ERRORS.inc();
+                let timeout_chunk = ChatCompletionChunk {
+                    id: req_id.clone(),
+                    object: "chat.completion.chunk".to_string(),
+                    created: now,
+                    model: model.clone(),
+                    choices: vec![ChunkChoice {
+                        index: 0,
+                        delta: ChunkDelta {
+                            role: None,
+                            content: Some(format!(
+                                "Error: request timed out after {}s",
+                                request_timeout.as_secs()
+                            )),
+                        },
+                        finish_reason: Some("error".to_string()),
+                    }],
+                };
+                if let Ok(json) = serde_json::to_string(&timeout_chunk) {
+                    let _ = tx.blocking_send(Ok(Event::default().data(json)));
+                }
+                let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+                return false;
+            }
+
             token_count += 1;
 
             // Track degraded state
@@ -432,6 +534,9 @@ async fn stream_completion(
         // Log if any degraded outputs occurred
         if had_degraded {
             eprintln!("WARNING: Streaming response had degraded outputs (LoopLM errors)");
+        }
+        if timed_out {
+            return;
         }
 
         // Track generated tokens
@@ -653,7 +758,18 @@ mod tests {
             model_name: "nanochat-test".to_string(),
             vocab_size: 256,
             max_seq_len,
+            api_key: None,
+            request_timeout: std::time::Duration::from_secs(30),
+            cors_allowed_origin: None,
         })
+    }
+
+    fn make_auth_state(api_key: &str) -> Arc<AppState> {
+        let mut state = make_test_state();
+        Arc::get_mut(&mut state)
+            .expect("state should be uniquely owned in tests")
+            .api_key = Some(api_key.to_string());
+        state
     }
 
     #[tokio::test]
@@ -703,6 +819,37 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), 10000).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["data"][0]["id"], "nanochat-test");
+    }
+
+    #[tokio::test]
+    async fn test_auth_rejects_missing_api_key() {
+        let state = make_auth_state("secret-key");
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(Request::get("/v1/models").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_auth_accepts_bearer_api_key() {
+        let state = make_auth_state("secret-key");
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::get("/v1/models")
+                    .header("authorization", "Bearer secret-key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]

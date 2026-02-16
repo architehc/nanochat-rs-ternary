@@ -2,7 +2,7 @@
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use nanochat_model::model::NanochatModel;
 use nanochat_serve::engine::InferenceEngine;
@@ -126,6 +126,35 @@ async fn main() {
     let model_name = format!("nanochat-{}m", model.param_count().total / 1_000_000);
     let vocab_size = model.config.vocab_size as u32;
     let max_seq_len = model.config.max_seq_len;
+    let api_key = std::env::var("NANOCHAT_API_KEY")
+        .ok()
+        .filter(|v| !v.is_empty());
+    let request_timeout = Duration::from_secs(
+        std::env::var("NANOCHAT_REQUEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|&secs| secs > 0)
+            .unwrap_or(120),
+    );
+    let cors_allowed_origin = std::env::var("NANOCHAT_CORS_ORIGIN")
+        .ok()
+        .filter(|v| !v.is_empty());
+
+    if api_key.is_some() {
+        tracing::info!("API key auth enabled for /v1 endpoints");
+    } else {
+        tracing::warn!("API key auth disabled (set NANOCHAT_API_KEY for production)");
+    }
+    tracing::info!(
+        "Request timeout configured: {}s (NANOCHAT_REQUEST_TIMEOUT_SECS)",
+        request_timeout.as_secs()
+    );
+    if let Some(origin) = cors_allowed_origin.as_deref() {
+        tracing::info!("CORS restricted to origin: {}", origin);
+    } else {
+        tracing::warn!("CORS origin not set; cross-origin browser access is disabled by default");
+    }
+
     let mut engines = vec![std::sync::Mutex::new(InferenceEngine::new(model))];
 
     // Optional engine replication for concurrent streaming requests.
@@ -153,6 +182,9 @@ async fn main() {
         model_name,
         vocab_size,
         max_seq_len,
+        api_key,
+        request_timeout,
+        cors_allowed_origin,
     });
 
     let app = build_router(state);

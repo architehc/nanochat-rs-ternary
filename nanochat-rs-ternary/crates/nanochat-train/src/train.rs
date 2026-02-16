@@ -540,8 +540,9 @@ impl Trainer {
 
         // Label smoothing: smooth_targets = (1-eps)*one_hot + eps/V
         let label_smooth_eps = 0.1; // 10% smoothing
-        let ce_loss = candle_nn::loss::cross_entropy(&logits_flat, &targets_flat)?;
         let log_probs_for_smoothing = candle_nn::ops::log_softmax(&logits_flat, 1)?;
+        // Reuse the same log-probabilities for CE and smoothing to avoid duplicate work.
+        let ce_loss = candle_nn::loss::nll(&log_probs_for_smoothing, &targets_flat)?;
         // Compute uniform term per example first, then average across examples.
         // This matches label smoothing semantics explicitly.
         let uniform_per_example = log_probs_for_smoothing.mean(D::Minus1)?.neg()?;
