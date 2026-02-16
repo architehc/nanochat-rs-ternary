@@ -21,6 +21,7 @@ pub struct SyntheticDataset {
 
 impl SyntheticDataset {
     pub fn new(vocab_size: u32, seq_len: usize, num_samples: usize, seed: u64) -> Self {
+        assert!(seq_len > 0, "seq_len must be > 0");
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
         let mut data = Vec::with_capacity(num_samples);
 
@@ -75,6 +76,7 @@ pub struct TokenFileDataset {
 
 impl TokenFileDataset {
     pub fn new(tokens: Vec<u32>, seq_len: usize) -> Self {
+        assert!(seq_len > 0, "seq_len must be > 0");
         let n_chunks = tokens.len().saturating_sub(1) / seq_len;
         Self {
             tokens,

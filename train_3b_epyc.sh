@@ -35,11 +35,10 @@ export NUMACTL_MEMORY_POLICY=interleave
 # CUDA optimizations for RTX 4090
 export CUDA_LAUNCH_BLOCKING=0
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nanochat-rs-ternary"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${SCRIPT_DIR}/nanochat-rs-ternary"
 DATA_DIR="${PROJECT_DIR}/data"
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/3b_epyc"
-CONFIG_FILE="${SCRIPT_DIR}/training_config_3b_epyc.toml"
 LOG_FILE="${CHECKPOINT_DIR}/training.log"
 
 mkdir -p "${CHECKPOINT_DIR}"
@@ -48,7 +47,6 @@ echo -e "${GREEN}Environment configured:${NC}"
 echo "  CPU threads: ${OMP_NUM_THREADS}"
 echo "  NUMA nodes: ${NUMA_NODES}"
 echo "  GPU: RTX 4090 (24GB)"
-echo "  Config: ${CONFIG_FILE}"
 echo "  Checkpoint dir: ${CHECKPOINT_DIR}"
 echo ""
 
@@ -57,7 +55,7 @@ echo -e "${YELLOW}Checking GPU...${NC}"
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader
 echo ""
 
-# Stage 1: Data Preprocessing (if needed)
+# Stage 1: Data check
 echo -e "${YELLOW}=== Stage 1: Checking Training Data ===${NC}"
 if [ ! -f "${DATA_DIR}/rust_maxgpu_tokenized.bin" ]; then
     echo -e "${RED}Training data not found at ${DATA_DIR}/rust_maxgpu_tokenized.bin${NC}"
@@ -69,33 +67,31 @@ else
 fi
 echo ""
 
-# Stage 2: Start LoopLM Training
-echo -e "${YELLOW}=== Stage 2: Starting LoopLM Training (150K steps) ===${NC}"
+# Stage 2: Start Training
+echo -e "${YELLOW}=== Stage 2: Starting Training (150K steps) ===${NC}"
 echo "This will take approximately 5 days on dual EPYC + RTX 4090."
 echo "Training with:"
-echo "  - LoopLM architecture (4 recurrent steps)"
-echo "  - Entropy regularization (weight=0.05)"
-echo "  - Compiler verification enabled"
+echo "  - Batch size: 16"
+echo "  - Sequence length: 4096"
 echo "  - NUMA-aware allocation across 16 nodes"
-echo "  - 112 data workers for massive parallelism"
 echo ""
 echo -e "${BLUE}Starting training at $(date)...${NC}"
 echo ""
 
 # Run with numactl for NUMA optimization
+# train_rust_maxgpu accepts: --data, --checkpoint-dir, --total-steps,
+#   --warmup-steps, --log-interval, --checkpoint-interval,
+#   --keep-last-checkpoints, --device, --batch-size, --seq-len, --lr, --grad-clip, --resume
 cd "${PROJECT_DIR}"
 numactl --interleave=all cargo run --release --example train_rust_maxgpu -- \
     --data "${DATA_DIR}/rust_maxgpu_tokenized.bin" \
     --checkpoint-dir "${CHECKPOINT_DIR}" \
-    --config "${CONFIG_FILE}" \
     --batch-size 16 \
     --seq-len 4096 \
     --total-steps 150000 \
-    --eval-every 5000 \
-    --save-every 1000 \
-    --log-every 100 \
-    --entropy-weight 0.05 \
-    --min-compile-rate 0.88 \
+    --log-interval 100 \
+    --checkpoint-interval 1000 \
+    --keep-last-checkpoints 5 \
     2>&1 | tee "${LOG_FILE}"
 
 EXIT_CODE=${PIPESTATUS[0]}
@@ -110,11 +106,17 @@ echo ""
 
 # Export to GGUF
 echo -e "${YELLOW}=== Exporting to GGUF Format ===${NC}"
+FINAL_CKPT=$(ls -d "${CHECKPOINT_DIR}/step_"* 2>/dev/null | sort -V | tail -1 || true)
+if [ -z "${FINAL_CKPT}" ]; then
+    echo -e "${RED}No checkpoint found to export!${NC}"
+    exit 1
+fi
+
+mkdir -p "${PROJECT_DIR}/models"
 cargo run -p nanochat-train --release -- export \
-    --checkpoint "${CHECKPOINT_DIR}/checkpoint_150000" \
-    --output "${PROJECT_DIR}/models/nanochat-3b-epyc.gguf" \
-    --quantize ternary \
-    --group-size 128
+    --checkpoint "${FINAL_CKPT}" \
+    --gguf "${PROJECT_DIR}/models/nanochat-3b-epyc.gguf" \
+    --mhc "${PROJECT_DIR}/models/nanochat-3b-epyc.mhc"
 
 echo -e "${GREEN}Export complete!${NC}"
 echo ""
@@ -129,14 +131,7 @@ echo "  - Total steps: 150K"
 echo "  - Model size: 3B parameters"
 echo "  - Context length: 4K tokens"
 echo "  - Quantization: Ternary (1.58-bit)"
-echo "  - Expected compilation success rate: >88%"
-echo "  - Expected HumanEval-Rust pass@1: >65%"
 echo ""
 echo "Logs saved to: ${LOG_FILE}"
 echo "Checkpoints saved to: ${CHECKPOINT_DIR}"
-echo ""
-echo "Next steps:"
-echo "  1. Evaluate model: cargo run --release --example evaluate_model"
-echo "  2. Run benchmarks: cargo bench"
-echo "  3. Test inference: cargo run --release --bin nanochat-serve"
 echo ""

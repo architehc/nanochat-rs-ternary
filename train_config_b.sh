@@ -1,6 +1,6 @@
 #!/bin/bash
-# train_config_b.sh - Ryzen 9800X3D + 2× RTX 4090 Training Script
-# Optimized for fast GPU training with tensor parallelism
+# train_config_b.sh - Ryzen 9800X3D + 2x RTX 4090 Training Script
+# Optimized for fast GPU training
 
 set -euo pipefail
 
@@ -9,7 +9,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== nanochat-rs-ternary Training: Config B (9800X3D + 2× RTX 4090) ===${NC}"
+echo -e "${GREEN}=== nanochat-rs-ternary Training: Config B (9800X3D + 2x RTX 4090) ===${NC}"
 echo ""
 
 # Environment setup
@@ -33,8 +33,8 @@ export CUDA_LAUNCH_BLOCKING=0
 export NCCL_IB_DISABLE=1
 export NCCL_P2P_DISABLE=0
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nanochat-rs-ternary"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${SCRIPT_DIR}/nanochat-rs-ternary"
 DATA_DIR="${PROJECT_DIR}/data"
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/config_b"
 CONFIG_FILE="${SCRIPT_DIR}/config_b_9800x3d_dual4090.toml"
@@ -49,39 +49,40 @@ echo ""
 
 # Stage 1: Data Preprocessing
 echo -e "${YELLOW}=== Stage 1: Data Preprocessing ===${NC}"
-if [ ! -f "${DATA_DIR}/processed/train_verified.bin" ]; then
-    echo "Preprocessing training data..."
-    cargo run -p nanochat-train --release -- preprocess \
-        --input "${DATA_DIR}/raw" \
-        --output "${DATA_DIR}/processed" \
-        --config "${CONFIG_FILE}" \
-        --workers 8 \
-        --verify-compilation \
-        --min-compile-rate 0.88
-    echo -e "${GREEN}Data preprocessing complete!${NC}"
+if [ ! -f "${DATA_DIR}/processed/tokens.bin" ]; then
+    if [ -f "${DATA_DIR}/raw/train.txt" ]; then
+        echo "Preprocessing training data..."
+        cargo run -p nanochat-train --release --manifest-path "${PROJECT_DIR}/Cargo.toml" -- \
+            prepare-data \
+            --text "${DATA_DIR}/raw/train.txt" \
+            --output "${DATA_DIR}/processed"
+        echo -e "${GREEN}Data preprocessing complete!${NC}"
+    else
+        echo -e "${YELLOW}No raw text found, expecting pre-tokenized data.${NC}"
+    fi
 else
     echo -e "${GREEN}Preprocessed data found, skipping...${NC}"
 fi
 echo ""
 
-# Stage 2: LoopLM Pre-training with Tensor Parallelism
-echo -e "${YELLOW}=== Stage 2: LoopLM Pre-training with Tensor Parallelism (150K steps) ===${NC}"
-echo "Starting distributed training across 2× RTX 4090..."
+# Stage 2: Pre-training (150K steps)
+echo -e "${YELLOW}=== Stage 2: Pre-training (150K steps) ===${NC}"
+echo "Starting training across 2x RTX 4090..."
 echo "This stage will take approximately 3-4 days."
 echo ""
 
-# Distributed training across 2x GPUs
-cargo run -p nanochat-train --release -- train \
-    --config "${CONFIG_FILE}" \
-    --data-path "${DATA_DIR}/processed" \
+cargo run -p nanochat-train --release --manifest-path "${PROJECT_DIR}/Cargo.toml" -- train \
+    --config medium-3b \
+    --dataset tokens \
+    --data-path "${DATA_DIR}/processed/tokens.bin" \
     --checkpoint-dir "${CHECKPOINT_DIR}/stage1" \
-    --n-loops 4 \
-    --tensor-parallel-size 2 \
     --batch-size 4 \
     --seq-len 4096 \
-    --total-steps 150000 \
-    --eval-every 10000 \
-    --save-every 2000 \
+    --epochs 1 \
+    --log-interval 100 \
+    --checkpoint-interval 2000 \
+    --keep-last-checkpoints 3 \
+    --threads 16 \
     2>&1 | tee "${CHECKPOINT_DIR}/stage1/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -92,20 +93,30 @@ fi
 echo -e "${GREEN}Stage 1 complete!${NC}"
 echo ""
 
-# Stage 3: Compiler-Verified MaxRL
-echo -e "${YELLOW}=== Stage 3: Compiler-Verified MaxRL (75K steps) ===${NC}"
-echo "Fine-tuning with compiler feedback..."
+# Stage 3: Resume for fine-tuning (75K steps)
+echo -e "${YELLOW}=== Stage 3: Fine-tuning (75K steps) ===${NC}"
+echo "Fine-tuning from stage 1 checkpoint..."
 echo ""
 
-cargo run -p nanochat-train --release -- train \
-    --config "${CONFIG_FILE}" \
-    --base-checkpoint "${CHECKPOINT_DIR}/stage1/final" \
+LATEST_CKPT=$(ls -d "${CHECKPOINT_DIR}/stage1/step_"* 2>/dev/null | sort -V | tail -1 || true)
+if [ -z "${LATEST_CKPT}" ]; then
+    echo -e "${RED}No checkpoint found from stage 1!${NC}"
+    exit 1
+fi
+
+cargo run -p nanochat-train --release --manifest-path "${PROJECT_DIR}/Cargo.toml" -- train \
+    --config medium-3b \
+    --dataset tokens \
+    --data-path "${DATA_DIR}/processed/tokens.bin" \
+    --resume "${LATEST_CKPT}" \
     --checkpoint-dir "${CHECKPOINT_DIR}/stage2" \
-    --compiler-verification \
-    --reward-threshold 0.92 \
-    --total-steps 75000 \
-    --eval-every 5000 \
-    --save-every 2000 \
+    --batch-size 4 \
+    --seq-len 4096 \
+    --epochs 1 \
+    --log-interval 100 \
+    --checkpoint-interval 2000 \
+    --keep-last-checkpoints 3 \
+    --threads 16 \
     2>&1 | tee "${CHECKPOINT_DIR}/stage2/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -118,11 +129,16 @@ echo ""
 
 # Export
 echo -e "${YELLOW}=== Exporting to GGUF Format ===${NC}"
-cargo run -p nanochat-train --release -- export \
-    --checkpoint "${CHECKPOINT_DIR}/stage2/final" \
-    --output "${PROJECT_DIR}/models/nanochat-3b-config-b.gguf" \
-    --quantize ternary \
-    --group-size 128
+FINAL_CKPT=$(ls -d "${CHECKPOINT_DIR}/stage2/step_"* 2>/dev/null | sort -V | tail -1 || true)
+if [ -z "${FINAL_CKPT}" ]; then
+    FINAL_CKPT="${LATEST_CKPT}"
+fi
+
+mkdir -p "${PROJECT_DIR}/models"
+cargo run -p nanochat-train --release --manifest-path "${PROJECT_DIR}/Cargo.toml" -- export \
+    --checkpoint "${FINAL_CKPT}" \
+    --gguf "${PROJECT_DIR}/models/nanochat-3b-config-b.gguf" \
+    --mhc "${PROJECT_DIR}/models/nanochat-3b-config-b.mhc"
 
 echo -e "${GREEN}Export complete!${NC}"
 echo ""
@@ -133,9 +149,7 @@ echo ""
 echo "Model saved to: ${PROJECT_DIR}/models/nanochat-3b-config-b.gguf"
 echo ""
 echo "Training Summary:"
-echo "  - Total steps: 225K"
 echo "  - Final model: 3B parameters"
 echo "  - Context length: 4K tokens"
 echo "  - Quantization: Ternary (1.58-bit)"
-echo "  - Expected compilation success rate: >88%"
 echo ""

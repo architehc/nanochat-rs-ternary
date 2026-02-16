@@ -31,8 +31,8 @@ export CPU_AFFINITY="0-111"
 # Memory policy
 export NUCTL_MEMORY_POLICY=interleave
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nanochat-rs-ternary"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${SCRIPT_DIR}/nanochat-rs-ternary"
 DATA_DIR="${PROJECT_DIR}/data"
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/config_c"
 CONFIG_FILE="${SCRIPT_DIR}/config_c_dual_epyc_4090.toml"
@@ -47,42 +47,42 @@ echo ""
 
 # Stage 1: Data Preprocessing (massive parallelism)
 echo -e "${YELLOW}=== Stage 1: Data Preprocessing ===${NC}"
-if [ ! -f "${DATA_DIR}/processed/train_verified.bin" ]; then
-    echo "Preprocessing with 112 workers..."
-    numactl --interleave=all cargo run -p nanochat-train --release -- preprocess \
-        --input "${DATA_DIR}/raw" \
-        --output "${DATA_DIR}/processed" \
-        --config "${CONFIG_FILE}" \
-        --workers 112 \
-        --verify-compilation \
-        --min-compile-rate 0.87 \
-        --numa-aware \
-        --use-semantic-verification
-    echo -e "${GREEN}Data preprocessing complete!${NC}"
+if [ ! -f "${DATA_DIR}/processed/tokens.bin" ]; then
+    if [ -f "${DATA_DIR}/raw/train.txt" ]; then
+        echo "Preprocessing with NUMA-aware workers..."
+        numactl --interleave=all cargo run -p nanochat-train --release \
+            --manifest-path "${PROJECT_DIR}/Cargo.toml" -- \
+            prepare-data \
+            --text "${DATA_DIR}/raw/train.txt" \
+            --output "${DATA_DIR}/processed"
+        echo -e "${GREEN}Data preprocessing complete!${NC}"
+    else
+        echo -e "${YELLOW}No raw text found, expecting pre-tokenized data.${NC}"
+    fi
 else
     echo -e "${GREEN}Preprocessed data found, skipping...${NC}"
 fi
 echo ""
 
-# Stage 2: LoopLM Pre-training
-echo -e "${YELLOW}=== Stage 2: LoopLM Pre-training (120K steps) ===${NC}"
+# Stage 2: Pre-training (120K steps)
+echo -e "${YELLOW}=== Stage 2: Pre-training (120K steps) ===${NC}"
 echo "Starting training with massive CPU parallelism..."
 echo "This stage will take approximately 4-5 days."
 echo ""
 
-numactl --interleave=all cargo run -p nanochat-train --release -- train \
-    --config "${CONFIG_FILE}" \
-    --data-path "${DATA_DIR}/processed" \
+numactl --interleave=all cargo run -p nanochat-train --release \
+    --manifest-path "${PROJECT_DIR}/Cargo.toml" -- train \
+    --config medium-3b \
+    --dataset tokens \
+    --data-path "${DATA_DIR}/processed/tokens.bin" \
     --checkpoint-dir "${CHECKPOINT_DIR}/stage1" \
-    --n-loops 4 \
-    --entropy-weight 0.06 \
     --batch-size 24 \
     --seq-len 6144 \
-    --total-steps 120000 \
-    --eval-every 5000 \
-    --save-every 1000 \
-    --numa-aware \
-    --preferred-kernel AVX2 \
+    --epochs 1 \
+    --log-interval 100 \
+    --checkpoint-interval 1000 \
+    --keep-last-checkpoints 3 \
+    --threads 112 \
     2>&1 | tee "${CHECKPOINT_DIR}/stage1/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -93,21 +93,31 @@ fi
 echo -e "${GREEN}Stage 1 complete!${NC}"
 echo ""
 
-# Stage 3: Compiler-Verified MaxRL
-echo -e "${YELLOW}=== Stage 3: Compiler-Verified MaxRL (60K steps) ===${NC}"
-echo "Fine-tuning with compiler feedback..."
+# Stage 3: Resume for fine-tuning (60K steps)
+echo -e "${YELLOW}=== Stage 3: Fine-tuning (60K steps) ===${NC}"
+echo "Fine-tuning from stage 1 checkpoint..."
 echo ""
 
-numactl --interleave=all cargo run -p nanochat-train --release -- train \
-    --config "${CONFIG_FILE}" \
-    --base-checkpoint "${CHECKPOINT_DIR}/stage1/final" \
+LATEST_CKPT=$(ls -d "${CHECKPOINT_DIR}/stage1/step_"* 2>/dev/null | sort -V | tail -1 || true)
+if [ -z "${LATEST_CKPT}" ]; then
+    echo -e "${RED}No checkpoint found from stage 1!${NC}"
+    exit 1
+fi
+
+numactl --interleave=all cargo run -p nanochat-train --release \
+    --manifest-path "${PROJECT_DIR}/Cargo.toml" -- train \
+    --config medium-3b \
+    --dataset tokens \
+    --data-path "${DATA_DIR}/processed/tokens.bin" \
+    --resume "${LATEST_CKPT}" \
     --checkpoint-dir "${CHECKPOINT_DIR}/stage2" \
-    --compiler-verification \
-    --semantic-analysis \
-    --reward-threshold 0.90 \
-    --total-steps 60000 \
-    --eval-every 3000 \
-    --save-every 1000 \
+    --batch-size 24 \
+    --seq-len 6144 \
+    --epochs 1 \
+    --log-interval 100 \
+    --checkpoint-interval 1000 \
+    --keep-last-checkpoints 3 \
+    --threads 112 \
     2>&1 | tee "${CHECKPOINT_DIR}/stage2/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -120,11 +130,17 @@ echo ""
 
 # Export
 echo -e "${YELLOW}=== Exporting to GGUF Format ===${NC}"
-cargo run -p nanochat-train --release -- export \
-    --checkpoint "${CHECKPOINT_DIR}/stage2/final" \
-    --output "${PROJECT_DIR}/models/nanochat-5b-config-c.gguf" \
-    --quantize ternary \
-    --group-size 128
+FINAL_CKPT=$(ls -d "${CHECKPOINT_DIR}/stage2/step_"* 2>/dev/null | sort -V | tail -1 || true)
+if [ -z "${FINAL_CKPT}" ]; then
+    FINAL_CKPT="${LATEST_CKPT}"
+fi
+
+mkdir -p "${PROJECT_DIR}/models"
+numactl --interleave=all cargo run -p nanochat-train --release \
+    --manifest-path "${PROJECT_DIR}/Cargo.toml" -- export \
+    --checkpoint "${FINAL_CKPT}" \
+    --gguf "${PROJECT_DIR}/models/nanochat-5b-config-c.gguf" \
+    --mhc "${PROJECT_DIR}/models/nanochat-5b-config-c.mhc"
 
 echo -e "${GREEN}Export complete!${NC}"
 echo ""
@@ -135,9 +151,7 @@ echo ""
 echo "Model saved to: ${PROJECT_DIR}/models/nanochat-5b-config-c.gguf"
 echo ""
 echo "Training Summary:"
-echo "  - Total steps: 180K"
 echo "  - Final model: 5B parameters"
 echo "  - Context length: 6K tokens"
 echo "  - Quantization: Ternary (1.58-bit)"
-echo "  - Expected compilation success rate: >87%"
 echo ""

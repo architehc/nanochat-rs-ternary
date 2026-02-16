@@ -67,7 +67,7 @@ echo ""
 
 # Test generation quality
 echo "Testing supervised model quality..."
-cargo run --release --example test_generation_simple --features nanochat-train/cuda \
+cargo run --release --example debug_generation -- \
     2>&1 | tee "$LOG_DIR/01_supervised_test.log"
 echo ""
 
@@ -130,7 +130,7 @@ echo ""
 
 # Test generation quality
 echo "--- Generation Test ---" | tee "$EVAL_LOG"
-cargo run --release --example test_generation_simple --features nanochat-train/cuda \
+cargo run --release --example debug_generation -- \
     2>&1 | tee -a "$EVAL_LOG"
 echo ""
 
@@ -155,7 +155,7 @@ echo "  MaxRL: $FINAL_CHECKPOINT"
 echo ""
 echo "Next steps:"
 echo "  1. Test the model:"
-echo "     cargo run --example test_generation_simple"
+echo "     cargo run --example debug_generation"
 echo ""
 echo "  2. Export to GGUF:"
 echo "     cargo run --example export_checkpoint -- \\"

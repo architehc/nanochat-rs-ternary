@@ -30,8 +30,8 @@ export OMP_PLACES=cores
 export MALLOC_CONF="background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000"
 
 # Paths
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nanochat-rs-ternary"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${SCRIPT_DIR}/nanochat-rs-ternary"
 DATA_DIR="${PROJECT_DIR}/data"
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/config_a"
 CONFIG_FILE="${SCRIPT_DIR}/config_a_threadripper_blackwell.toml"
@@ -47,43 +47,43 @@ echo ""
 
 # Stage 1: Data Preprocessing
 echo -e "${YELLOW}=== Stage 1: Data Preprocessing ===${NC}"
-if [ ! -f "${DATA_DIR}/processed/train_verified.bin" ]; then
-    echo "Preprocessing training data with semantic verification..."
-    cargo run -p nanochat-train --release -- preprocess \
-        --input "${DATA_DIR}/raw" \
-        --output "${DATA_DIR}/processed" \
-        --config "${CONFIG_FILE}" \
-        --workers 64 \
-        --verify-compilation \
-        --min-compile-rate 0.85 \
-        --numa-aware \
-        --use-semantic-verification
-    echo -e "${GREEN}Data preprocessing complete!${NC}"
+if [ ! -f "${DATA_DIR}/processed/tokens.bin" ]; then
+    if [ -f "${DATA_DIR}/raw/train.txt" ]; then
+        echo "Preprocessing training data..."
+        cargo run -p nanochat-train --release --manifest-path "${PROJECT_DIR}/Cargo.toml" -- \
+            prepare-data \
+            --text "${DATA_DIR}/raw/train.txt" \
+            --output "${DATA_DIR}/processed"
+        echo -e "${GREEN}Data preprocessing complete!${NC}"
+    else
+        echo -e "${YELLOW}No raw text found at ${DATA_DIR}/raw/train.txt, skipping preprocessing.${NC}"
+        echo "Expecting pre-tokenized data at ${DATA_DIR}/processed/tokens.bin"
+    fi
 else
     echo -e "${GREEN}Preprocessed data found, skipping...${NC}"
 fi
 echo ""
 
-# Stage 2: LoopLM Pre-training
-echo -e "${YELLOW}=== Stage 2: LoopLM Pre-training (100K steps) ===${NC}"
-echo "Starting LoopLM training with entropy-regularized depth allocation..."
+# Stage 2: Pre-training (100K steps)
+echo -e "${YELLOW}=== Stage 2: Pre-training (100K steps) ===${NC}"
+echo "Starting training with entropy-regularized depth allocation..."
 echo "This stage will take approximately 4-5 days."
 echo ""
 
 # Run with numactl for NUMA optimization
-numactl --interleave=all cargo run -p nanochat-train --release -- train \
-    --config "${CONFIG_FILE}" \
-    --data-path "${DATA_DIR}/processed" \
+numactl --interleave=all cargo run -p nanochat-train --release \
+    --manifest-path "${PROJECT_DIR}/Cargo.toml" -- train \
+    --config large-7b \
+    --dataset tokens \
+    --data-path "${DATA_DIR}/processed/tokens.bin" \
     --checkpoint-dir "${CHECKPOINT_DIR}/stage1" \
-    --n-loops 4 \
-    --entropy-weight 0.05 \
     --batch-size 32 \
     --seq-len 8192 \
-    --total-steps 100000 \
-    --eval-every 5000 \
-    --save-every 1000 \
-    --numa-aware \
-    --preferred-kernel AVX512 \
+    --epochs 1 \
+    --log-interval 100 \
+    --checkpoint-interval 1000 \
+    --keep-last-checkpoints 3 \
+    --threads 128 \
     2>&1 | tee "${CHECKPOINT_DIR}/stage1/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -94,21 +94,31 @@ fi
 echo -e "${GREEN}Stage 1 complete!${NC}"
 echo ""
 
-# Stage 3: Compiler-Verified MaxRL Fine-tuning
-echo -e "${YELLOW}=== Stage 3: Compiler-Verified MaxRL Fine-tuning (50K steps) ===${NC}"
-echo "Fine-tuning with compiler feedback and semantic verification..."
+# Stage 3: Resume with fine-tuning
+echo -e "${YELLOW}=== Stage 3: Fine-tuning (50K steps) ===${NC}"
+echo "Fine-tuning from stage 1 checkpoint..."
 echo ""
 
-numactl --interleave=all cargo run -p nanochat-train --release -- train \
-    --config "${CONFIG_FILE}" \
-    --base-checkpoint "${CHECKPOINT_DIR}/stage1/final" \
+LATEST_CKPT=$(ls -d "${CHECKPOINT_DIR}/stage1/step_"* 2>/dev/null | sort -V | tail -1 || true)
+if [ -z "${LATEST_CKPT}" ]; then
+    echo -e "${RED}No checkpoint found from stage 1!${NC}"
+    exit 1
+fi
+
+numactl --interleave=all cargo run -p nanochat-train --release \
+    --manifest-path "${PROJECT_DIR}/Cargo.toml" -- train \
+    --config large-7b \
+    --dataset tokens \
+    --data-path "${DATA_DIR}/processed/tokens.bin" \
+    --resume "${LATEST_CKPT}" \
     --checkpoint-dir "${CHECKPOINT_DIR}/stage2" \
-    --compiler-verification \
-    --semantic-analysis \
-    --reward-threshold 0.9 \
-    --total-steps 50000 \
-    --eval-every 2500 \
-    --save-every 1000 \
+    --batch-size 32 \
+    --seq-len 8192 \
+    --epochs 1 \
+    --log-interval 100 \
+    --checkpoint-interval 1000 \
+    --keep-last-checkpoints 3 \
+    --threads 128 \
     2>&1 | tee "${CHECKPOINT_DIR}/stage2/training.log"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -119,38 +129,18 @@ fi
 echo -e "${GREEN}Stage 2 complete!${NC}"
 echo ""
 
-# Stage 4: Long-Context Training
-echo -e "${YELLOW}=== Stage 4: Long-Context Training (20K steps, 64K seq len) ===${NC}"
-echo "Training with extended context length..."
-echo ""
-
-numactl --interleave=all cargo run -p nanochat-train --release -- train \
-    --config "${CONFIG_FILE}" \
-    --base-checkpoint "${CHECKPOINT_DIR}/stage2/final" \
-    --checkpoint-dir "${CHECKPOINT_DIR}/stage3" \
-    --seq-len 65536 \
-    --total-steps 20000 \
-    --batch-size 4 \
-    --gradient-accumulation 8 \
-    --eval-every 2000 \
-    --save-every 1000 \
-    2>&1 | tee "${CHECKPOINT_DIR}/stage3/training.log"
-
-if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo -e "${RED}Stage 3 training failed! Check logs.${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}Stage 3 complete!${NC}"
-echo ""
-
 # Export to GGUF
 echo -e "${YELLOW}=== Exporting to GGUF Format ===${NC}"
-cargo run -p nanochat-train --release -- export \
-    --checkpoint "${CHECKPOINT_DIR}/stage3/final" \
-    --output "${PROJECT_DIR}/models/nanochat-7b-config-a.gguf" \
-    --quantize ternary \
-    --group-size 128
+FINAL_CKPT=$(ls -d "${CHECKPOINT_DIR}/stage2/step_"* 2>/dev/null | sort -V | tail -1 || true)
+if [ -z "${FINAL_CKPT}" ]; then
+    FINAL_CKPT="${LATEST_CKPT}"
+fi
+
+mkdir -p "${PROJECT_DIR}/models"
+cargo run -p nanochat-train --release --manifest-path "${PROJECT_DIR}/Cargo.toml" -- export \
+    --checkpoint "${FINAL_CKPT}" \
+    --gguf "${PROJECT_DIR}/models/nanochat-7b-config-a.gguf" \
+    --mhc "${PROJECT_DIR}/models/nanochat-7b-config-a.mhc"
 
 echo -e "${GREEN}Export complete!${NC}"
 echo ""
@@ -161,14 +151,7 @@ echo ""
 echo "Model saved to: ${PROJECT_DIR}/models/nanochat-7b-config-a.gguf"
 echo ""
 echo "Training Summary:"
-echo "  - Total steps: 170K"
 echo "  - Final model: 7B parameters"
-echo "  - Context length: 64K tokens"
+echo "  - Context length: 8K tokens"
 echo "  - Quantization: Ternary (1.58-bit)"
-echo "  - Expected compilation success rate: >90%"
-echo ""
-echo "Next steps:"
-echo "  1. Evaluate model on HumanEval-Rust"
-echo "  2. Run semantic correctness benchmarks"
-echo "  3. Publish to Hugging Face"
 echo ""

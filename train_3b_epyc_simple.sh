@@ -20,19 +20,19 @@ export OMP_NUM_THREADS=112
 export OMP_PROC_BIND=spread
 export OMP_PLACES=cores
 
-PROJECT_DIR="/home/habitat/ternary-clawd/nanochat-rs-ternary"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nanochat-rs-ternary"
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/3b_epyc_$(date +%Y%m%d_%H%M%S)"
 DATA_PATH="${PROJECT_DIR}/data/rust_tokens_large.bin"
 
 mkdir -p "${CHECKPOINT_DIR}"
 
 echo -e "${BLUE}Configuration:${NC}"
-echo "  Model: nano (3B equivalent)"
+echo "  Model: medium-3b"
 echo "  Data: ${DATA_PATH}"
 echo "  Checkpoint: ${CHECKPOINT_DIR}"
 echo "  Batch size: 16"
 echo "  Sequence length: 512"
-echo "  Device: cuda (RTX 4090)"
+echo "  Device: cpu"
 echo "  NUMA nodes: 16"
 echo "  CPU threads: 112"
 echo ""
@@ -42,19 +42,25 @@ echo ""
 
 cd "${PROJECT_DIR}"
 
+# Build first if binary doesn't exist
+if [ ! -f "${PROJECT_DIR}/target/release/nanochat-train" ]; then
+    echo "Building nanochat-train (release)..."
+    cargo build -p nanochat-train --release
+fi
+
 # Start training with numactl for NUMA optimization
 numactl --interleave=all \
 ./target/release/nanochat-train train \
-    --config nano \
+    --config medium-3b \
     --data-path "${DATA_PATH}" \
-    --dataset rust \
+    --dataset tokens \
     --batch-size 16 \
     --seq-len 512 \
     --checkpoint-dir "${CHECKPOINT_DIR}" \
     --log-interval 50 \
     --checkpoint-interval 1000 \
     --keep-last-checkpoints 5 \
-    --device cuda \
+    --device cpu \
     --threads 112 \
     2>&1 | tee "${CHECKPOINT_DIR}/training.log"
 
