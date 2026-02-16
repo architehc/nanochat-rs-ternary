@@ -310,9 +310,10 @@ impl Trainer {
         // E3 optimizations: Collider token filtering
         let collider = if config.use_collider {
             let collider_module =
-                Collider::new(config.collider_threshold, config.collider_sparsity);
+                Collider::new(config.collider_threshold, config.collider_sparsity)
+                    .with_transform_gemm(true);
             println!(
-                "  Collider resumed: threshold={:.2}, sparsity={:.2}",
+                "  Collider resumed: threshold={:.2}, sparsity={:.2}, sparse_gemm=true",
                 config.collider_threshold, config.collider_sparsity
             );
             Some(collider_module)
@@ -446,9 +447,10 @@ impl Trainer {
         // E3 optimizations: Collider token filtering
         let collider = if config.use_collider {
             let collider_module =
-                Collider::new(config.collider_threshold, config.collider_sparsity);
+                Collider::new(config.collider_threshold, config.collider_sparsity)
+                    .with_transform_gemm(true);
             println!(
-                "  Collider enabled: threshold={:.2}, sparsity={:.2}",
+                "  Collider enabled: threshold={:.2}, sparsity={:.2}, sparse_gemm=true",
                 config.collider_threshold, config.collider_sparsity
             );
             Some(collider_module)

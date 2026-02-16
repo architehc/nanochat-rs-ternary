@@ -1,9 +1,8 @@
 //! Inference engine: KV-cache management, sampling, text generation.
 //!
 //! Includes both a standard `InferenceEngine` and a NUMA-aware `NumaInferenceEngine`
-//! for dual-socket systems (e.g. dual AMD EPYC 9654). The NUMA engine currently
-//! provides NUMA-aware memory placement and topology reporting; per-layer dispatch
-//! is not yet wired into the model forward path.
+//! for dual-socket systems (e.g. dual AMD EPYC 9654). The NUMA engine provides
+//! per-request/thread-pool dispatch for prefill/decode on detected node pools.
 
 use nanochat_model::config::ModelConfig;
 use nanochat_model::model::NanochatModel;
@@ -177,6 +176,44 @@ impl InferenceEngine {
     }
 }
 
+/// Runtime-selectable engine variant used by the HTTP server.
+pub enum EngineHandle {
+    Standard(InferenceEngine),
+    Numa(NumaInferenceEngine),
+}
+
+impl EngineHandle {
+    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> Vec<u32> {
+        match self {
+            EngineHandle::Standard(engine) => engine.generate(prompt_ids, params),
+            EngineHandle::Numa(engine) => engine.generate(prompt_ids, params),
+        }
+    }
+
+    pub fn generate_streaming<F>(
+        &mut self,
+        prompt_ids: &[u32],
+        params: &SamplingParams,
+        on_token: F,
+    ) where
+        F: FnMut(GeneratedToken) -> bool,
+    {
+        match self {
+            EngineHandle::Standard(engine) => {
+                engine.generate_streaming(prompt_ids, params, on_token)
+            }
+            EngineHandle::Numa(engine) => engine.generate_streaming(prompt_ids, params, on_token),
+        }
+    }
+
+    pub fn last_forward_was_degraded(&self) -> bool {
+        match self {
+            EngineHandle::Standard(engine) => engine.model.last_forward_was_degraded(),
+            EngineHandle::Numa(engine) => engine.model.last_forward_was_degraded(),
+        }
+    }
+}
+
 // ============================================================
 // NUMA-aware Inference Engine
 // ============================================================
@@ -225,7 +262,8 @@ impl NumaConfig {
 /// Current behavior:
 /// - Detects NUMA topology and builds per-node thread pools.
 /// - Uses NUMA-aware weight allocation where available.
-/// - Runs generation through the standard model path (no per-layer pool dispatch yet).
+/// - Dispatches prefill/decode work onto per-node thread pools.
+/// - Does not yet split a single forward pass per layer across nodes.
 pub struct NumaInferenceEngine {
     pub model: NanochatModel,
     pub eot_token: u32,
@@ -296,40 +334,74 @@ impl NumaInferenceEngine {
         }
     }
 
-    /// Generate tokens autoregressively with NUMA-aware memory placement.
-    ///
-    /// NOTE: Per-layer NUMA thread-pool dispatch is not implemented yet.
-    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> Vec<u32> {
-        // The actual NUMA dispatch for individual layer forward passes would require
-        // deeper integration with the model's per-layer forward. For now, we use
-        // the standard engine's generate path, which benefits from NUMA allocation
-        // of weights (first-touch policy) even without per-layer pool dispatch.
-        //
-        // Full per-layer NUMA dispatch would require refactoring NanochatModel::forward_token
-        // to accept a pool reference per layer, which is a larger change.
-        let mut tokens = Vec::new();
-        self.model.reset_caches();
+    fn forward_prefill_on_node(&mut self, prompt_ids: &[u32]) -> Vec<f32> {
+        let node_idx = 0;
+        let pool = &self.thread_pools[node_idx];
+        let model = &mut self.model;
+        pool.install(|| {
+            if prompt_ids.len() > 1 {
+                model.forward_sequence_batched(prompt_ids)
+            } else if prompt_ids.len() == 1 {
+                model.forward_token(prompt_ids[0], 0)
+            } else {
+                vec![]
+            }
+        })
+    }
 
+    fn forward_decode_on_node(&mut self, token: u32, pos: usize) -> Vec<f32> {
+        let node_idx = if self.numa_config.num_nodes <= 1 {
+            0
+        } else {
+            // Round-robin token decode work across detected NUMA pools.
+            pos % self.numa_config.num_nodes
+        };
+        let pool = &self.thread_pools[node_idx];
+        let model = &mut self.model;
+        pool.install(|| model.forward_token(token, pos))
+    }
+
+    /// Generate tokens autoregressively with NUMA thread-pool dispatch.
+    pub fn generate(&mut self, prompt_ids: &[u32], params: &SamplingParams) -> Vec<u32> {
+        let mut tokens = Vec::new();
+        self.generate_streaming(prompt_ids, params, |tok| {
+            tokens.push(tok.token_id);
+            tok.finish_reason.is_none()
+        });
+        tokens
+    }
+
+    /// Generate tokens one at a time with NUMA thread-pool dispatch.
+    pub fn generate_streaming<F>(
+        &mut self,
+        prompt_ids: &[u32],
+        params: &SamplingParams,
+        mut on_token: F,
+    ) where
+        F: FnMut(GeneratedToken) -> bool,
+    {
+        // Validate prompt length to prevent RoPE assert panics
+        let max_seq_len = self.model.config.max_seq_len;
+        if prompt_ids.len() >= max_seq_len {
+            eprintln!(
+                "ERROR: Prompt length {} exceeds model max_seq_len {}, returning empty generation",
+                prompt_ids.len(),
+                max_seq_len
+            );
+            return;
+        }
+
+        self.model.reset_caches();
         let mut rng: Box<dyn RngCore> = match params.seed {
             Some(seed) => Box::new(StdRng::seed_from_u64(seed)),
             None => Box::new(StdRng::from_entropy()),
         };
 
-        // Prefill: process all prompt tokens (batched for efficiency)
-        let mut logits = if prompt_ids.len() > 1 {
-            self.model.forward_sequence_batched(prompt_ids)
-        } else if prompt_ids.len() == 1 {
-            self.model.forward_token(prompt_ids[0], 0)
-        } else {
-            vec![]
-        };
-
-        // Check for degraded state after prefill
+        let mut logits = self.forward_prefill_on_node(prompt_ids);
         if self.model.last_forward_was_degraded() {
-            eprintln!("WARNING: NUMA Forward pass degraded during prefill");
+            eprintln!("WARNING: NUMA forward pass degraded during prefill");
         }
 
-        // Decode: generate one token at a time
         let mut pos = prompt_ids.len();
 
         for _ in 0..params.max_tokens {
@@ -338,32 +410,41 @@ impl NumaInferenceEngine {
             }
 
             let next_token = sample_token(&logits, params, &mut *rng);
-            tokens.push(next_token); // Push token before checking eot (matches standard engine)
-
             let is_eot = next_token == self.eot_token;
             let at_limit = pos + 1 >= self.model.config.max_seq_len;
+            let finish_reason = if is_eot {
+                Some("stop".to_string())
+            } else if at_limit {
+                Some("length".to_string())
+            } else {
+                None
+            };
 
-            if is_eot || at_limit {
+            let degraded = self.model.last_forward_was_degraded();
+            let should_continue = on_token(GeneratedToken {
+                token_id: next_token,
+                finish_reason: finish_reason.clone(),
+                degraded,
+            });
+
+            if !should_continue || is_eot || at_limit {
                 break;
             }
 
-            logits = self.model.forward_token(next_token, pos);
+            logits = self.forward_decode_on_node(next_token, pos);
             pos += 1;
 
-            // Check for degraded state after each token
             if self.model.last_forward_was_degraded() {
-                eprintln!("WARNING: NUMA Forward pass degraded at position {}", pos);
+                eprintln!("WARNING: NUMA forward pass degraded at position {}", pos);
             }
         }
-
-        tokens
     }
 
     /// Report NUMA status for logging.
     pub fn numa_status(&self) -> String {
         if self.numa_config.numa_active {
             format!(
-                "NUMA active: {} nodes, {} threads/node, layer split metadata {}/{} (dispatch not wired)",
+                "NUMA active: {} nodes, {} threads/node, decode dispatch enabled, layer split metadata {}/{}",
                 self.numa_config.num_nodes,
                 self.numa_config.threads_per_node,
                 self.layer_split,

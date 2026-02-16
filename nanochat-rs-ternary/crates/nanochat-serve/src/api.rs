@@ -7,6 +7,31 @@ pub const MAX_MESSAGES: usize = 256;
 pub const MAX_MESSAGE_CHARS: usize = 16 * 1024;
 pub const MAX_PROMPT_CHARS: usize = 256 * 1024;
 
+/// Prompt template used to flatten chat messages into a model prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatTemplate {
+    /// `<role>: <content>\n...assistant: `
+    RoleTagged,
+    /// ChatML-style framing: `<|im_start|>role\ncontent<|im_end|>\n`
+    ChatMl,
+}
+
+impl ChatTemplate {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "role" | "role_tagged" | "role-tagged" | "default" => Some(Self::RoleTagged),
+            "chatml" | "chat_ml" | "chat-ml" => Some(Self::ChatMl),
+            _ => None,
+        }
+    }
+}
+
+impl Default for ChatTemplate {
+    fn default() -> Self {
+        Self::RoleTagged
+    }
+}
+
 /// Chat message role.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -104,14 +129,29 @@ impl ChatCompletionRequest {
     /// Convert chat messages to a flat prompt string.
     /// Simple format: "<role>: <content>\n" per message.
     pub fn to_prompt_string(&self) -> Result<String, String> {
+        self.to_prompt_string_with_template(ChatTemplate::default())
+    }
+
+    pub fn to_prompt_string_with_template(&self, template: ChatTemplate) -> Result<String, String> {
         self.validate_messages()?;
 
         let mut prompt = String::new();
         for (idx, msg) in self.messages.iter().enumerate() {
-            prompt.push_str(msg.role.as_str());
-            prompt.push_str(": ");
-            prompt.push_str(&msg.content);
-            prompt.push('\n');
+            match template {
+                ChatTemplate::RoleTagged => {
+                    prompt.push_str(msg.role.as_str());
+                    prompt.push_str(": ");
+                    prompt.push_str(&msg.content);
+                    prompt.push('\n');
+                }
+                ChatTemplate::ChatMl => {
+                    prompt.push_str("<|im_start|>");
+                    prompt.push_str(msg.role.as_str());
+                    prompt.push('\n');
+                    prompt.push_str(&msg.content);
+                    prompt.push_str("<|im_end|>\n");
+                }
+            }
             if prompt.chars().count() > MAX_PROMPT_CHARS {
                 return Err(format!(
                     "prompt exceeds limit while processing message {} (>{})",
@@ -119,7 +159,10 @@ impl ChatCompletionRequest {
                 ));
             }
         }
-        prompt.push_str("assistant: ");
+        match template {
+            ChatTemplate::RoleTagged => prompt.push_str("assistant: "),
+            ChatTemplate::ChatMl => prompt.push_str("<|im_start|>assistant\n"),
+        }
         if prompt.chars().count() > MAX_PROMPT_CHARS {
             return Err(format!("prompt exceeds limit (>{})", MAX_PROMPT_CHARS));
         }
@@ -265,6 +308,46 @@ mod tests {
         assert!(prompt.contains("system: You are helpful."));
         assert!(prompt.contains("user: Hello!"));
         assert!(prompt.ends_with("assistant: "));
+    }
+
+    #[test]
+    fn test_chat_request_to_prompt_chatml() {
+        let req = ChatCompletionRequest {
+            messages: vec![
+                ChatMessage {
+                    role: Role::System,
+                    content: "You are helpful.".to_string(),
+                },
+                ChatMessage {
+                    role: Role::User,
+                    content: "Hello!".to_string(),
+                },
+            ],
+            model: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            stream: None,
+            seed: None,
+        };
+
+        let prompt = req
+            .to_prompt_string_with_template(ChatTemplate::ChatMl)
+            .unwrap();
+        assert!(prompt.contains("<|im_start|>system\nYou are helpful.<|im_end|>\n"));
+        assert!(prompt.contains("<|im_start|>user\nHello!<|im_end|>\n"));
+        assert!(prompt.ends_with("<|im_start|>assistant\n"));
+    }
+
+    #[test]
+    fn test_chat_template_parse() {
+        assert_eq!(
+            ChatTemplate::parse("default"),
+            Some(ChatTemplate::RoleTagged)
+        );
+        assert_eq!(ChatTemplate::parse("chatml"), Some(ChatTemplate::ChatMl));
+        assert_eq!(ChatTemplate::parse("unknown"), None);
     }
 
     #[test]

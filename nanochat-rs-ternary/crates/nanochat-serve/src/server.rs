@@ -18,17 +18,18 @@ use tower::limit::ConcurrencyLimitLayer;
 use tower_http::cors::CorsLayer;
 
 use crate::api::*;
-use crate::engine::InferenceEngine;
+use crate::engine::EngineHandle;
 use crate::metrics;
 
 /// Shared application state.
 pub struct AppState {
-    pub engines: Vec<std::sync::Mutex<InferenceEngine>>,
+    pub engines: Vec<std::sync::Mutex<EngineHandle>>,
     pub next_engine: AtomicUsize,
     pub tokenizer: tokenizers::Tokenizer,
     pub model_name: String,
     pub vocab_size: u32,
     pub max_seq_len: usize,
+    pub chat_template: ChatTemplate,
     pub api_key: Option<String>,
     pub request_timeout: Duration,
     pub cors_allowed_origin: Option<String>,
@@ -185,7 +186,7 @@ async fn non_stream_completion(
     metrics::INFERENCE_REQUESTS.inc();
 
     let model_name = state.model_name.clone();
-    let prompt = match req.to_prompt_string() {
+    let prompt = match req.to_prompt_string_with_template(state.chat_template) {
         Ok(prompt) => prompt,
         Err(err) => {
             metrics::INFERENCE_ERRORS.inc();
@@ -243,7 +244,7 @@ async fn non_stream_completion(
             let output_len = output_ids.len();
 
             // Check for degraded state after generation
-            let degraded = engine.model.last_forward_was_degraded();
+            let degraded = engine.last_forward_was_degraded();
             if degraded {
                 eprintln!("WARNING: Non-streaming generation had degraded outputs (LoopLM errors)");
             }
@@ -322,7 +323,7 @@ async fn stream_completion(
     let params = req.to_sampling_params();
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(64);
-    let prompt = match req.to_prompt_string() {
+    let prompt = match req.to_prompt_string_with_template(state.chat_template) {
         Ok(prompt) => prompt,
         Err(err) => {
             metrics::INFERENCE_ERRORS.inc();
@@ -700,6 +701,7 @@ async function sendMessage(){
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::InferenceEngine;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use nanochat_model::config::ModelConfig;
@@ -748,7 +750,7 @@ mod tests {
     fn make_test_state() -> Arc<AppState> {
         let config = ModelConfig::test_config(128, 2, 4, 256);
         let max_seq_len = config.max_seq_len;
-        let engine = InferenceEngine::new_random(config);
+        let engine = EngineHandle::Standard(InferenceEngine::new_random(config));
         let tokenizer = make_test_tokenizer();
 
         Arc::new(AppState {
@@ -758,6 +760,7 @@ mod tests {
             model_name: "nanochat-test".to_string(),
             vocab_size: 256,
             max_seq_len,
+            chat_template: ChatTemplate::RoleTagged,
             api_key: None,
             request_timeout: std::time::Duration::from_secs(30),
             cors_allowed_origin: None,

@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nanochat_model::model::NanochatModel;
-use nanochat_serve::engine::InferenceEngine;
+use nanochat_serve::api::ChatTemplate;
+use nanochat_serve::engine::{EngineHandle, InferenceEngine, NumaInferenceEngine};
 use nanochat_serve::server::{build_router, AppState};
 
 struct Args {
@@ -139,6 +140,19 @@ async fn main() {
     let cors_allowed_origin = std::env::var("NANOCHAT_CORS_ORIGIN")
         .ok()
         .filter(|v| !v.is_empty());
+    let chat_template = std::env::var("NANOCHAT_CHAT_TEMPLATE")
+        .ok()
+        .and_then(|v| ChatTemplate::parse(&v))
+        .unwrap_or(ChatTemplate::RoleTagged);
+    let numa_mode_raw = std::env::var("NANOCHAT_NUMA_MODE").unwrap_or_else(|_| "off".to_string());
+    let use_numa_engine = match numa_mode_raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "false" | "0" => false,
+        "threadpool" | "on" | "true" | "1" => true,
+        other => {
+            tracing::warn!("Unknown NANOCHAT_NUMA_MODE='{}', defaulting to off", other);
+            false
+        }
+    };
 
     if api_key.is_some() {
         tracing::info!("API key auth enabled for /v1 endpoints");
@@ -154,8 +168,22 @@ async fn main() {
     } else {
         tracing::warn!("CORS origin not set; cross-origin browser access is disabled by default");
     }
+    tracing::info!("Chat template: {:?}", chat_template);
+    tracing::info!(
+        "NUMA engine mode: {}",
+        if use_numa_engine { "threadpool" } else { "off" }
+    );
 
-    let mut engines = vec![std::sync::Mutex::new(InferenceEngine::new(model))];
+    let mut engines = Vec::new();
+    if use_numa_engine {
+        let numa_engine = NumaInferenceEngine::new(model);
+        tracing::info!("{}", numa_engine.numa_status());
+        engines.push(std::sync::Mutex::new(EngineHandle::Numa(numa_engine)));
+    } else {
+        engines.push(std::sync::Mutex::new(EngineHandle::Standard(
+            InferenceEngine::new(model),
+        )));
+    }
 
     // Optional engine replication for concurrent streaming requests.
     let replicas = std::env::var("NANOCHAT_ENGINE_REPLICAS")
@@ -171,7 +199,15 @@ async fn main() {
                     eprintln!("Failed to load replica {} model: {e}", replica_idx);
                     std::process::exit(1);
                 });
-            engines.push(std::sync::Mutex::new(InferenceEngine::new(replica_model)));
+            if use_numa_engine {
+                let replica = NumaInferenceEngine::new(replica_model);
+                tracing::info!("replica {}: {}", replica_idx, replica.numa_status());
+                engines.push(std::sync::Mutex::new(EngineHandle::Numa(replica)));
+            } else {
+                engines.push(std::sync::Mutex::new(EngineHandle::Standard(
+                    InferenceEngine::new(replica_model),
+                )));
+            }
         }
     }
 
@@ -182,6 +218,7 @@ async fn main() {
         model_name,
         vocab_size,
         max_seq_len,
+        chat_template,
         api_key,
         request_timeout,
         cors_allowed_origin,

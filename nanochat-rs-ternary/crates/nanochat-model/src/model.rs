@@ -1,5 +1,6 @@
 //! Full nanochat model: embed -> mHC expand -> blocks -> mHC collapse -> norm -> head.
 
+use std::collections::HashSet;
 use std::io;
 
 use crate::attention::{Attention, KvCache, RopeFreqs};
@@ -177,6 +178,7 @@ impl NanochatModel {
 
         // Extract config from GGUF metadata
         let config = Self::config_from_gguf(&gguf)?;
+        Self::validate_tensor_names(&gguf, &config)?;
         let group_size = config.group_size;
 
         // Load embeddings (FP16 -> F32)
@@ -687,6 +689,137 @@ impl NanochatModel {
             gated_attention,
             loop_config,
         })
+    }
+
+    fn validate_tensor_names(gguf: &GgufFile, config: &ModelConfig) -> io::Result<()> {
+        let expected = Self::expected_tensor_names(config);
+        let actual: HashSet<&str> = gguf.tensors.iter().map(|t| t.name.as_str()).collect();
+
+        let mut missing: Vec<String> = expected
+            .iter()
+            .filter(|name| !actual.contains(name.as_str()))
+            .cloned()
+            .collect();
+        missing.sort();
+        if !missing.is_empty() {
+            let preview = missing
+                .iter()
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "GGUF missing {} expected tensors (first: {})",
+                    missing.len(),
+                    preview
+                ),
+            ));
+        }
+
+        let mut unknown: Vec<String> = actual
+            .iter()
+            .filter(|name| !expected.contains(**name))
+            .map(|name| (*name).to_string())
+            .collect();
+        unknown.sort();
+        if !unknown.is_empty() {
+            let preview = unknown
+                .iter()
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "GGUF contains {} unknown tensors (first: {})",
+                    unknown.len(),
+                    preview
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn expected_tensor_names(config: &ModelConfig) -> HashSet<String> {
+        fn add_dense_block(names: &mut HashSet<String>, prefix: &str, is_deltanet: bool) {
+            names.insert(format!("{prefix}.attention.wq.weight"));
+            names.insert(format!("{prefix}.attention.wk.weight"));
+            names.insert(format!("{prefix}.attention.wv.weight"));
+            names.insert(format!("{prefix}.attention.wo.weight"));
+            if is_deltanet {
+                names.insert(format!("{prefix}.attention.w_beta.weight"));
+            }
+            names.insert(format!("{prefix}.norm_attn.weight"));
+            names.insert(format!("{prefix}.norm_ffn.weight"));
+        }
+
+        fn add_ffn_tensors(names: &mut HashSet<String>, prefix: &str, config: &ModelConfig) {
+            if let Some(n_experts) = config.n_experts {
+                names.insert(format!("{prefix}.ffn.router.weight"));
+                for expert_idx in 0..n_experts {
+                    names.insert(format!("{prefix}.ffn.experts.{expert_idx}.w_gate.weight"));
+                    names.insert(format!("{prefix}.ffn.experts.{expert_idx}.w_up.weight"));
+                    names.insert(format!("{prefix}.ffn.experts.{expert_idx}.w_down.weight"));
+                }
+                if config.use_shared_expert {
+                    names.insert(format!("{prefix}.ffn.shared_expert.w_gate.weight"));
+                    names.insert(format!("{prefix}.ffn.shared_expert.w_up.weight"));
+                    names.insert(format!("{prefix}.ffn.shared_expert.w_down.weight"));
+                }
+            } else {
+                names.insert(format!("{prefix}.ffn.w_gate.weight"));
+                names.insert(format!("{prefix}.ffn.w_up.weight"));
+                names.insert(format!("{prefix}.ffn.w_down.weight"));
+            }
+        }
+
+        let mut names = HashSet::new();
+        names.insert("tok_embed.weight".to_string());
+        names.insert("norm_final.weight".to_string());
+        if !config.weight_tied {
+            names.insert("lm_head.weight".to_string());
+        }
+
+        if let Some(loop_cfg) = &config.loop_config {
+            for i in 0..loop_cfg.local_before {
+                let layer_idx = i;
+                let prefix = format!("local_before.{i}");
+                add_dense_block(&mut names, &prefix, config.is_deltanet_layer(layer_idx));
+                add_ffn_tensors(&mut names, &prefix, config);
+            }
+
+            let shared_prefix = "shared_loop";
+            names.insert(format!("{shared_prefix}.attention.wq.weight"));
+            names.insert(format!("{shared_prefix}.attention.wk.weight"));
+            names.insert(format!("{shared_prefix}.attention.wv.weight"));
+            names.insert(format!("{shared_prefix}.attention.wo.weight"));
+            names.insert(format!("{shared_prefix}.g_qk.weight"));
+            names.insert(format!("{shared_prefix}.g_ffn.weight"));
+            names.insert(format!("{shared_prefix}.ffn.w_gate.weight"));
+            names.insert(format!("{shared_prefix}.ffn.w_up.weight"));
+            names.insert(format!("{shared_prefix}.ffn.w_down.weight"));
+            names.insert(format!("{shared_prefix}.norm_attn.weight"));
+            names.insert(format!("{shared_prefix}.norm_ffn.weight"));
+
+            for i in 0..loop_cfg.local_after {
+                let layer_idx = loop_cfg.local_before + 1 + i;
+                let prefix = format!("local_after.{i}");
+                add_dense_block(&mut names, &prefix, config.is_deltanet_layer(layer_idx));
+                add_ffn_tensors(&mut names, &prefix, config);
+            }
+        } else {
+            for i in 0..config.n_layers {
+                let prefix = format!("blocks.{i}");
+                add_dense_block(&mut names, &prefix, config.is_deltanet_layer(i));
+                add_ffn_tensors(&mut names, &prefix, config);
+            }
+        }
+
+        names
     }
 
     fn load_embedding(gguf: &GgufFile, name: &str) -> io::Result<Embedding> {
@@ -1856,5 +1989,57 @@ mod tests {
                 logits2[i]
             );
         }
+    }
+
+    #[test]
+    fn test_expected_tensor_names_standard_layout() {
+        let config = ModelConfig::test_config(128, 2, 4, 256);
+        let names = NanochatModel::expected_tensor_names(&config);
+        assert!(names.contains("tok_embed.weight"));
+        assert!(names.contains("norm_final.weight"));
+        assert!(names.contains("blocks.0.attention.wq.weight"));
+        assert!(names.contains("blocks.1.ffn.w_down.weight"));
+    }
+
+    #[test]
+    fn test_expected_tensor_names_loop_layout() {
+        let mut config = ModelConfig::test_config(128, 3, 4, 256);
+        config.weight_tied = true;
+        config.loop_config = Some(crate::config::LoopConfig {
+            local_before: 1,
+            local_after: 1,
+            loop_count: 3,
+            adaptive_loop: None,
+        });
+        let names = NanochatModel::expected_tensor_names(&config);
+        assert!(names.contains("local_before.0.attention.wq.weight"));
+        assert!(names.contains("shared_loop.g_qk.weight"));
+        assert!(names.contains("local_after.0.ffn.w_up.weight"));
+    }
+
+    #[test]
+    fn test_loop_model_forward_paths_and_degraded_flag() {
+        let mut config = ModelConfig::test_config(128, 3, 4, 256);
+        config.weight_tied = true;
+        config.loop_config = Some(crate::config::LoopConfig {
+            local_before: 1,
+            local_after: 1,
+            loop_count: 3,
+            adaptive_loop: None,
+        });
+        let mut model = NanochatModel::new_random(config);
+
+        let logits = model.forward_token(42, 0);
+        assert_eq!(logits.len(), model.config.vocab_size);
+        assert!(!model.last_forward_was_degraded());
+
+        let logits_batched = model.forward_sequence_batched(&[1, 2, 3, 4]);
+        assert_eq!(logits_batched.len(), model.config.vocab_size);
+        assert!(!model.last_forward_was_degraded());
+
+        model.loop_kv_cache = None;
+        let degraded_logits = model.forward_token(7, 0);
+        assert_eq!(degraded_logits.len(), model.config.vocab_size);
+        assert!(model.last_forward_was_degraded());
     }
 }
