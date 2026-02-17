@@ -131,33 +131,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Device: {:?}", device);
 
     // Create training config for Qwen3-Coder-80B
-    // TODO: Add TrainConfig::qwen3_coder_80b() preset
-    // For now, use a scaled-up config based on d20
-    let mut train_config = TrainConfig {
-        dim: 8192,
-        n_layers: 48,
-        n_heads: 64,
-        n_kv_heads: 8,
-        ffn_mult: 3.5,
-        vocab_size: 151_936,
-        max_seq_len: args.seq_len,
-        group_size: 128,
-        mhc_n_streams: 4,
-        weight_tied: false,
-        rope_theta: 10000.0,
-        lr: args.lr,
-        mhc_lr: args.mhc_lr,
-        weight_decay: 0.1,
-        batch_size: args.batch_size,
-        grad_accum_steps: 1,
-        warmup_steps: args.warmup_steps,
-        total_steps: args.total_steps,
-        decay_start_frac: 0.8,
-        grad_clip: 1.0,
-        ns_steps: 5,
-        muon_momentum: 0.95,
-        lion_betas: (0.9, 0.99),
-    };
+    // Start from large_7b preset and override for 80B architecture
+    let mut train_config = TrainConfig::large_7b();
+    train_config.dim = 8192;
+    train_config.n_layers = 48;
+    train_config.n_heads = 64;
+    train_config.n_kv_heads = 8;
+    train_config.ffn_mult = 3.5;
+    train_config.vocab_size = 151_936;
+    train_config.max_seq_len = args.seq_len;
+    train_config.weight_tied = false;
+    train_config.lr = args.lr;
+    train_config.mhc_lr = args.mhc_lr;
+    train_config.weight_decay = 0.1;
+    train_config.batch_size = args.batch_size;
+    train_config.grad_accum_steps = 1;
+    train_config.warmup_steps = args.warmup_steps;
+    train_config.total_steps = args.total_steps;
     // Save values before moving train_config
     let vocab_size = train_config.vocab_size;
     let total_steps = train_config.total_steps;

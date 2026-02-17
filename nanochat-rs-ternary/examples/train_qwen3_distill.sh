@@ -29,7 +29,12 @@
 
 set -euo pipefail
 
-# Configuration
+echo "ERROR: distill_qwen3 example is not yet registered in Cargo.toml."
+echo "The distillation training pipeline is still under development."
+echo "Use 'nanochat-train train' for standard training instead."
+exit 1
+
+# Configuration (kept for reference)
 TEACHER_ENDPOINT="${TEACHER_ENDPOINT:-https://crazyshit.ngrok.io}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-checkpoints/qwen3-80b-hybrid}"
 DEVICE="${DEVICE:-cuda:0}"

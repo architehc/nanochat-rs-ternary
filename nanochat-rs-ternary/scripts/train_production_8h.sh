@@ -76,12 +76,12 @@ RUST_LOG=info target/release/nanochat-train train \
 
 # Save final checkpoint
 echo "Training complete. Saving final model..."
-FINAL_CHECKPOINT="${CHECKPOINTS_DIR}/final/model.safetensors"
+FINAL_CHECKPOINT="${CHECKPOINTS_DIR}/final"
 FINAL_GGUF="${CHECKPOINTS_DIR}/final.gguf"
 FINAL_MHC="${CHECKPOINTS_DIR}/final.mhc"
 
-# Export to GGUF for inference
-if [ -f "${FINAL_CHECKPOINT}" ]; then
+# Export to GGUF for inference (--checkpoint expects the directory, not a file)
+if [ -d "${FINAL_CHECKPOINT}" ]; then
     echo "Exporting to GGUF + MHC format..."
     cargo run --release -p nanochat-train -- \
         export \

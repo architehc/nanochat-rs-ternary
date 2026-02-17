@@ -7,9 +7,16 @@ echo "=== Testing E2 Optimizer Integration ==="
 echo ""
 
 # Create tiny test dataset if it doesn't exist
+# Token file must contain u32 values in [0, vocab_size) — random bytes would
+# produce out-of-range token IDs (up to 4B vs vocab_size=50257) and crash.
 if [ ! -f "nanochat-rs-ternary/data/test_tokens.bin" ]; then
     echo "Creating tiny test dataset..."
-    dd if=/dev/urandom of=nanochat-rs-ternary/data/test_tokens.bin bs=1024 count=512
+    mkdir -p nanochat-rs-ternary/data
+    python3 -c "
+import struct, random; random.seed(42)
+with open('nanochat-rs-ternary/data/test_tokens.bin','wb') as f:
+    f.write(struct.pack('<' + 'I'*131072, *[random.randint(0,50256) for _ in range(131072)]))
+"
 fi
 
 echo ""

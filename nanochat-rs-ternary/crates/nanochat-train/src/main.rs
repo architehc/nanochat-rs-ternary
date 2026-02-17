@@ -159,10 +159,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if let Some(bs) = batch_size {
+                if bs == 0 {
+                    eprintln!("error: --batch-size must be > 0");
+                    std::process::exit(1);
+                }
                 cfg.batch_size = bs;
             }
 
             let effective_seq_len = seq_len.unwrap_or(cfg.max_seq_len / 2);
+            if effective_seq_len == 0 {
+                eprintln!("error: --seq-len must be > 0");
+                std::process::exit(1);
+            }
 
             tracing::info!("=== nanochat-train ===");
             tracing::info!("Config: {}", config);
@@ -206,7 +214,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     42,
                 )),
                 "tokens" => {
-                    let path = data_path.expect("--data-path required for tokens dataset");
+                    let path = match data_path {
+                        Some(p) => p,
+                        None => {
+                            eprintln!("error: --data-path is required when --dataset=tokens");
+                            std::process::exit(1);
+                        }
+                    };
                     Box::new(
                         nanochat_train::data::dataset::TokenFileDataset::from_binary_file(
                             std::path::Path::new(&path),

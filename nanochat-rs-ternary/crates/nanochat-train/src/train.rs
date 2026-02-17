@@ -13,6 +13,18 @@ use crate::model::NanochatTrainModel;
 use crate::mtp::MultiTokenPrediction;
 use crate::optim::{wsd_schedule, Lion, LionState, MuonOptimizer, MuonOptimizerState};
 
+/// Return all variables from a VarMap sorted by name for deterministic ordering.
+///
+/// `VarMap::all_vars()` uses HashMap iteration order which is non-deterministic.
+/// Optimizer state save/restore is positional, so different ordering on resume
+/// causes shape mismatches. This helper ensures consistent ordering.
+fn sorted_vars(varmap: &VarMap) -> Vec<Var> {
+    let data = varmap.data().lock().unwrap();
+    let mut named: Vec<_> = data.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    named.sort_by(|a, b| a.0.cmp(&b.0));
+    named.into_iter().map(|(_, v)| v).collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OptimizerCheckpointState {
     muon: MuonOptimizerState,
@@ -268,8 +280,8 @@ impl Trainer {
         let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
         let model = NanochatTrainModel::new(&config, vb)?;
 
-        // Classify vars by dimension for optimizers
-        let all_vars = varmap.all_vars();
+        // Classify vars by dimension for optimizers (sorted for deterministic ordering)
+        let all_vars = sorted_vars(&varmap);
         let mut muon_vars: Vec<Var> = Vec::new();
         let mut lion_vars: Vec<Var> = Vec::new();
 
@@ -401,7 +413,8 @@ impl Trainer {
 
         // Classify vars by dimension: 2D+ go to Muon, 1D go to Lion
         // Exception: embedding (vocab_size x dim) goes to Lion
-        let all_vars = varmap.all_vars();
+        // Use sorted_vars for deterministic ordering (critical for checkpoint resume)
+        let all_vars = sorted_vars(&varmap);
         let mut muon_vars: Vec<Var> = Vec::new();
         let mut lion_vars: Vec<Var> = Vec::new();
 
@@ -949,7 +962,7 @@ fn apply_collider_gradient_mask(logits: &Tensor, mask: &Tensor) -> Result<Tensor
 }
 
 fn accumulate_grad_store(dst: &mut GradStore, src: &GradStore, varmap: &VarMap) -> Result<()> {
-    for var in varmap.all_vars() {
+    for var in sorted_vars(varmap) {
         let Some(g_src) = src.get(var.as_tensor()) else {
             continue;
         };
@@ -966,7 +979,7 @@ fn accumulate_grad_store(dst: &mut GradStore, src: &GradStore, varmap: &VarMap) 
 /// Compute total gradient norm across all variables.
 pub fn compute_grad_norm(grads: &candle_core::backprop::GradStore, varmap: &VarMap) -> Result<f64> {
     let mut total = 0.0f64;
-    for var in varmap.all_vars() {
+    for var in sorted_vars(varmap) {
         if let Some(g) = grads.get(var.as_tensor()) {
             total += g.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
         }
