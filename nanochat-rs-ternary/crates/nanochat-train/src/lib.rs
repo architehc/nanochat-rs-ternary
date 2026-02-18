@@ -17,9 +17,9 @@
 //! use nanochat_train::{config::TrainConfig, train::Trainer};
 //! use candle_core::Device;
 //!
-//! # fn main() -> anyhow::Result<()> {
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let config = TrainConfig::nano_125m();
-//! let mut trainer = Trainer::new(config, Device::Cuda(0))?;
+//! let mut trainer = Trainer::new(config, Device::Cpu)?;
 //!
 //! // Train for one epoch
 //! // let avg_loss = trainer.train_epoch(&dataset, 0)?;

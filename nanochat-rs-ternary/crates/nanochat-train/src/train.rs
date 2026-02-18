@@ -162,7 +162,7 @@ pub struct StepStats {
 /// use candle_core::Device;
 ///
 /// let trainer = TrainerBuilder::new(TrainConfig::nano_125m())
-///     .device(Device::Cuda(0))
+///     .device(Device::Cpu)
 ///     .from_checkpoint("checkpoints/step_1000")
 ///     .build()
 ///     .unwrap();
