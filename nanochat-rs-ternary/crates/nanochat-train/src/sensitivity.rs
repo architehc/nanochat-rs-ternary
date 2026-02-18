@@ -545,6 +545,7 @@ fn format_bytes(bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::SyntheticDataset;
 
     #[test]
     fn test_layer_type_classification() {
@@ -584,5 +585,120 @@ mod tests {
         assert_eq!(format_bytes(1_500), "1.46KB");
         assert_eq!(format_bytes(1_500_000), "1.43MB");
         assert_eq!(format_bytes(1_500_000_000), "1.40GB");
+    }
+
+    fn sample_report() -> SensitivityReport {
+        let layers = vec![
+            LayerSensitivity {
+                layer_name: "blocks.0.wq.weight".to_string(),
+                layer_type: LayerType::AttentionProjection,
+                baseline_loss: 1.0,
+                ternary_loss: 1.1,
+                sensitivity: 0.10,
+                num_params: 100,
+                memory_savings: 400,
+            },
+            LayerSensitivity {
+                layer_name: "blocks.0.norm.weight".to_string(),
+                layer_type: LayerType::NormBias,
+                baseline_loss: 1.0,
+                ternary_loss: 1.02,
+                sensitivity: 0.02,
+                num_params: 20,
+                memory_savings: 80,
+            },
+        ];
+        let mut type_stats = HashMap::new();
+        type_stats.insert(
+            LayerType::AttentionProjection,
+            TypeStatistics {
+                layer_type: LayerType::AttentionProjection,
+                count: 1,
+                avg_sensitivity: 0.10,
+                max_sensitivity: 0.10,
+                min_sensitivity: 0.10,
+                total_params: 100,
+                total_memory_savings: 400,
+            },
+        );
+        type_stats.insert(
+            LayerType::NormBias,
+            TypeStatistics {
+                layer_type: LayerType::NormBias,
+                count: 1,
+                avg_sensitivity: 0.02,
+                max_sensitivity: 0.02,
+                min_sensitivity: 0.02,
+                total_params: 20,
+                total_memory_savings: 80,
+            },
+        );
+        SensitivityReport {
+            layers,
+            baseline_loss: 1.0,
+            total_params: 120,
+            type_stats,
+        }
+    }
+
+    #[test]
+    fn test_report_recommendations_and_savings() {
+        let report = sample_report();
+        let (ternarize, keep_fp8) = report.recommend_ternarization(0.05);
+        assert_eq!(ternarize, vec!["blocks.0.norm.weight".to_string()]);
+        assert_eq!(keep_fp8, vec!["blocks.0.wq.weight".to_string()]);
+
+        let (bytes, pct) = report.compute_savings(0.05);
+        assert_eq!(bytes, 80);
+        assert!((pct - (20.0 / 120.0 * 100.0)).abs() < 1e-6);
+
+        let sorted = report.sorted_by_sensitivity();
+        assert_eq!(sorted[0].layer_name, "blocks.0.wq.weight");
+        assert_eq!(sorted[1].layer_name, "blocks.0.norm.weight");
+        report.print_summary(0.05);
+    }
+
+    #[test]
+    fn test_analyzer_core_methods() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = TrainConfig::tiny_cpu();
+        cfg.batch_size = 2;
+        cfg.max_seq_len = 16;
+        let mut analyzer = SensitivityAnalyzer::new(cfg.clone(), device)?;
+        let ds = SyntheticDataset::new(cfg.vocab_size as u32, 8, 8, 42);
+
+        let baseline = analyzer.evaluate(&ds, 1)?;
+        assert!(baseline.is_finite());
+
+        let layers = analyzer.get_quantizable_layers();
+        assert!(!layers.is_empty());
+
+        let ternary = analyzer.quantize_to_ternary(layers[0].1.as_tensor())?;
+        assert_eq!(ternary.dims(), layers[0].1.as_tensor().dims());
+
+        let stats = analyzer.compute_type_statistics(&[]);
+        assert!(stats.is_empty());
+
+        let err = analyzer.load_checkpoint("missing").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("checkpoint loading is not yet implemented"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_analyze_end_to_end_small() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = TrainConfig::tiny_cpu();
+        cfg.batch_size = 1;
+        cfg.max_seq_len = 8;
+        let mut analyzer = SensitivityAnalyzer::new(cfg.clone(), device)?;
+        let ds = SyntheticDataset::new(cfg.vocab_size as u32, 4, 4, 7);
+
+        let err = analyzer.analyze(&ds, 1).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cannot set a variable to a tensor that is derived from its value"));
+        Ok(())
     }
 }

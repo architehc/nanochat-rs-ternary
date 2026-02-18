@@ -538,8 +538,8 @@ impl DistillationTrainer {
         if self.config.load_balance_weight > 0.0 || self.config.router_aux_weight > 0.0 {
             tracing::warn!("MoE distillation: load_balance_loss and router_aux_loss are not yet implemented; MoE balancing signals are zero");
         }
-        let load_balance_loss = Tensor::new(&[0.0f32], &self.device)?;
-        let router_aux_loss = Tensor::new(&[0.0f32], &self.device)?;
+        let load_balance_loss = Tensor::new(0.0f32, &self.device)?;
+        let router_aux_loss = Tensor::new(0.0f32, &self.device)?;
 
         // Combined loss (clone tensors before using in arithmetic to avoid move)
         let ce_weight = 1.0 - self.config.kl_weight;
@@ -660,8 +660,8 @@ impl DistillationTrainer {
             self.config.temperature,
         )?;
 
-        let load_balance_loss = Tensor::new(&[0.0f32], &self.device)?;
-        let router_aux_loss = Tensor::new(&[0.0f32], &self.device)?;
+        let load_balance_loss = Tensor::new(0.0f32, &self.device)?;
+        let router_aux_loss = Tensor::new(0.0f32, &self.device)?;
 
         let ce_weight = 1.0 - self.config.kl_weight;
         let loss = (ce_loss.clone() * ce_weight)?
@@ -693,8 +693,8 @@ impl DistillationTrainer {
             let kl_loss =
                 kl_divergence_loss(teacher_logits, &student_logits, self.config.temperature)?;
 
-            let load_balance_loss = Tensor::new(&[0.0f32], &self.device)?;
-            let router_aux_loss = Tensor::new(&[0.0f32], &self.device)?;
+            let load_balance_loss = Tensor::new(0.0f32, &self.device)?;
+            let router_aux_loss = Tensor::new(0.0f32, &self.device)?;
 
             let loss = (ce_loss.clone() * ce_weight)?
                 .add(&(kl_loss.clone() * self.config.kl_weight)?)?
@@ -977,6 +977,10 @@ mod tests {
     use super::*;
     use candle_core::{DType, Device};
     use candle_nn::VarMap;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use crate::data::SyntheticDataset;
 
     fn tiny_train_config() -> TrainConfig {
         TrainConfig {
@@ -1145,6 +1149,223 @@ mod tests {
             "unexpected error: {}",
             msg
         );
+        Ok(())
+    }
+
+    fn spawn_teacher_server(status: &str, body: String, max_requests: usize) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock teacher");
+        let addr = listener.local_addr().expect("mock teacher addr");
+        let status_line = status.to_string();
+        thread::spawn(move || {
+            for _ in 0..max_requests {
+                let (mut stream, _) = listener.accept().expect("accept mock teacher");
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write teacher response");
+                stream.flush().expect("flush teacher response");
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    fn teacher_logits_body(batch: usize, seq_len: usize, vocab_size: usize) -> String {
+        let vocab_row: Vec<f32> = (0..vocab_size).map(|i| i as f32 * 1e-3).collect();
+        let seq_rows = vec![vocab_row; seq_len];
+        let logits = vec![seq_rows; batch];
+        serde_json::json!({ "logits": logits }).to_string()
+    }
+
+    #[test]
+    fn test_remote_teacher_client_query_logits_success_and_parallel() -> Result<()> {
+        let body = serde_json::json!({
+            "logits": [[[0.1, 0.2], [0.3, 0.4]]]
+        })
+        .to_string();
+        let endpoint = spawn_teacher_server("200 OK", body, 3);
+        let client = RemoteTeacherClient::new(endpoint, None, 5, 2)?;
+
+        let device = Device::Cpu;
+        let input = Tensor::new(&[[1u32, 2u32]], &device)?;
+        let logits = client.query_logits(&input)?;
+        assert_eq!(logits.dims3()?, (1, 2, 2));
+        let vals = logits.to_vec3::<f32>()?;
+        assert!((vals[0][0][0] - 0.1).abs() < 1e-6);
+
+        let logits_vec = client.query_logits_parallel(vec![&input, &input])?;
+        assert_eq!(logits_vec.len(), 2);
+        assert_eq!(logits_vec[0].dims3()?, (1, 2, 2));
+        Ok(())
+    }
+
+    #[test]
+    fn test_remote_teacher_client_error_paths() -> Result<()> {
+        let device = Device::Cpu;
+        let input = Tensor::new(&[[1u32, 2u32]], &device)?;
+
+        let endpoint_http = spawn_teacher_server("500 Internal Server Error", "{}".to_string(), 1);
+        let client_http = RemoteTeacherClient::new(endpoint_http, None, 5, 1)?;
+        let err = client_http.query_logits(&input).unwrap_err();
+        assert!(err.to_string().contains("Teacher endpoint returned error"));
+
+        let endpoint_missing = spawn_teacher_server("200 OK", "{}".to_string(), 1);
+        let client_missing = RemoteTeacherClient::new(endpoint_missing, None, 5, 1)?;
+        let err = client_missing.query_logits(&input).unwrap_err();
+        assert!(err.to_string().contains("Missing 'logits'"));
+
+        let endpoint_shape = spawn_teacher_server(
+            "200 OK",
+            serde_json::json!({"logits": [[]]}).to_string(),
+            1,
+        );
+        let client_shape = RemoteTeacherClient::new(endpoint_shape, None, 5, 1)?;
+        let err = client_shape.query_logits(&input).unwrap_err();
+        assert!(err.to_string().contains("empty sequence dimension"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_distill_config_builders() {
+        let base = tiny_train_config();
+        let remote = DistillConfig::with_remote_teacher(
+            base.clone(),
+            "http://localhost:9999",
+            Some("k".to_string()),
+            4,
+        );
+        assert!(matches!(remote.teacher_mode, TeacherMode::Remote { .. }));
+        assert_eq!(remote.micro_batches, 4);
+        assert!(remote.freeze_student_fp8);
+
+        let local = DistillConfig::with_local_teacher(base, "/tmp/teacher");
+        assert!(matches!(local.teacher_mode, TeacherMode::Local { .. }));
+        assert_eq!(local.micro_batches, 1);
+    }
+
+    #[test]
+    fn test_router_auxiliary_loss_finite() -> Result<()> {
+        let device = Device::Cpu;
+        let router_logits = Tensor::new(&[[[1.0f32, 0.0, -1.0]]], &device)?;
+        let loss = router_auxiliary_loss(&router_logits)?;
+        let value = loss.to_scalar::<f32>()?;
+        assert!(value.is_finite());
+        assert!(value >= 0.0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_step_local_teacher_finite_and_parallel_local_rejected() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_train_config();
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let _teacher_model = NanochatTrainModel::new(&cfg, vb)?;
+
+        let dir =
+            tempfile::tempdir().map_err(|e| candle_core::Error::Msg(format!("tempdir: {}", e)))?;
+        let dir_path = dir
+            .path()
+            .to_str()
+            .ok_or_else(|| candle_core::Error::Msg("non-utf8 tempdir path".to_string()))?;
+        crate::checkpoint::save_checkpoint(&varmap, &cfg, 1, 0.0, dir_path)
+            .map_err(|e| candle_core::Error::Msg(format!("save checkpoint: {}", e)))?;
+
+        let mut trainer =
+            DistillationTrainer::new(DistillConfig::with_local_teacher(cfg, dir.path()), device)?;
+        let input = Tensor::zeros((1, 8), DType::U32, &trainer.device)?;
+        let target = Tensor::zeros((1, 8), DType::U32, &trainer.device)?;
+        let stats = trainer.train_step(&input, &target)?;
+        assert!(stats.total_loss.is_finite());
+        assert!(stats.ce_loss.is_finite());
+        assert!(stats.kl_loss.is_finite());
+        assert_eq!(trainer.global_step, 1);
+
+        let err = trainer
+            .train_step_parallel(vec![&input], vec![&target])
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Parallel training only supported with remote teacher"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_epoch_sequential_local_teacher() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = tiny_train_config();
+        cfg.batch_size = 1;
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let _teacher_model = NanochatTrainModel::new(&cfg, vb)?;
+
+        let dir =
+            tempfile::tempdir().map_err(|e| candle_core::Error::Msg(format!("tempdir: {}", e)))?;
+        let dir_path = dir
+            .path()
+            .to_str()
+            .ok_or_else(|| candle_core::Error::Msg("non-utf8 tempdir path".to_string()))?;
+        crate::checkpoint::save_checkpoint(&varmap, &cfg, 1, 0.0, dir_path)
+            .map_err(|e| candle_core::Error::Msg(format!("save checkpoint: {}", e)))?;
+
+        let mut trainer =
+            DistillationTrainer::new(DistillConfig::with_local_teacher(cfg.clone(), dir.path()), device)?;
+        let ds = SyntheticDataset::new(cfg.vocab_size as u32, 8, 4, 42);
+        let epoch = trainer.train_epoch(&ds, 0)?;
+        assert!(epoch.avg_loss.is_finite());
+        assert!(epoch.avg_ce.is_finite());
+        assert!(epoch.avg_kl.is_finite());
+        assert!(epoch.steps > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_step_parallel_remote_teacher_success() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = tiny_train_config();
+        cfg.batch_size = 1;
+
+        let endpoint = spawn_teacher_server("200 OK", teacher_logits_body(1, 8, cfg.vocab_size), 4);
+        let mut distill_cfg = DistillConfig::with_remote_teacher(cfg.clone(), endpoint, None, 2);
+        distill_cfg.micro_batches = 2;
+
+        let mut trainer = DistillationTrainer::new(distill_cfg, device)?;
+        let input_a = Tensor::zeros((1, 8), DType::U32, &trainer.device)?;
+        let target_a = Tensor::zeros((1, 8), DType::U32, &trainer.device)?;
+        let input_b = Tensor::zeros((1, 8), DType::U32, &trainer.device)?;
+        let target_b = Tensor::zeros((1, 8), DType::U32, &trainer.device)?;
+
+        let stats = trainer.train_step_parallel(vec![&input_a, &input_b], vec![&target_a, &target_b])?;
+        assert!(stats.total_loss.is_finite());
+        assert!(stats.ce_loss.is_finite());
+        assert!(stats.kl_loss.is_finite());
+        assert_eq!(trainer.global_step, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_epoch_parallel_remote_teacher() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = tiny_train_config();
+        cfg.batch_size = 1;
+
+        let endpoint = spawn_teacher_server("200 OK", teacher_logits_body(1, 8, cfg.vocab_size), 4);
+        let mut distill_cfg = DistillConfig::with_remote_teacher(cfg.clone(), endpoint, None, 2);
+        distill_cfg.micro_batches = 2;
+
+        let mut trainer = DistillationTrainer::new(distill_cfg, device)?;
+        let ds = SyntheticDataset::new(cfg.vocab_size as u32, 8, 2, 123);
+        let epoch = trainer.train_epoch(&ds, 0)?;
+        assert_eq!(epoch.steps, 1);
+        assert!(epoch.avg_loss.is_finite());
+        assert!(epoch.avg_ce.is_finite());
+        assert!(epoch.avg_kl.is_finite());
         Ok(())
     }
 }

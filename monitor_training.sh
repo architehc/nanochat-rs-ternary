@@ -1,55 +1,45 @@
 #!/bin/bash
-# monitor_training.sh - Monitor training progress every 10 minutes
+# Monitor training run every 2 hours for 14 hours (7 checks)
+LOG="/tmp/claude-1000/-home-habitat-ternary-clawd/tasks/b682522.output"
+REPORT="/home/habitat/ternary-clawd/nanochat-rs-ternary/checkpoints/nano125m_rust/monitor_report.txt"
 
-LOG_FILE="/tmp/training_125m.log"
-CHECKPOINT_DIR=$(grep "Checkpoint:" "$LOG_FILE" | tail -1 | awk -F': ' '{print $2}')
+echo "=== Training Monitor Started $(date) ===" | tee "$REPORT"
+echo "Checking every 2 hours for 14 hours (7 checks)" | tee -a "$REPORT"
+echo "" | tee -a "$REPORT"
 
-echo "=== Training Progress Monitor ==="
-echo "Started at: $(date)"
-echo "Log file: $LOG_FILE"
-echo "Checkpoint dir: $CHECKPOINT_DIR"
-echo ""
-echo "Checking progress every 10 minutes..."
-echo "Press Ctrl+C to stop monitoring"
-echo ""
-
-while true; do
-    echo "==================== $(date) ===================="
-
-    # Show latest training logs
-    echo ""
-    echo "Latest training output:"
-    tail -30 "$LOG_FILE" | grep -E "(step|epoch|loss|Step|Epoch|Loss|Error)" || echo "Waiting for training logs..."
-
-    # Show GPU usage if available
-    echo ""
-    echo "GPU Status:"
-    nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader 2>/dev/null || echo "GPU not in use (CPU training)"
-
-    # Show CPU usage
-    echo ""
-    echo "CPU Usage:"
-    top -bn1 | grep "nanochat-train" | head -3
-
-    # Check for checkpoints
-    if [ -d "$CHECKPOINT_DIR" ]; then
-        echo ""
-        echo "Checkpoints:"
-        ls -lh "$CHECKPOINT_DIR"/checkpoint_* 2>/dev/null | tail -5 || echo "No checkpoints yet"
+for i in $(seq 1 7); do
+    if [ $i -gt 1 ]; then
+        sleep 7200  # 2 hours
     fi
-
-    # Check if training is still running
-    if ! pgrep -f "nanochat-train" > /dev/null; then
-        echo ""
-        echo "Training process not found! Training may have completed or crashed."
-        echo "Check full log: $LOG_FILE"
-        exit 1
+    
+    echo "=== Check $i/7 — $(date) ===" | tee -a "$REPORT"
+    
+    # Get latest training line
+    LAST_LINE=$(tail -1 "$LOG" 2>/dev/null || echo "N/A")
+    echo "Latest: $LAST_LINE" | tee -a "$REPORT"
+    
+    # Extract step number
+    STEP=$(echo "$LAST_LINE" | grep -oP '\[\s*\K\d+' | head -1)
+    if [ -n "$STEP" ]; then
+        PCT=$((STEP * 100 / 50000))
+        echo "Progress: step $STEP/50000 ($PCT%)" | tee -a "$REPORT"
     fi
-
-    echo ""
-    echo "Next check in 10 minutes..."
-    echo "========================================================"
-    echo ""
-
-    sleep 600  # 10 minutes
+    
+    # GPU stats
+    GPU_STATS=$(nvidia-smi --query-gpu=memory.used,utilization.gpu,temperature.gpu,power.draw --format=csv,noheader 2>/dev/null)
+    echo "GPU: $GPU_STATS" | tee -a "$REPORT"
+    
+    # Checkpoints
+    CKPTS=$(ls -d /home/habitat/ternary-clawd/nanochat-rs-ternary/checkpoints/nano125m_rust/step_* 2>/dev/null | wc -l)
+    echo "Checkpoints saved: $CKPTS" | tee -a "$REPORT"
+    
+    # Check if process is still running
+    if nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -q .; then
+        echo "Status: RUNNING" | tee -a "$REPORT"
+    else
+        echo "Status: STOPPED (GPU process not found)" | tee -a "$REPORT"
+    fi
+    echo "" | tee -a "$REPORT"
 done
+
+echo "=== Monitor Complete $(date) ===" | tee -a "$REPORT"

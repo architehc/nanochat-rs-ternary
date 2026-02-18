@@ -131,7 +131,7 @@ fn main() -> Result<()> {
     }
 
     // 4. Export to hybrid GGUF
-    export_gguf(&args.output, &config, &converted, args.verbose)?;
+    export_gguf(&args.output, &config, &converted, args.group_size, args.verbose)?;
 
     if args.verbose {
         println!("Exported to: {}", args.output.display());
@@ -240,6 +240,7 @@ fn extract_model_config(checkpoint_dir: &Path) -> Result<serde_json::Value> {
 }
 
 /// Converted tensor with quantization info
+#[derive(Debug)]
 struct ConvertedTensor {
     name: String,
     shape: Vec<usize>,
@@ -276,13 +277,12 @@ fn convert_tensors(
                     "F16" => GgufType::F16,
                     "BF16" => GgufType::BF16,
                     _ => {
-                        if verbose {
-                            println!(
-                                "Warning: Unknown dtype {} for {}, treating as F32",
-                                tensor.dtype, tensor.name
-                            );
-                        }
-                        GgufType::F32
+                        anyhow::bail!(
+                            "Unsupported dtype {} for tensor {} — cannot safely reinterpret as F32. \
+                             Convert to F32/F16/BF16 before running the converter.",
+                            tensor.dtype,
+                            tensor.name
+                        );
                     }
                 };
 
@@ -375,6 +375,7 @@ fn export_gguf(
     output_path: &Path,
     config: &serde_json::Value,
     tensors: &[ConvertedTensor],
+    group_size: usize,
     verbose: bool,
 ) -> Result<()> {
     if verbose {
@@ -414,7 +415,7 @@ fn export_gguf(
     }
 
     // Optional Qwen3-specific fields
-    metadata.insert("nanochat.group_size".to_string(), GgufValue::U32(128));
+    metadata.insert("nanochat.group_size".to_string(), GgufValue::U32(group_size as u32));
     metadata.insert("nanochat.mhc_n_streams".to_string(), GgufValue::U32(4));
     metadata.insert(
         "nanochat.gated_attention".to_string(),
@@ -465,4 +466,215 @@ fn export_gguf(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    fn write_safetensors(
+        path: &Path,
+        tensors: &[(&str, &str, Vec<usize>, Vec<u8>)],
+    ) -> anyhow::Result<()> {
+        let mut header = serde_json::Map::new();
+        let mut offset = 0usize;
+        for (name, dtype, shape, data) in tensors {
+            let start = offset;
+            let end = start + data.len();
+            header.insert(
+                (*name).to_string(),
+                serde_json::json!({
+                    "dtype": *dtype,
+                    "shape": shape,
+                    "data_offsets": [start, end],
+                }),
+            );
+            offset = end;
+        }
+
+        let header_bytes = serde_json::to_vec(&serde_json::Value::Object(header))?;
+        let mut f = File::create(path)?;
+        f.write_all(&(header_bytes.len() as u64).to_le_bytes())?;
+        f.write_all(&header_bytes)?;
+        for (_, _, _, data) in tensors {
+            f.write_all(data)?;
+        }
+        Ok(())
+    }
+
+    fn f32_bytes(vals: &[f32]) -> Vec<u8> {
+        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn test_classify_tensor_paths() {
+        assert_eq!(
+            classify_tensor("blocks.0.experts.1.w_up.weight", true),
+            TensorClass::Ternary
+        );
+        assert_eq!(
+            classify_tensor("blocks.0.wq.weight", false),
+            TensorClass::Ternary
+        );
+        assert_eq!(
+            classify_tensor("tok_embed.weight", true),
+            TensorClass::KeepPrecision
+        );
+    }
+
+    #[test]
+    fn test_parse_tensor_data_for_supported_dtypes() -> anyhow::Result<()> {
+        let f32_tensor = TensorMeta {
+            name: "f32".to_string(),
+            shape: vec![2],
+            dtype: "F32".to_string(),
+            data: f32_bytes(&[1.25, -2.5]),
+        };
+        assert_eq!(parse_tensor_data(&f32_tensor)?, vec![1.25, -2.5]);
+
+        let f16_vals = [half::f16::from_f32(0.5), half::f16::from_f32(-3.0)];
+        let f16_tensor = TensorMeta {
+            name: "f16".to_string(),
+            shape: vec![2],
+            dtype: "F16".to_string(),
+            data: f16_vals
+                .iter()
+                .flat_map(|v| v.to_bits().to_le_bytes())
+                .collect(),
+        };
+        let parsed_f16 = parse_tensor_data(&f16_tensor)?;
+        assert!((parsed_f16[0] - 0.5).abs() < 1e-5);
+        assert!((parsed_f16[1] + 3.0).abs() < 1e-5);
+
+        let bf16_vals = [half::bf16::from_f32(2.0), half::bf16::from_f32(-1.0)];
+        let bf16_tensor = TensorMeta {
+            name: "bf16".to_string(),
+            shape: vec![2],
+            dtype: "BF16".to_string(),
+            data: bf16_vals
+                .iter()
+                .flat_map(|v| v.to_bits().to_le_bytes())
+                .collect(),
+        };
+        let parsed_bf16 = parse_tensor_data(&bf16_tensor)?;
+        assert!((parsed_bf16[0] - 2.0).abs() < 1e-5);
+        assert!((parsed_bf16[1] + 1.0).abs() < 1e-5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_tensor_data_rejects_unknown_dtype() {
+        let tensor = TensorMeta {
+            name: "x".to_string(),
+            shape: vec![1],
+            dtype: "U8".to_string(),
+            data: vec![1u8],
+        };
+        let err = parse_tensor_data(&tensor).unwrap_err();
+        assert!(err.to_string().contains("Unsupported dtype"));
+    }
+
+    #[test]
+    fn test_ternarize_tensor_requires_2d() {
+        let tensor = TensorMeta {
+            name: "bad".to_string(),
+            shape: vec![2, 2, 2],
+            dtype: "F32".to_string(),
+            data: f32_bytes(&[0.0; 8]),
+        };
+        let err = match ternarize_tensor(&tensor, 2) {
+            Ok(_) => panic!("expected ternarize_tensor to fail for non-2D"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("Can only ternarize 2D tensors"));
+    }
+
+    #[test]
+    fn test_convert_tensors_and_export_roundtrip() -> anyhow::Result<()> {
+        let tensors = vec![
+            TensorMeta {
+                name: "blocks.0.experts.1.w_up.weight".to_string(),
+                shape: vec![2, 4],
+                dtype: "F32".to_string(),
+                data: f32_bytes(&[1.0, -1.0, 0.0, 0.5, 0.25, -0.75, 0.2, -0.2]),
+            },
+            TensorMeta {
+                name: "tok_embed.weight".to_string(),
+                shape: vec![2, 2],
+                dtype: "F32".to_string(),
+                data: f32_bytes(&[0.1, 0.2, 0.3, 0.4]),
+            },
+        ];
+        let converted = convert_tensors(&tensors, 2, true, false)?;
+        assert_eq!(converted.len(), 2);
+        assert_eq!(converted[0].gguf_type, GgufType::Q1_58);
+        assert_eq!(converted[1].gguf_type, GgufType::F32);
+
+        let config = serde_json::json!({
+            "hidden_size": 16u64,
+            "num_hidden_layers": 2u64,
+            "num_attention_heads": 2u64,
+            "num_key_value_heads": 2u64,
+            "vocab_size": 64u64,
+        });
+        let dir = tempdir()?;
+        let gguf_path = dir.path().join("model.gguf");
+        let export_err = export_gguf(&gguf_path, &config, &converted, 128, false).unwrap_err();
+        assert!(export_err
+            .to_string()
+            .contains("write not implemented for this value type"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_convert_tensors_rejects_unknown_dtype() {
+        let tensors = vec![TensorMeta {
+            name: "mystery.weight".to_string(),
+            shape: vec![1],
+            dtype: "UNKNOWN".to_string(),
+            data: vec![9, 8, 7, 6],
+        }];
+        let err = convert_tensors(&tensors, 2, true, false).unwrap_err();
+        assert!(err.to_string().contains("Unsupported dtype"));
+    }
+
+    #[test]
+    fn test_load_checkpoint_single_file_and_directory() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let single_path = dir.path().join("single.safetensors");
+        write_safetensors(
+            &single_path,
+            &[("weight", "F32", vec![2], f32_bytes(&[1.0, 2.0]))],
+        )?;
+        let tensors = load_checkpoint(&single_path, false)?;
+        assert_eq!(tensors.len(), 1);
+        assert_eq!(tensors[0].name, "weight");
+        assert_eq!(tensors[0].shape, vec![2]);
+        assert_eq!(tensors[0].dtype, "F32");
+
+        let ckpt_dir = dir.path().join("checkpoint");
+        std::fs::create_dir_all(&ckpt_dir)?;
+        let model_path = ckpt_dir.join("model.safetensors");
+        write_safetensors(
+            &model_path,
+            &[("bias", "F32", vec![1], f32_bytes(&[3.0]))],
+        )?;
+        let tensors_dir = load_checkpoint(&ckpt_dir, false)?;
+        assert_eq!(tensors_dir.len(), 1);
+        assert_eq!(tensors_dir[0].name, "bias");
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_checkpoint_sharded_not_supported_error() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let shard = dir.path().join("model-00001-of-00002.safetensors");
+        std::fs::write(&shard, b"not used")?;
+        let err = load_checkpoint(dir.path(), false).unwrap_err();
+        assert!(err.to_string().contains("Sharded safetensors not yet supported"));
+        Ok(())
+    }
 }

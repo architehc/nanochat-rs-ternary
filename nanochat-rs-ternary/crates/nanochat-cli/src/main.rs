@@ -393,3 +393,102 @@ fn show_model_info(model_path: &Path, mhc_path: &Path) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn reference_model_paths() -> (PathBuf, PathBuf) {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let gguf = root.join("training").join("ref.gguf");
+        let mhc = root.join("training").join("ref.mhc");
+        assert!(gguf.exists(), "missing test gguf at {}", gguf.display());
+        assert!(mhc.exists(), "missing test mhc at {}", mhc.display());
+        (gguf, mhc)
+    }
+
+    #[test]
+    fn test_cli_parse_generate_defaults() {
+        let cli = Cli::try_parse_from([
+            "nanochat",
+            "generate",
+            "--model",
+            "m.gguf",
+            "--mhc",
+            "m.mhc",
+            "--prompt",
+            "hello",
+        ])
+        .expect("parse generate");
+        match cli.command {
+            Commands::Generate {
+                model,
+                mhc,
+                prompt,
+                max_tokens,
+                temperature,
+            } => {
+                assert_eq!(model, PathBuf::from("m.gguf"));
+                assert_eq!(mhc, PathBuf::from("m.mhc"));
+                assert_eq!(prompt, "hello");
+                assert_eq!(max_tokens, 200);
+                assert!((temperature - 0.7).abs() < f32::EPSILON);
+            }
+            _ => panic!("expected generate command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_benchmark_defaults() {
+        let cli = Cli::try_parse_from([
+            "nanochat",
+            "benchmark",
+            "--model",
+            "m.gguf",
+            "--mhc",
+            "m.mhc",
+        ])
+        .expect("parse benchmark");
+        match cli.command {
+            Commands::Benchmark {
+                n_samples, seq_len, ..
+            } => {
+                assert_eq!(n_samples, 10);
+                assert_eq!(seq_len, 100);
+            }
+            _ => panic!("expected benchmark command"),
+        }
+    }
+
+    #[test]
+    fn test_load_model_and_info_path() -> anyhow::Result<()> {
+        let (gguf, mhc) = reference_model_paths();
+        let model = load_model(&gguf, &mhc)?;
+        assert_eq!(model.config.vocab_size, 256);
+        show_model_info(&gguf, &mhc)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_generate_code_executes() -> anyhow::Result<()> {
+        let (gguf, mhc) = reference_model_paths();
+        generate_code(&gguf, &mhc, "fn add(a:i32,b:i32)->i32{a+b}", 4, 0.7)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_benchmark_executes() -> anyhow::Result<()> {
+        let (gguf, mhc) = reference_model_paths();
+        run_benchmark(&gguf, &mhc, 2, 8)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_model_invalid_path_errors() {
+        let err = load_model(Path::new("/does/not/exist.gguf"), Path::new("/does/not/exist.mhc"));
+        assert!(err.is_err());
+    }
+}

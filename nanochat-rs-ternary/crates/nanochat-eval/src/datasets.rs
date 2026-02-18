@@ -180,6 +180,7 @@ fn extract_function_name(code: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_extract_function_name() {
@@ -200,5 +201,74 @@ mod tests {
         let problem: CodeProblem = serde_json::from_str(json).unwrap();
         assert_eq!(problem.task_id, "HumanEval/0");
         assert_eq!(problem.entry_point, "test");
+    }
+
+    #[test]
+    fn test_humaneval_load_skips_invalid_lines() -> Result<(), anyhow::Error> {
+        let dir = tempdir()?;
+        let path = dir.path().join("humaneval.jsonl");
+        let valid = r#"{"task_id":"HumanEval/1","prompt":"def f():\n    pass\n","entry_point":"f","canonical_solution":null,"test":"def check(candidate):\n    pass\n"}"#;
+        let invalid = "{not json}";
+        std::fs::write(&path, format!("{}\n{}\n", valid, invalid))?;
+
+        let ds = HumanEvalDataset::load(&path)?;
+        assert_eq!(ds.len(), 1);
+        assert_eq!(ds.problems()[0].task_id, "HumanEval/1");
+        Ok(())
+    }
+
+    #[test]
+    fn test_humaneval_load_errors_when_no_valid_rows() -> Result<(), anyhow::Error> {
+        let dir = tempdir()?;
+        let path = dir.path().join("empty.jsonl");
+        std::fs::write(&path, "{bad json}\n")?;
+        let err = match HumanEvalDataset::load(&path) {
+            Ok(_) => anyhow::bail!("expected HumanEvalDataset::load to fail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("No problems loaded"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_mbpp_load_maps_fields() -> Result<(), anyhow::Error> {
+        let dir = tempdir()?;
+        let path = dir.path().join("mbpp.json");
+        let raw = serde_json::json!([{
+            "task_id": 7,
+            "text": "write add",
+            "code": "def add(a, b):\n    return a + b\n",
+            "test_list": ["assert candidate(1, 2) == 3"],
+            "test_setup_code": "x = 1",
+            "challenge_test_list": []
+        }]);
+        std::fs::write(&path, serde_json::to_string(&raw)?)?;
+
+        let ds = MBPPDataset::load(&path)?;
+        assert_eq!(ds.len(), 1);
+        let p = &ds.problems()[0];
+        assert_eq!(p.task_id, "MBPP/7");
+        assert_eq!(p.entry_point, "add");
+        assert!(p.test.contains("def check(candidate):"));
+        assert!(p.test.contains("assert candidate(1, 2) == 3"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_mbpp_load_defaults_entrypoint_when_missing() -> Result<(), anyhow::Error> {
+        let dir = tempdir()?;
+        let path = dir.path().join("mbpp-missing-code.json");
+        let raw = serde_json::json!([{
+            "task_id": 1,
+            "text": "noop",
+            "code": "",
+            "test_list": [],
+            "test_setup_code": ""
+        }]);
+        std::fs::write(&path, serde_json::to_string(&raw)?)?;
+
+        let ds = MBPPDataset::load(&path)?;
+        assert_eq!(ds.problems()[0].entry_point, "solution");
+        Ok(())
     }
 }

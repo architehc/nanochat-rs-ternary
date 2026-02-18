@@ -991,6 +991,7 @@ pub fn compute_grad_norm(grads: &candle_core::backprop::GradStore, varmap: &VarM
 mod tests {
     use super::*;
     use crate::data::SyntheticDataset;
+    use tempfile::tempdir;
 
     fn tiny_config() -> TrainConfig {
         TrainConfig {
@@ -1220,6 +1221,72 @@ mod tests {
             trainer.global_step, 1,
             "optimizer should step after grad_accum_steps"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_checkpoint_manager_cleanup_and_dir_size() -> Result<()> {
+        let dir = tempdir().map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        let ckpt = dir.path().join("checkpoints");
+        std::fs::create_dir_all(&ckpt).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
+        for step in [1u32, 2, 3] {
+            let step_dir = ckpt.join(format!("step_{}", step));
+            std::fs::create_dir_all(&step_dir).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            std::fs::write(step_dir.join("model.safetensors"), vec![step as u8; 64])
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        }
+
+        let total_before = checkpoint_manager::dir_size(&ckpt)
+            .map_err(candle_core::Error::Msg)?;
+        assert!(total_before >= 64 * 3);
+
+        let removed = checkpoint_manager::cleanup_old_checkpoints(&ckpt, 1)
+            .map_err(candle_core::Error::Msg)?;
+        assert_eq!(removed, 2);
+        assert!(!ckpt.join("step_1").exists());
+        assert!(!ckpt.join("step_2").exists());
+        assert!(ckpt.join("step_3").exists());
+
+        // Smoke test utility formatting helpers and disk-space probe.
+        let (_total, _avail) =
+            checkpoint_manager::get_disk_space(dir.path()).map_err(candle_core::Error::Msg)?;
+        assert_eq!(checkpoint_manager::format_bytes(1024), "1.00KB");
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_loop_saves_checkpoints_and_final() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cfg = tiny_config();
+        cfg.total_steps = 2;
+        cfg.batch_size = 2;
+        cfg.grad_accum_steps = 1;
+        let mut trainer = Trainer::new(cfg.clone(), device)?;
+        let ds = SyntheticDataset::new(cfg.vocab_size as u32, 8, 16, 123);
+        let dir = tempdir().map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        let ckpt_dir = dir.path().to_str().ok_or_else(|| {
+            candle_core::Error::Msg("temp checkpoint path not valid utf8".to_string())
+        })?;
+
+        trainer.train_loop(&ds, 10, 1, Some(ckpt_dir), 1, 1)?;
+        assert!(trainer.global_step >= cfg.total_steps);
+        assert!(dir.path().join("final/meta.json").exists());
+        assert!(dir.path().join("final/model.safetensors").exists());
+        assert!(dir.path().join("final/optimizer_state.bin").exists());
+        assert!(dir.path().join("step_2").exists());
+
+        let step_dirs = std::fs::read_dir(dir.path())
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("step_"))
+            })
+            .count();
+        assert!(step_dirs <= 2, "expected limited number of step directories");
         Ok(())
     }
 }

@@ -248,4 +248,50 @@ mod tests {
         // pass@10 should be higher (probability of at least one success in 10 tries)
         assert!(pass_at_10.score > pass_at_1.score);
     }
+
+    #[test]
+    fn test_pass_at_k_skips_when_n_less_than_k() {
+        let mut results = HashMap::new();
+        results.insert("task1".to_string(), (1, 1));
+        let pass_at_5 = PassAtK::calculate(&results, 5);
+        assert_eq!(pass_at_5.k, 5);
+        assert_eq!(pass_at_5.num_problems, 1);
+        assert_eq!(pass_at_5.num_solved, 1);
+        assert_eq!(pass_at_5.score, 0.0);
+    }
+
+    #[test]
+    fn test_eval_metrics_print_summary_with_optional_fields() {
+        let pass1 = PassAtK {
+            k: 1,
+            score: 0.5,
+            num_problems: 2,
+            num_solved: 1,
+        };
+        let pass10 = PassAtK {
+            k: 10,
+            score: 0.8,
+            num_problems: 2,
+            num_solved: 2,
+        };
+
+        let mut error_counts = HashMap::new();
+        error_counts.insert("SyntaxError".to_string(), 3);
+        error_counts.insert("Timeout".to_string(), 1);
+
+        let metrics = EvalMetrics {
+            model_name: "unit-model".to_string(),
+            dataset_name: "HumanEval".to_string(),
+            pass_at_1: pass1,
+            pass_at_10: Some(pass10),
+            pass_at_100: None,
+            total_problems: 2,
+            problems_solved: 1,
+            avg_execution_time_ms: 12.3,
+            error_counts,
+            per_problem_results: None,
+        };
+
+        metrics.print_summary();
+    }
 }

@@ -1,6 +1,73 @@
 //! CLI entry point for nanochat-train.
 
 use clap::{Parser, Subcommand};
+use nanochat_train::config::TrainConfig;
+
+fn resolve_train_config(config: &str) -> Option<TrainConfig> {
+    match config {
+        "d20" => Some(TrainConfig::d20()),
+        "d20-mtp" | "d20_mtp" => Some(TrainConfig::d20_mtp()),
+        "d20-e3" | "d20_e3" | "d20-e3-full" | "d20_e3_full" => {
+            Some(TrainConfig::d20_e3_full())
+        }
+        "d20-e3-fp4" | "d20_e3_fp4" => Some(TrainConfig::d20_e3_fp4()),
+        "nano-125m" | "nano_125m" => Some(TrainConfig::nano_125m()),
+        "nano-1b" | "nano_1b" => Some(TrainConfig::nano_1b()),
+        "medium-3b" | "medium_3b" => Some(TrainConfig::medium_3b()),
+        "large-7b" | "large_7b" => Some(TrainConfig::large_7b()),
+        "tiny-cpu" | "tiny_cpu" => Some(TrainConfig::tiny_cpu()),
+        "test-8bit" | "test_8bit" => Some(TrainConfig::test_8bit()),
+        _ => None,
+    }
+}
+
+fn resolve_device(device: &str) -> Result<candle_core::Device, String> {
+    match device {
+        "cpu" => Ok(candle_core::Device::Cpu),
+        #[cfg(feature = "cuda")]
+        "cuda" => candle_core::Device::new_cuda(0)
+            .map_err(|e| format!("Failed to initialize CUDA device: {}", e)),
+        other => Err(format!("Unknown device: {}. Use 'cpu' or 'cuda'.", other)),
+    }
+}
+
+fn apply_batch_size_override(cfg: &mut TrainConfig, batch_size: Option<usize>) -> Result<(), String> {
+    if let Some(bs) = batch_size {
+        if bs == 0 {
+            return Err("error: --batch-size must be > 0".to_string());
+        }
+        cfg.batch_size = bs;
+    }
+    Ok(())
+}
+
+fn effective_seq_len(seq_len: Option<usize>, cfg: &TrainConfig) -> Result<usize, String> {
+    let effective = seq_len.unwrap_or(cfg.max_seq_len / 2);
+    if effective == 0 {
+        return Err("error: --seq-len must be > 0".to_string());
+    }
+    Ok(effective)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DatasetSpec {
+    Synthetic,
+    Tokens(String),
+}
+
+fn resolve_dataset_spec(dataset: &str, data_path: Option<String>) -> Result<DatasetSpec, String> {
+    match dataset {
+        "synthetic" => Ok(DatasetSpec::Synthetic),
+        "tokens" => match data_path {
+            Some(path) => Ok(DatasetSpec::Tokens(path)),
+            None => Err("error: --data-path is required when --dataset=tokens".to_string()),
+        },
+        other => Err(format!(
+            "Unknown dataset: {}. Use 'synthetic' or 'tokens'.",
+            other
+        )),
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -126,66 +193,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tracing::info!("Threads: {} (auto-detected)", n);
             }
 
-            let device = match device.as_str() {
-                "cpu" => candle_core::Device::Cpu,
-                #[cfg(feature = "cuda")]
-                "cuda" => candle_core::Device::new_cuda(0)?,
-                other => {
-                    tracing::error!("Unknown device: {}. Use 'cpu' or 'cuda'.", other);
+            let device = match resolve_device(&device) {
+                Ok(device) => device,
+                Err(message) => {
+                    tracing::error!("{}", message);
                     std::process::exit(1);
                 }
             };
+            let device_str = format!("{:?}", device);
 
-            let mut cfg = match config.as_str() {
-                "d20" => nanochat_train::config::TrainConfig::d20(),
-                "d20-mtp" | "d20_mtp" => nanochat_train::config::TrainConfig::d20_mtp(),
-                "d20-e3" | "d20_e3" | "d20-e3-full" | "d20_e3_full" => {
-                    nanochat_train::config::TrainConfig::d20_e3_full()
-                }
-                "d20-e3-fp4" | "d20_e3_fp4" => nanochat_train::config::TrainConfig::d20_e3_fp4(),
-                "nano-125m" | "nano_125m" => nanochat_train::config::TrainConfig::nano_125m(),
-                "nano-1b" | "nano_1b" => nanochat_train::config::TrainConfig::nano_1b(),
-                "medium-3b" | "medium_3b" => nanochat_train::config::TrainConfig::medium_3b(),
-                "large-7b" | "large_7b" => nanochat_train::config::TrainConfig::large_7b(),
-                "tiny-cpu" | "tiny_cpu" => nanochat_train::config::TrainConfig::tiny_cpu(),
-                "test-8bit" | "test_8bit" => nanochat_train::config::TrainConfig::test_8bit(),
-                other => {
+            let mut cfg = match resolve_train_config(&config) {
+                Some(cfg) => cfg,
+                None => {
                     tracing::error!(
                         "Unknown config: {}. Use d20, d20-mtp, d20-e3-full, d20-e3-fp4, nano-125m, nano-1b, medium-3b, large-7b, tiny-cpu, or test-8bit.",
-                        other
+                        config
                     );
                     std::process::exit(1);
                 }
             };
 
-            if let Some(bs) = batch_size {
-                if bs == 0 {
-                    eprintln!("error: --batch-size must be > 0");
-                    std::process::exit(1);
-                }
-                cfg.batch_size = bs;
-            }
-
-            let effective_seq_len = seq_len.unwrap_or(cfg.max_seq_len / 2);
-            if effective_seq_len == 0 {
-                eprintln!("error: --seq-len must be > 0");
+            if let Err(message) = apply_batch_size_override(&mut cfg, batch_size) {
+                eprintln!("{}", message);
                 std::process::exit(1);
             }
-
-            tracing::info!("=== nanochat-train ===");
-            tracing::info!("Config: {}", config);
-            tracing::info!(
-                "Model params: ~{:.1}M",
-                cfg.param_count_estimate() as f64 / 1e6
-            );
-            tracing::info!("FFN dim: {}", cfg.ffn_dim());
-            tracing::info!("Device: {:?}", device);
-            tracing::info!("Batch size: {}", cfg.batch_size);
-            tracing::info!("Seq len: {}", effective_seq_len);
-            tracing::info!("Epochs: {}", epochs);
-            tracing::info!("Log interval: {} steps", log_interval);
-            tracing::info!("Checkpoint interval: {} steps", checkpoint_interval);
-            tracing::info!("");
 
             // Resume from checkpoint if specified
             let mut trainer = if let Some(ref ckpt_dir) = resume {
@@ -195,10 +226,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let meta: nanochat_train::checkpoint::CheckpointMeta =
                     serde_json::from_str(&meta_json)?;
                 tracing::info!("Resumed at step {} (loss={:.4})", meta.step, meta.loss);
+                // Use checkpoint's config for dataset/logging to avoid mismatch
+                // (e.g. CLI --config d20 but checkpoint was trained with nano-125m)
+                cfg = trainer.config.clone();
+                // Re-apply CLI overrides on top of checkpoint config
+                if let Err(message) = apply_batch_size_override(&mut cfg, batch_size) {
+                    eprintln!("{}", message);
+                    std::process::exit(1);
+                }
+                tracing::info!("Using checkpoint config (vocab_size={}, dim={})", cfg.vocab_size, cfg.dim);
                 trainer
             } else {
                 nanochat_train::train::Trainer::new(cfg.clone(), device)?
             };
+
+            let effective_seq_len = match effective_seq_len(seq_len, &cfg) {
+                Ok(v) => v,
+                Err(message) => {
+                    eprintln!("{}", message);
+                    std::process::exit(1);
+                }
+            };
+
+            tracing::info!("=== nanochat-train ===");
+            tracing::info!("Config: {}", config);
+            tracing::info!(
+                "Model params: ~{:.1}M",
+                cfg.param_count_estimate() as f64 / 1e6
+            );
+            tracing::info!("FFN dim: {}", cfg.ffn_dim());
+            tracing::info!("Device: {}", device_str);
+            tracing::info!("Batch size: {}", cfg.batch_size);
+            tracing::info!("Seq len: {}", effective_seq_len);
+            tracing::info!("Epochs: {}", epochs);
+            tracing::info!("Log interval: {} steps", log_interval);
+            tracing::info!("Checkpoint interval: {} steps", checkpoint_interval);
+            tracing::info!("");
 
             tracing::info!(
                 "Model initialized. Total params: {}",
@@ -206,21 +269,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             // Create dataset
-            let ds: Box<dyn nanochat_train::data::Dataset> = match dataset.as_str() {
-                "synthetic" => Box::new(nanochat_train::data::SyntheticDataset::new(
+            let ds: Box<dyn nanochat_train::data::Dataset> = match resolve_dataset_spec(
+                &dataset,
+                data_path,
+            ) {
+                Ok(DatasetSpec::Synthetic) => Box::new(nanochat_train::data::SyntheticDataset::new(
                     cfg.vocab_size as u32,
                     effective_seq_len,
                     n_samples,
                     42,
                 )),
-                "tokens" => {
-                    let path = match data_path {
-                        Some(p) => p,
-                        None => {
-                            eprintln!("error: --data-path is required when --dataset=tokens");
-                            std::process::exit(1);
-                        }
-                    };
+                Ok(DatasetSpec::Tokens(path)) => {
                     Box::new(
                         nanochat_train::data::dataset::TokenFileDataset::from_binary_file(
                             std::path::Path::new(&path),
@@ -228,8 +287,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )?,
                     )
                 }
-                other => {
-                    tracing::error!("Unknown dataset: {}. Use 'synthetic' or 'tokens'.", other);
+                Err(message) => {
+                    if message.starts_with("Unknown dataset:") {
+                        tracing::error!("{}", message);
+                    } else {
+                        eprintln!("{}", message);
+                    }
                     std::process::exit(1);
                 }
             };
@@ -289,4 +352,97 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_train_config_aliases() {
+        let aliases = [
+            "d20",
+            "d20-mtp",
+            "d20_mtp",
+            "d20-e3",
+            "d20_e3",
+            "d20-e3-full",
+            "d20_e3_full",
+            "d20-e3-fp4",
+            "d20_e3_fp4",
+            "nano-125m",
+            "nano_125m",
+            "nano-1b",
+            "nano_1b",
+            "medium-3b",
+            "medium_3b",
+            "large-7b",
+            "large_7b",
+            "tiny-cpu",
+            "tiny_cpu",
+            "test-8bit",
+            "test_8bit",
+        ];
+        for alias in aliases {
+            assert!(
+                resolve_train_config(alias).is_some(),
+                "expected alias {} to resolve",
+                alias
+            );
+        }
+        assert!(resolve_train_config("unknown").is_none());
+    }
+
+    #[test]
+    fn test_resolve_device_cpu_and_unknown() {
+        let device = resolve_device("cpu").expect("cpu device");
+        assert!(matches!(device, candle_core::Device::Cpu));
+        let err = resolve_device("weird").expect_err("unknown device should fail");
+        assert!(err.contains("Unknown device"));
+    }
+
+    #[test]
+    fn test_apply_batch_size_override() {
+        let mut cfg = TrainConfig::d20();
+        apply_batch_size_override(&mut cfg, Some(8)).expect("batch size override");
+        assert_eq!(cfg.batch_size, 8);
+
+        let err = apply_batch_size_override(&mut cfg, Some(0)).expect_err("zero should fail");
+        assert_eq!(err, "error: --batch-size must be > 0");
+    }
+
+    #[test]
+    fn test_effective_seq_len_defaults_and_validation() {
+        let mut cfg = TrainConfig::d20();
+        cfg.max_seq_len = 128;
+        assert_eq!(effective_seq_len(None, &cfg).expect("default seq"), 64);
+        assert_eq!(effective_seq_len(Some(32), &cfg).expect("explicit seq"), 32);
+
+        cfg.max_seq_len = 0;
+        let err = effective_seq_len(None, &cfg).expect_err("zero seq should fail");
+        assert_eq!(err, "error: --seq-len must be > 0");
+    }
+
+    #[test]
+    fn test_resolve_dataset_spec_paths() {
+        assert_eq!(
+            resolve_dataset_spec("synthetic", None).expect("synthetic dataset"),
+            DatasetSpec::Synthetic
+        );
+        assert_eq!(
+            resolve_dataset_spec("tokens", Some("data.bin".to_string()))
+                .expect("tokens dataset"),
+            DatasetSpec::Tokens("data.bin".to_string())
+        );
+        let missing = resolve_dataset_spec("tokens", None).expect_err("missing data path");
+        assert_eq!(
+            missing,
+            "error: --data-path is required when --dataset=tokens"
+        );
+        let unknown = resolve_dataset_spec("other", None).expect_err("unknown dataset");
+        assert_eq!(
+            unknown,
+            "Unknown dataset: other. Use 'synthetic' or 'tokens'."
+        );
+    }
 }

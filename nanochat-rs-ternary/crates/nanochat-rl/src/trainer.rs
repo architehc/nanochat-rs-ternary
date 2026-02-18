@@ -580,9 +580,9 @@ impl RLTrainer {
                         &runtime.device,
                     )?;
                     let ref_tensor = Tensor::new(ref_log_prob as f32, &runtime.device)?;
-                    let kl_term = (&ref_tensor - &seq_log_prob)?;
+                    let kl_term = (&seq_log_prob - &ref_tensor)?;
                     sample_loss = (&sample_loss + &(kl_term * cfg.grpo.kl_coef)?)?;
-                    approx_kl_sum += ref_log_prob - traj.log_prob;
+                    approx_kl_sum += traj.log_prob - ref_log_prob;
                 }
 
                 total_loss = (&total_loss + &sample_loss)?;
@@ -800,6 +800,7 @@ pub fn example() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candle_core::Device;
 
     #[test]
     fn test_generate_prompts() {
@@ -818,5 +819,117 @@ mod tests {
 
         let code = trainer.generate_code("factorial");
         assert!(code.contains("factorial"));
+    }
+
+    #[test]
+    fn test_generate_prompts_cycles() {
+        let config = RLConfig::default();
+        let trainer = RLTrainer::new(config).unwrap();
+        let prompts = trainer.generate_prompts(7);
+        assert_eq!(prompts.len(), 7);
+        assert_eq!(prompts[0], prompts[5]);
+        assert_eq!(prompts[1], prompts[6]);
+    }
+
+    #[test]
+    fn test_generate_code_branches() {
+        let config = RLConfig::default();
+        let trainer = RLTrainer::new(config).unwrap();
+
+        let point = trainer.generate_code("point");
+        assert!(point.contains("struct Point"));
+        assert!(point.contains("distance_to"));
+
+        let filter = trainer.generate_code("filter");
+        assert!(filter.contains("filter_even"));
+
+        let file = trainer.generate_code("file");
+        assert!(file.contains("read_file_contents"));
+
+        let fallback = trainer.generate_code("something else");
+        assert!(fallback.contains("example"));
+    }
+
+    #[test]
+    fn test_parse_device_variants() {
+        let cpu = RLTrainer::parse_device("cpu");
+        assert!(matches!(cpu, Device::Cpu));
+
+        // Ensure cuda-like strings do not panic even if CUDA is unavailable.
+        let _ = RLTrainer::parse_device("cuda");
+        let _ = RLTrainer::parse_device("cuda:0");
+        let _ = RLTrainer::parse_device("cuda:invalid");
+    }
+
+    #[test]
+    fn test_sample_token_with_stats_properties() {
+        let logits = [0.5f32, 1.0, -0.25, 2.5];
+        let (token, log_prob, entropy) = RLTrainer::sample_token_with_stats(&logits, 0.0);
+        assert!(token < logits.len());
+        assert!(log_prob.is_finite());
+        assert!(entropy.is_finite());
+        assert!(entropy >= 0.0);
+    }
+
+    #[test]
+    fn test_sample_token_with_stats_zero_mass() {
+        let logits: [f32; 0] = [];
+        let (token, log_prob, entropy) = RLTrainer::sample_token_with_stats(&logits, 1.0);
+        assert_eq!(token, 0);
+        assert_eq!(log_prob, 0.0);
+        assert_eq!(entropy, 0.0);
+    }
+
+    #[test]
+    fn test_flatten_batch_for_grpo_uses_completion_lengths() {
+        let mut batch = GrpoBatch::new(vec!["p1".to_string(), "p2".to_string()], 2);
+        batch.log_probs[0] = vec![-1.0, -2.0];
+        batch.log_probs[1] = vec![-3.0];
+        batch.relative_rewards[0] = vec![0.5, -0.5];
+        batch.relative_rewards[1] = vec![1.5];
+        batch.completions[0] = vec!["a".to_string(), "b".to_string()];
+        batch.completions[1] = vec!["c".to_string()];
+
+        let trajectories = vec![
+            vec![
+                GeneratedSample {
+                    completion: "a".to_string(),
+                    full_tokens: vec![1, 2],
+                    prompt_len: 1,
+                    log_prob: -1.0,
+                    entropy: 0.1,
+                },
+                GeneratedSample {
+                    completion: "b".to_string(),
+                    full_tokens: vec![1, 2, 3],
+                    prompt_len: 1,
+                    log_prob: -2.0,
+                    entropy: 0.2,
+                },
+            ],
+            vec![
+                GeneratedSample {
+                    completion: "c".to_string(),
+                    full_tokens: vec![1, 4],
+                    prompt_len: 1,
+                    log_prob: -3.0,
+                    entropy: 0.3,
+                },
+                // Extra trajectory should be ignored because completions len is 1.
+                GeneratedSample {
+                    completion: "ignored".to_string(),
+                    full_tokens: vec![9],
+                    prompt_len: 1,
+                    log_prob: -9.0,
+                    entropy: 9.0,
+                },
+            ],
+        ];
+
+        let (log_probs, relative_rewards, entropy) =
+            RLTrainer::flatten_batch_for_grpo(&batch, &trajectories);
+        assert_eq!(log_probs, vec![-1.0, -2.0, -3.0]);
+        assert_eq!(relative_rewards, vec![0.5, -0.5, 1.5]);
+        assert_eq!(entropy, vec![0.1, 0.2, 0.3]);
     }
 }

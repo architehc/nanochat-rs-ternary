@@ -38,7 +38,7 @@ pub struct EvaluationConfig {
 impl Default for EvaluationConfig {
     fn default() -> Self {
         Self {
-            model_endpoint: "http://localhost:8080/v1/completions".to_string(),
+            model_endpoint: "http://localhost:8080/v1/chat/completions".to_string(),
             model_name: "nanochat-ternary".to_string(),
             num_samples: 10,
             temperature: 0.8,
@@ -218,35 +218,43 @@ impl Evaluator {
         Ok(solutions)
     }
 
-    /// Query the model endpoint for code completion.
+    /// Query the model endpoint for code completion using chat completions API.
     async fn query_model(&self, prompt: &str) -> Result<String, anyhow::Error> {
         #[derive(Serialize)]
-        struct CompletionRequest {
-            prompt: String,
+        struct ChatMessage {
+            role: String,
+            content: String,
+        }
+
+        #[derive(Serialize)]
+        struct ChatCompletionRequest {
+            messages: Vec<ChatMessage>,
             max_tokens: usize,
             temperature: f64,
-            stop: Vec<String>,
         }
 
         #[derive(Deserialize)]
-        struct CompletionResponse {
-            choices: Vec<Choice>,
+        struct ChatCompletionResponse {
+            choices: Vec<ChatChoice>,
         }
 
         #[derive(Deserialize)]
-        struct Choice {
-            text: String,
+        struct ChatChoice {
+            message: ChatChoiceMessage,
         }
 
-        let request = CompletionRequest {
-            prompt: prompt.to_string(),
+        #[derive(Deserialize)]
+        struct ChatChoiceMessage {
+            content: String,
+        }
+
+        let request = ChatCompletionRequest {
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            }],
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
-            stop: vec![
-                "\nclass ".to_string(),
-                "\ndef ".to_string(),
-                "\n#".to_string(),
-            ],
         };
 
         let response = self
@@ -263,13 +271,13 @@ impl Evaluator {
             );
         }
 
-        let completion: CompletionResponse = response.json()?;
+        let completion: ChatCompletionResponse = response.json()?;
 
         if completion.choices.is_empty() {
             anyhow::bail!("Model returned no completions");
         }
 
-        Ok(completion.choices[0].text.clone())
+        Ok(completion.choices[0].message.content.clone())
     }
 }
 
@@ -332,5 +340,162 @@ impl EvalReport {
 impl Default for EvalReport {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metrics::ProblemResult;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    use std::thread;
+    use tempfile::tempdir;
+
+    fn spawn_mock_server(status: &str, body: String, max_requests: usize) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let addr = listener.local_addr().expect("mock addr");
+        let status_line = status.to_string();
+        thread::spawn(move || {
+            for _ in 0..max_requests {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+                stream.flush().expect("flush response");
+            }
+        });
+        format!("http://{}/v1/chat/completions", addr)
+    }
+
+    fn block_on_immediate<F: std::future::Future>(future: F) -> F::Output {
+        fn clone(_: *const ()) -> RawWaker {
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        fn wake(_: *const ()) {}
+        fn wake_by_ref(_: *const ()) {}
+        fn drop(_: *const ()) {}
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+
+        let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = Box::pin(future);
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(v) => v,
+            Poll::Pending => panic!("future unexpectedly pending in synchronous test"),
+        }
+    }
+
+    #[test]
+    fn test_query_model_http_error() {
+        let endpoint = spawn_mock_server("500 Internal Server Error", "{\"error\":\"nope\"}".into(), 1);
+        let evaluator = Evaluator::new(EvaluationConfig {
+            model_endpoint: endpoint,
+            ..EvaluationConfig::default()
+        });
+        let err = block_on_immediate(evaluator.query_model("fn x() {}")).unwrap_err();
+        assert!(err.to_string().contains("Model endpoint returned error"));
+    }
+
+    #[test]
+    fn test_query_model_empty_choices_error() {
+        let endpoint = spawn_mock_server("200 OK", "{\"choices\":[]}".into(), 1);
+        let evaluator = Evaluator::new(EvaluationConfig {
+            model_endpoint: endpoint,
+            ..EvaluationConfig::default()
+        });
+        let err = block_on_immediate(evaluator.query_model("fn x() {}")).unwrap_err();
+        assert!(err.to_string().contains("no completions"));
+    }
+
+    #[test]
+    fn test_generate_solutions_success() -> Result<(), anyhow::Error> {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "def add(a, b):\n    return a + b\n"
+                }
+            }]
+        })
+        .to_string();
+        let endpoint = spawn_mock_server("200 OK", body, 2);
+        let evaluator = Evaluator::new(EvaluationConfig {
+            model_endpoint: endpoint,
+            model_name: "unit-model".to_string(),
+            num_samples: 2,
+            temperature: 0.0,
+            max_tokens: 64,
+            execution_timeout: 2,
+            max_problems: None,
+            parallel: false,
+        });
+        let problem = CodeProblem {
+            task_id: "Unit/0".to_string(),
+            prompt: "Write add".to_string(),
+            entry_point: "add".to_string(),
+            canonical_solution: None,
+            test: "def check(candidate):\n    assert candidate(1, 2) == 3\n".to_string(),
+            metadata: serde_json::json!({}),
+        };
+        let samples = block_on_immediate(evaluator.generate_solutions(&problem))?;
+        assert_eq!(samples.len(), 2);
+        assert!(samples.iter().all(|s| s.contains("def add")));
+        Ok(())
+    }
+
+    #[test]
+    fn test_eval_report_roundtrip_and_print() -> Result<(), anyhow::Error> {
+        let pass = PassAtK {
+            k: 1,
+            score: 0.75,
+            num_problems: 4,
+            num_solved: 3,
+        };
+        let mut problems = HashMap::new();
+        problems.insert(
+            "Unit/0".to_string(),
+            ProblemResult {
+                task_id: "Unit/0".to_string(),
+                num_passed: 1,
+                num_total: 1,
+                avg_time_ms: 12.0,
+                error_types: vec![],
+            },
+        );
+
+        let metrics = EvalMetrics {
+            model_name: "m".to_string(),
+            dataset_name: "d".to_string(),
+            pass_at_1: pass.clone(),
+            pass_at_10: Some(pass.clone()),
+            pass_at_100: None,
+            total_problems: 4,
+            problems_solved: 3,
+            avg_execution_time_ms: 12.5,
+            error_counts: HashMap::new(),
+            per_problem_results: Some(problems),
+        };
+
+        let mut report = EvalReport::new();
+        report.add_result(metrics);
+        report.print_comparison();
+
+        let dir = tempdir()?;
+        let path = dir.path().join("report.json");
+        report.save_json(path.to_str().expect("utf8 path"))?;
+        let text = std::fs::read_to_string(&path)?;
+        assert!(text.contains("\"reports\""));
+        assert!(text.contains("\"timestamp\""));
+        Ok(())
     }
 }

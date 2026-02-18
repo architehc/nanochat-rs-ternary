@@ -116,7 +116,7 @@ impl MaxRLTrainer {
         if let Some(ref_probs) = ref_log_probs {
             let mut kl = 0.0;
             for i in 0..log_probs.len() {
-                kl += ref_probs[i] - log_probs[i];
+                kl += log_probs[i] - ref_probs[i];
             }
             kl /= n;
             loss += self.config.kl_coef * kl;

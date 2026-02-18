@@ -9,6 +9,9 @@ use nanochat_serve::api::ChatTemplate;
 use nanochat_serve::engine::{EngineHandle, InferenceEngine, NumaInferenceEngine};
 use nanochat_serve::server::{build_router, AppState};
 
+const USAGE: &str = "Usage: nanochat-serve --model <path.gguf> --mhc <path.mhc> --tokenizer <path.json> [--port 8080] [--host 0.0.0.0]";
+
+#[derive(Debug, PartialEq, Eq)]
 struct Args {
     model: String,
     mhc: String,
@@ -17,8 +20,18 @@ struct Args {
     port: u16,
 }
 
-fn parse_args() -> Args {
-    let args: Vec<String> = std::env::args().collect();
+#[derive(Debug, PartialEq, Eq)]
+enum ParseArgsError {
+    Help,
+    Message(String),
+}
+
+fn parse_args_from<I, S>(args: I) -> Result<Args, ParseArgsError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let args: Vec<String> = args.into_iter().map(Into::into).collect();
     let mut model = String::new();
     let mut mhc = String::new();
     let mut tokenizer_path = String::new();
@@ -49,30 +62,53 @@ fn parse_args() -> Args {
                 port = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(8080);
             }
             "--help" | "-h" => {
-                eprintln!("Usage: nanochat-serve --model <path.gguf> --mhc <path.mhc> --tokenizer <path.json> [--port 8080] [--host 0.0.0.0]");
-                std::process::exit(0);
+                return Err(ParseArgsError::Help);
             }
             other => {
-                eprintln!("Unknown argument: {other}");
-                eprintln!("Usage: nanochat-serve --model <path.gguf> --mhc <path.mhc> --tokenizer <path.json> [--port 8080] [--host 0.0.0.0]");
-                std::process::exit(1);
+                return Err(ParseArgsError::Message(format!(
+                    "Unknown argument: {}",
+                    other
+                )));
             }
         }
         i += 1;
     }
 
     if model.is_empty() || mhc.is_empty() || tokenizer_path.is_empty() {
-        eprintln!("Error: --model, --mhc, and --tokenizer are required");
-        eprintln!("Usage: nanochat-serve --model <path.gguf> --mhc <path.mhc> --tokenizer <path.json> [--port 8080] [--host 0.0.0.0]");
-        std::process::exit(1);
+        return Err(ParseArgsError::Message(
+            "Error: --model, --mhc, and --tokenizer are required".to_string(),
+        ));
     }
 
-    Args {
+    Ok(Args {
         model,
         mhc,
         tokenizer: tokenizer_path,
         host,
         port,
+    })
+}
+
+fn parse_args() -> Args {
+    match parse_args_from(std::env::args()) {
+        Ok(args) => args,
+        Err(ParseArgsError::Help) => {
+            eprintln!("{}", USAGE);
+            std::process::exit(0);
+        }
+        Err(ParseArgsError::Message(message)) => {
+            eprintln!("{}", message);
+            eprintln!("{}", USAGE);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn parse_numa_mode(raw: &str) -> (bool, bool) {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "false" | "0" => (false, true),
+        "threadpool" | "on" | "true" | "1" => (true, true),
+        _ => (false, false),
     }
 }
 
@@ -151,14 +187,13 @@ async fn main() {
         .filter(|&v| v > 0)
         .unwrap_or(64);
     let numa_mode_raw = std::env::var("NANOCHAT_NUMA_MODE").unwrap_or_else(|_| "off".to_string());
-    let use_numa_engine = match numa_mode_raw.trim().to_ascii_lowercase().as_str() {
-        "off" | "false" | "0" => false,
-        "threadpool" | "on" | "true" | "1" => true,
-        other => {
-            tracing::warn!("Unknown NANOCHAT_NUMA_MODE='{}', defaulting to off", other);
-            false
-        }
-    };
+    let (use_numa_engine, known_numa_mode) = parse_numa_mode(&numa_mode_raw);
+    if !known_numa_mode {
+        tracing::warn!(
+            "Unknown NANOCHAT_NUMA_MODE='{}', defaulting to off",
+            numa_mode_raw
+        );
+    }
 
     if api_key.is_some() {
         tracing::info!("API key auth enabled for /v1 endpoints");
@@ -255,4 +290,103 @@ async fn main() {
         })
         .await
         .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_args_from_success_defaults() {
+        let parsed = parse_args_from([
+            "nanochat-serve",
+            "--model",
+            "m.gguf",
+            "--mhc",
+            "m.mhc",
+            "--tokenizer",
+            "tok.json",
+        ])
+        .expect("parse success");
+        assert_eq!(parsed.model, "m.gguf");
+        assert_eq!(parsed.mhc, "m.mhc");
+        assert_eq!(parsed.tokenizer, "tok.json");
+        assert_eq!(parsed.host, "0.0.0.0");
+        assert_eq!(parsed.port, 8080);
+    }
+
+    #[test]
+    fn test_parse_args_from_success_overrides() {
+        let parsed = parse_args_from([
+            "nanochat-serve",
+            "--model",
+            "m.gguf",
+            "--mhc",
+            "m.mhc",
+            "--tokenizer",
+            "tok.json",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "9001",
+        ])
+        .expect("parse success");
+        assert_eq!(parsed.host, "127.0.0.1");
+        assert_eq!(parsed.port, 9001);
+    }
+
+    #[test]
+    fn test_parse_args_from_invalid_port_defaults() {
+        let parsed = parse_args_from([
+            "nanochat-serve",
+            "--model",
+            "m.gguf",
+            "--mhc",
+            "m.mhc",
+            "--tokenizer",
+            "tok.json",
+            "--port",
+            "not-a-number",
+        ])
+        .expect("parse success");
+        assert_eq!(parsed.port, 8080);
+    }
+
+    #[test]
+    fn test_parse_args_from_missing_required_errors() {
+        let err = parse_args_from(["nanochat-serve", "--model", "m.gguf"])
+            .expect_err("missing required args should fail");
+        assert!(matches!(err, ParseArgsError::Message(_)));
+        assert_eq!(
+            err,
+            ParseArgsError::Message(
+                "Error: --model, --mhc, and --tokenizer are required".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_args_from_unknown_argument_errors() {
+        let err = parse_args_from(["nanochat-serve", "--wat", "x"])
+            .expect_err("unknown arg should fail");
+        assert_eq!(
+            err,
+            ParseArgsError::Message("Unknown argument: --wat".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_args_from_help() {
+        let err = parse_args_from(["nanochat-serve", "--help"]).expect_err("help should return");
+        assert_eq!(err, ParseArgsError::Help);
+    }
+
+    #[test]
+    fn test_parse_numa_mode_variants() {
+        assert_eq!(parse_numa_mode("off"), (false, true));
+        assert_eq!(parse_numa_mode("0"), (false, true));
+        assert_eq!(parse_numa_mode("threadpool"), (true, true));
+        assert_eq!(parse_numa_mode("ON"), (true, true));
+        assert_eq!(parse_numa_mode("weird"), (false, false));
+    }
 }
