@@ -2044,6 +2044,7 @@ dependencies = [
  "tempfile",
  "tensorboard-rs",
  "ternary-core",
+ "thiserror 1.0.69",
  "tokenizers",
  "tokio",
  "tracing",

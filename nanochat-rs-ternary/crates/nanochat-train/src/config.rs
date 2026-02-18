@@ -176,6 +176,114 @@ pub struct TrainConfig {
 }
 
 impl TrainConfig {
+    /// Validate configuration and return list of warnings/errors
+    ///
+    /// # Returns
+    /// * `Ok(())` if configuration is valid
+    /// * `Err(errors)` if configuration has critical errors
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+
+        // Critical errors
+        if self.dim == 0 {
+            errors.push("dim must be greater than 0".to_string());
+        }
+        
+        if self.n_layers == 0 {
+            errors.push("n_layers must be greater than 0".to_string());
+        }
+        
+        if self.n_heads == 0 {
+            errors.push("n_heads must be greater than 0".to_string());
+        }
+
+        if self.dim % self.n_heads != 0 {
+            errors.push(format!(
+                "dim ({}) must be divisible by n_heads ({})",
+                self.dim, self.n_heads
+            ));
+        }
+
+        if self.dim % self.group_size != 0 {
+            errors.push(format!(
+                "dim ({}) must be divisible by group_size ({})",
+                self.dim, self.group_size
+            ));
+        }
+
+        if self.warmup_steps >= self.total_steps {
+            errors.push(format!(
+                "warmup_steps ({}) must be < total_steps ({})",
+                self.warmup_steps, self.total_steps
+            ));
+        }
+
+        if self.batch_size == 0 {
+            errors.push("batch_size must be greater than 0".to_string());
+        }
+
+        if self.grad_accum_steps == 0 {
+            errors.push("grad_accum_steps must be greater than 0".to_string());
+        }
+
+        if self.lr <= 0.0 {
+            errors.push(format!("learning rate ({}) must be positive", self.lr));
+        }
+
+        // Warnings
+        if self.batch_size * self.max_seq_len > 65536 {
+            warnings.push(format!(
+                "Large batch * seq_len ({}), may cause OOM",
+                self.batch_size * self.max_seq_len
+            ));
+        }
+
+        if self.use_galore && self.galore_rank > self.dim / 2 {
+            warnings.push(format!(
+                "GaLore rank ({}) > dim/2 ({}), memory savings minimal",
+                self.galore_rank, self.dim / 2
+            ));
+        }
+
+        if self.use_galore && self.galore_update_freq == 0 {
+            errors.push("galore_update_freq must be greater than 0 when use_galore is true".to_string());
+        }
+
+        if self.use_async_loader && self.async_n_workers == 0 {
+            warnings.push("async_n_workers is 0, async loader will not provide benefits".to_string());
+        }
+
+        if self.use_mtp && self.mtp_n_tokens == 0 {
+            errors.push("mtp_n_tokens must be greater than 0 when use_mtp is true".to_string());
+        }
+
+        if self.use_collider && (self.collider_threshold < 0.0 || self.collider_threshold > 1.0) {
+            errors.push(format!(
+                "collider_threshold ({}) must be in [0, 1]",
+                self.collider_threshold
+            ));
+        }
+
+        if self.use_collider && (self.collider_sparsity < 0.0 || self.collider_sparsity > 1.0) {
+            errors.push(format!(
+                "collider_sparsity ({}) must be in [0, 1]",
+                self.collider_sparsity
+            ));
+        }
+
+        // Log warnings
+        for warning in &warnings {
+            tracing::warn!("Config warning: {}", warning);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
     /// Compute FFN hidden dimension from dim and ffn_mult, aligned to group_size.
     pub fn ffn_dim(&self) -> usize {
         let raw = (self.dim as f32 * self.ffn_mult) as usize;

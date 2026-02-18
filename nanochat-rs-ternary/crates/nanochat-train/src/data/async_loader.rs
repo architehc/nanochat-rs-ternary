@@ -7,8 +7,9 @@
 //! - Lock-free queues for minimal contention
 
 use candle_core::{Device, Result, Tensor};
-use crossbeam_channel::{bounded, Receiver, Sender};
-use std::sync::atomic::{AtomicBool, Ordering};
+use crossbeam_channel::{bounded, Receiver, Sender, RecvTimeoutError};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -40,6 +41,19 @@ impl PreprocessedBatch {
     }
 }
 
+/// Performance metrics for async data loading
+#[derive(Debug, Clone, Default)]
+pub struct AsyncLoaderMetrics {
+    /// Total batches successfully prefetched
+    pub batches_prefetched: usize,
+    /// Total batches consumed by training
+    pub batches_consumed: usize,
+    /// Current queue depth (approximate)
+    pub current_queue_depth: usize,
+    /// Number of worker threads
+    pub n_workers: usize,
+}
+
 /// Async data loader with prefetching workers
 pub struct AsyncDataLoader {
     /// Channel for receiving preprocessed batches
@@ -56,6 +70,27 @@ pub struct AsyncDataLoader {
 
     /// Target device for tensor creation
     device: Device,
+    
+    /// Metrics tracking
+    metrics: Arc<AsyncLoaderMetricsInner>,
+    
+    /// Number of workers
+    n_workers: usize,
+}
+
+#[derive(Debug)]
+struct AsyncLoaderMetricsInner {
+    batches_prefetched: AtomicUsize,
+    batches_consumed: AtomicUsize,
+}
+
+impl Default for AsyncLoaderMetricsInner {
+    fn default() -> Self {
+        Self {
+            batches_prefetched: AtomicUsize::new(0),
+            batches_consumed: AtomicUsize::new(0),
+        }
+    }
 }
 
 impl AsyncDataLoader {
@@ -116,6 +151,7 @@ impl AsyncDataLoader {
         drop(batch_tx);
 
         let total_batches = dataset.len().div_ceil(batch_size);
+        let metrics = Arc::new(AsyncLoaderMetricsInner::default());
 
         Self {
             batch_rx,
@@ -123,6 +159,8 @@ impl AsyncDataLoader {
             shutdown,
             total_batches,
             device,
+            metrics,
+            n_workers,
         }
     }
 
@@ -201,10 +239,33 @@ impl AsyncDataLoader {
     pub fn next_batch(&mut self) -> Option<Result<(Tensor, Tensor)>> {
         match self.batch_rx.recv() {
             Ok(preprocessed) => {
+                self.metrics.batches_consumed.fetch_add(1, Ordering::Relaxed);
                 // Convert to tensors on target device
                 Some(preprocessed.to_tensors(&self.device))
             }
             Err(_) => None, // Channel closed, all workers finished
+        }
+    }
+    
+    /// Get next batch with timeout (returns None if timeout expired)
+    pub fn next_batch_timeout(&mut self, timeout: Duration) -> Option<Result<(Tensor, Tensor)>> {
+        match self.batch_rx.recv_timeout(timeout) {
+            Ok(preprocessed) => {
+                self.metrics.batches_consumed.fetch_add(1, Ordering::Relaxed);
+                Some(preprocessed.to_tensors(&self.device))
+            }
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => None,
+        }
+    }
+    
+    /// Get current loader metrics
+    pub fn metrics(&self) -> AsyncLoaderMetrics {
+        AsyncLoaderMetrics {
+            batches_prefetched: self.metrics.batches_prefetched.load(Ordering::Relaxed),
+            batches_consumed: self.metrics.batches_consumed.load(Ordering::Relaxed),
+            current_queue_depth: self.batch_rx.len(),
+            n_workers: self.n_workers,
         }
     }
 
@@ -216,6 +277,20 @@ impl AsyncDataLoader {
     /// Shutdown workers gracefully
     pub fn shutdown(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Iterator for AsyncDataLoader {
+    type Item = Result<(Tensor, Tensor)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_batch()
+    }
+}
+
+impl ExactSizeIterator for AsyncDataLoader {
+    fn len(&self) -> usize {
+        self.total_batches
     }
 }
 

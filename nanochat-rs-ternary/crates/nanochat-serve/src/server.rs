@@ -736,13 +736,30 @@ const topPSlider=document.getElementById('top-p');
 const topPVal=document.getElementById('top-p-val');
 let chatHistory=[];
 let generating=false;
+let apiKey=null;
 
 tempSlider.oninput=()=>tempVal.textContent=tempSlider.value;
 topPSlider.oninput=()=>topPVal.textContent=topPSlider.value;
 
-fetch('/v1/models').then(r=>r.json()).then(d=>{
+function apiHeaders(){
+  const h={'Content-Type':'application/json'};
+  if(apiKey)h['Authorization']='Bearer '+apiKey;
+  return h;
+}
+
+async function initModels(){
+  const h=apiKey?{Authorization:'Bearer '+apiKey}:{};
+  const r=await fetch('/v1/models',{headers:h});
+  if(r.status===401){
+    const k=window.prompt('This server requires an API key:');
+    if(k){apiKey=k.trim();return initModels();}
+    document.getElementById('model-name').textContent='(auth required)';
+    return;
+  }
+  const d=await r.json();
   document.getElementById('model-name').textContent=d.data?.[0]?.id||'unknown';
-}).catch(()=>{});
+}
+initModels().catch(()=>{document.getElementById('model-name').textContent='(connection error)';});
 
 prompt.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}
@@ -778,7 +795,7 @@ async function sendMessage(){
   try{
     const res=await fetch('/v1/chat/completions',{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:apiHeaders(),
       body:JSON.stringify({
         messages:chatHistory,
         temperature:parseFloat(tempSlider.value),

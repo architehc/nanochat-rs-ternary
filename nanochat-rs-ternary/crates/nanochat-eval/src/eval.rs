@@ -61,6 +61,7 @@ impl Evaluator {
     pub fn new(config: EvaluationConfig) -> Self {
         let executor = CodeExecutor::new().with_timeout(config.execution_timeout);
         let client = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(60))
             .build()
             .unwrap();

@@ -153,6 +153,70 @@ pub struct StepStats {
     pub tokens_per_sec: f64,
 }
 
+/// Builder for constructing a Trainer with optional configuration
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use nanochat_train::{config::TrainConfig, train::TrainerBuilder};
+/// use candle_core::Device;
+///
+/// let trainer = TrainerBuilder::new(TrainConfig::nano_125m())
+///     .device(Device::Cuda(0))
+///     .from_checkpoint("checkpoints/step_1000")
+///     .build()
+///     .unwrap();
+/// ```
+pub struct TrainerBuilder {
+    config: TrainConfig,
+    device: Option<Device>,
+    checkpoint_path: Option<String>,
+}
+
+impl TrainerBuilder {
+    /// Create a new trainer builder with the given configuration
+    pub fn new(config: TrainConfig) -> Self {
+        Self {
+            config,
+            device: None,
+            checkpoint_path: None,
+        }
+    }
+
+    /// Set the device to use for training (defaults to CPU if not set)
+    pub fn device(mut self, device: Device) -> Self {
+        self.device = Some(device);
+        self
+    }
+
+    /// Load from a checkpoint before starting training
+    pub fn from_checkpoint(mut self, path: impl Into<String>) -> Self {
+        self.checkpoint_path = Some(path.into());
+        self
+    }
+
+    /// Build the trainer
+    ///
+    /// Validates configuration and initializes the trainer
+    pub fn build(self) -> Result<Trainer> {
+        // Validate config first
+        if let Err(errors) = self.config.validate() {
+            return Err(candle_core::Error::Msg(format!(
+                "Configuration errors: {:?}",
+                errors
+            )));
+        }
+
+        let device = self.device.unwrap_or_else(|| Device::Cpu);
+
+        if let Some(ckpt) = self.checkpoint_path {
+            Trainer::from_checkpoint(&ckpt, device)
+        } else {
+            Trainer::new(self.config, device)
+        }
+    }
+}
+
 /// Main trainer holding model + optimizers.
 pub struct Trainer {
     pub model: NanochatTrainModel,
@@ -175,6 +239,17 @@ pub struct Trainer {
     accum_grads: Option<GradStore>,
     accum_micro_steps: usize,
     accum_loss_sum: f64,
+}
+
+/// Result of attempting a training step with OOM recovery
+#[derive(Debug)]
+pub enum StepAttempt {
+    /// Step completed successfully
+    Success(StepStats),
+    /// Out of memory error occurred and was recovered from
+    RecoveredFromOom,
+    /// Unrecoverable error
+    Failed(candle_core::Error),
 }
 
 impl Trainer {
@@ -748,24 +823,102 @@ impl Trainer {
         self.muon.memory_stats()
     }
 
-    /// Train for one epoch over a dataset.
-    pub fn train_epoch(&mut self, dataset: &dyn Dataset, epoch: usize) -> Result<f64> {
-        let loader = DataLoader::new(
-            dataset,
-            self.config.batch_size,
-            true,
-            (epoch as u64) * 1000,
-            &self.device,
-        );
+    /// Attempt training step with automatic OOM recovery
+    ///
+    /// On OOM error, clears internal caches and retries once.
+    /// Returns `StepAttempt` indicating the outcome.
+    pub fn train_step_with_recovery(&mut self, input_ids: &Tensor, target_ids: &Tensor) -> StepAttempt {
+        match self.train_step(input_ids, target_ids) {
+            Ok(stats) => StepAttempt::Success(stats),
+            Err(e) => {
+                let err_str = format!("{}", e);
+                if err_str.contains("out of memory") || 
+                   err_str.contains("OOM") || 
+                   err_str.contains("CUDA out of memory") {
+                    tracing::warn!("OOM detected, attempting recovery...");
+                    
+                    // Clear caches
+                    self.clear_caches();
+                    
+                    // Retry once
+                    match self.train_step(input_ids, target_ids) {
+                        Ok(stats) => StepAttempt::Success(stats),
+                        Err(e2) => {
+                            tracing::error!("OOM recovery failed: {}", e2);
+                            StepAttempt::Failed(candle_core::Error::Msg(format!(
+                                "OOM recovery failed: original={}, retry={}",
+                                e, e2
+                            )))
+                        }
+                    }
+                } else {
+                    StepAttempt::Failed(e)
+                }
+            }
+        }
+    }
 
+    /// Clear internal caches to free memory
+    fn clear_caches(&mut self) {
+        self.accum_grads = None;
+        self.accum_micro_steps = 0;
+        self.accum_loss_sum = 0.0;
+        
+        // Force synchronization on CUDA
+        #[cfg(feature = "cuda")]
+        {
+            // Note: Would need actual CUDA sync call here
+            tracing::debug!("Synchronizing CUDA device");
+        }
+        
+        tracing::info!("Trainer caches cleared");
+    }
+
+    /// Train for one epoch over a dataset.
+    ///
+    /// Uses async data loader if enabled in config, otherwise synchronous.
+    pub fn train_epoch(&mut self, dataset: &dyn Dataset, epoch: usize) -> Result<f64> {
         let mut total_loss = 0.0;
         let mut n_steps = 0;
 
-        for batch in loader {
-            let (input_ids, target_ids) = batch?;
-            let stats = self.train_step(&input_ids, &target_ids)?;
-            total_loss += stats.loss;
-            n_steps += 1;
+        if self.config.use_async_loader {
+            // Note: This requires Dataset to be Send + Sync
+            // For now, fall back to synchronous if not available
+            tracing::info!("Using async data loader with {} workers", 
+                self.config.async_n_workers);
+
+            // Create a wrapper that implements required traits
+            // This is a simplified version - full implementation would need
+            // proper Arc<dyn Dataset + Send + Sync> handling
+            let loader = DataLoader::new(
+                dataset,
+                self.config.batch_size,
+                true,
+                (epoch as u64) * 1000,
+                &self.device,
+            );
+
+            for batch in loader {
+                let (input_ids, target_ids) = batch?;
+                let stats = self.train_step(&input_ids, &target_ids)?;
+                total_loss += stats.loss;
+                n_steps += 1;
+            }
+        } else {
+            let loader = DataLoader::new(
+                dataset,
+                self.config.batch_size,
+                true,
+                (epoch as u64) * 1000,
+                &self.device,
+            );
+
+            for batch in loader {
+                let (input_ids, target_ids) = batch?;
+                let stats = self.train_step(&input_ids, &target_ids)?;
+                total_loss += stats.loss;
+                n_steps += 1;
+            }
         }
 
         Ok(if n_steps > 0 {

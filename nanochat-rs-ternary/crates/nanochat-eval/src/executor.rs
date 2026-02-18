@@ -1,4 +1,10 @@
-//! Sandboxed Python code execution for testing generated solutions.
+//! Python code execution for testing generated solutions.
+//!
+//! **WARNING:** This executor runs generated code in a subprocess with minimal
+//! isolation (cleared environment, stdin closed). It does NOT provide a true
+//! sandbox — there is no seccomp, chroot, namespace, or cgroup isolation.
+//! Do not run untrusted code in security-sensitive environments without
+//! additional OS-level sandboxing.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -55,7 +61,11 @@ impl ErrorType {
     }
 }
 
-/// Sandboxed Python code executor.
+/// Python code executor (unsandboxed).
+///
+/// Runs generated Python code in a subprocess. Environment variables are
+/// cleared to reduce information leakage, but no OS-level sandboxing is
+/// applied. See module-level documentation for security caveats.
 pub struct CodeExecutor {
     /// Python interpreter path (default: "python3")
     python_cmd: String,
@@ -94,7 +104,9 @@ impl CodeExecutor {
 
     /// Execute generated code with test cases.
     ///
-    /// Combines the generated solution with test code and runs in a subprocess.
+    /// Combines the generated solution with test code and runs in a subprocess
+    /// with a cleared environment. Uses `kill_on_drop(true)` so the child
+    /// process is reliably killed via SIGKILL if the timeout fires.
     pub async fn execute(
         &self,
         solution: &str,
@@ -109,7 +121,12 @@ impl CodeExecutor {
             solution, test_code, entry_point
         );
 
-        // Execute with timeout
+        // Preserve PATH so we can find the Python interpreter
+        let path_env = std::env::var("PATH")
+            .unwrap_or_else(|_| "/usr/bin:/usr/local/bin:/bin".to_string());
+
+        // Execute with timeout; env_clear reduces information leakage,
+        // kill_on_drop ensures reliable cleanup on timeout/cancellation.
         let timeout = Duration::from_secs(self.timeout_secs);
         let child = Command::new(&self.python_cmd)
             .arg("-c")
@@ -117,12 +134,12 @@ impl CodeExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
+            .env_clear()
+            .env("PATH", &path_env)
+            .kill_on_drop(true)
             .spawn()?;
 
-        // Get child ID before moving
-        let child_id = child.id();
-
-        // Wait with timeout
+        // Wait with timeout — on cancellation, child is dropped and SIGKILL'd
         let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
 
         let time_ms = start.elapsed().as_millis() as u64;
@@ -161,15 +178,7 @@ impl CodeExecutor {
                 })
             }
             Err(_) => {
-                // Timeout - try to kill the process using the saved PID
-                if let Some(pid) = child_id {
-                    // Best effort kill - ignore errors
-                    let _ = std::process::Command::new("kill")
-                        .arg("-9")
-                        .arg(pid.to_string())
-                        .output();
-                }
-
+                // Timeout — child dropped here, kill_on_drop sends SIGKILL
                 Ok(ExecutionResult {
                     passed: false,
                     time_ms,
