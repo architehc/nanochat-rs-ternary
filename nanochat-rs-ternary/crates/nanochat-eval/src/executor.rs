@@ -34,6 +34,7 @@ pub struct ExecutionResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ErrorType {
     Timeout,
     RuntimeError,

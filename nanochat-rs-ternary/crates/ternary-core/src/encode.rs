@@ -89,6 +89,28 @@ pub fn unpack_4_trits(byte: u8) -> (u8, u8, u8, u8) {
     )
 }
 
+/// Compile-time lookup table: maps a 2-bit code to its decoded i8 value.
+///
+/// Index 0b00 →  0, 0b01 → +1, 0b10 → 0 (invalid), 0b11 → -1
+pub const DECODE_TRIT_LUT: [i8; 4] = [0, 1, 0, -1];
+
+/// Compile-time lookup table: maps every possible byte (4 packed trits) to
+/// four decoded i8 values. Eliminates per-trit branching in hot decode loops.
+///
+/// Usage: `let [t0, t1, t2, t3] = DECODE_BYTE_LUT[byte as usize];`
+pub const DECODE_BYTE_LUT: [[i8; 4]; 256] = {
+    let mut lut = [[0i8; 4]; 256];
+    let mut b: usize = 0;
+    while b < 256 {
+        lut[b][0] = DECODE_TRIT_LUT[b & 0x03];
+        lut[b][1] = DECODE_TRIT_LUT[(b >> 2) & 0x03];
+        lut[b][2] = DECODE_TRIT_LUT[(b >> 4) & 0x03];
+        lut[b][3] = DECODE_TRIT_LUT[(b >> 6) & 0x03];
+        b += 1;
+    }
+    lut
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

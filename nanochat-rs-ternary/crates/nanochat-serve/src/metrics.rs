@@ -8,9 +8,8 @@
 //!
 //! Metrics are exposed via GET /metrics endpoint.
 
-use lazy_static::lazy_static;
 use prometheus::{Counter, Encoder, Gauge, Histogram, HistogramOpts, Opts, Registry, TextEncoder};
-use std::sync::Once;
+use std::sync::{LazyLock, Once};
 
 static METRICS_INIT: Once = Once::new();
 
@@ -130,53 +129,67 @@ impl SafeHistogram {
     }
 }
 
-lazy_static! {
-    /// Global metrics registry.
-    pub static ref REGISTRY: Registry = Registry::new();
+/// Global metrics registry.
+pub static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
-    /// Total number of inference requests.
-    pub static ref INFERENCE_REQUESTS: SafeCounter = SafeCounter::new(
+/// Total number of inference requests.
+pub static INFERENCE_REQUESTS: LazyLock<SafeCounter> = LazyLock::new(|| {
+    SafeCounter::new(
         "nanochat_inference_requests_total",
-        "Total number of inference requests"
-    );
+        "Total number of inference requests",
+    )
+});
 
-    /// Total number of failed requests.
-    pub static ref INFERENCE_ERRORS: SafeCounter = SafeCounter::new(
+/// Total number of failed requests.
+pub static INFERENCE_ERRORS: LazyLock<SafeCounter> = LazyLock::new(|| {
+    SafeCounter::new(
         "nanochat_inference_errors_total",
-        "Total number of failed inference requests"
-    );
+        "Total number of failed inference requests",
+    )
+});
 
-    /// Inference latency histogram in seconds.
-    pub static ref INFERENCE_LATENCY: SafeHistogram = SafeHistogram::new(
+/// Inference latency histogram in seconds.
+pub static INFERENCE_LATENCY: LazyLock<SafeHistogram> = LazyLock::new(|| {
+    SafeHistogram::new(
         "nanochat_inference_latency_seconds",
         "Inference latency in seconds",
-        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
-    );
+        vec![
+            0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+        ],
+    )
+});
 
-    /// Number of currently active requests.
-    pub static ref ACTIVE_REQUESTS: SafeGauge = SafeGauge::new(
+/// Number of currently active requests.
+pub static ACTIVE_REQUESTS: LazyLock<SafeGauge> = LazyLock::new(|| {
+    SafeGauge::new(
         "nanochat_active_requests",
-        "Number of currently active inference requests"
-    );
+        "Number of currently active inference requests",
+    )
+});
 
-    /// Model load time in seconds.
-    pub static ref MODEL_LOAD_TIME: SafeGauge = SafeGauge::new(
+/// Model load time in seconds.
+pub static MODEL_LOAD_TIME: LazyLock<SafeGauge> = LazyLock::new(|| {
+    SafeGauge::new(
         "nanochat_model_load_time_seconds",
-        "Time taken to load model in seconds"
-    );
+        "Time taken to load model in seconds",
+    )
+});
 
-    /// Total tokens generated.
-    pub static ref TOKENS_GENERATED: SafeCounter = SafeCounter::new(
+/// Total tokens generated.
+pub static TOKENS_GENERATED: LazyLock<SafeCounter> = LazyLock::new(|| {
+    SafeCounter::new(
         "nanochat_tokens_generated_total",
-        "Total number of tokens generated"
-    );
+        "Total number of tokens generated",
+    )
+});
 
-    /// Tokens per second (throughput).
-    pub static ref TOKENS_PER_SECOND: SafeGauge = SafeGauge::new(
+/// Tokens per second (throughput).
+pub static TOKENS_PER_SECOND: LazyLock<SafeGauge> = LazyLock::new(|| {
+    SafeGauge::new(
         "nanochat_tokens_per_second",
-        "Current tokens per second throughput"
-    );
-}
+        "Current tokens per second throughput",
+    )
+});
 
 /// Register all metrics with the global registry.
 pub fn register_metrics() {

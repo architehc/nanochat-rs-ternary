@@ -14,6 +14,7 @@ use std::fmt;
 
 /// Error while deserializing `MhcLiteN2` from bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum N2DecodeError {
     TooShort { expected: usize, actual: usize },
     NonFinite { field: &'static str },

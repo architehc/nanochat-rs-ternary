@@ -7,6 +7,7 @@ use thiserror::Error;
 
 /// Main error type for training operations
 #[derive(Error, Debug, Clone)]
+#[non_exhaustive]
 pub enum TrainError {
     /// Errors from the Candle tensor library
     #[error("Candle error: {0}")]

@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Main error type for nanochat operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum NanoChatError {
     /// Model file not found at specified path.
     #[error("Model not found: {0}")]
