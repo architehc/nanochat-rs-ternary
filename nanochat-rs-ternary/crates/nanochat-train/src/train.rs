@@ -960,7 +960,37 @@ impl Trainer {
         })
     }
 
+    /// Reduce learning rates by a factor for a limited number of steps (cooldown).
+    ///
+    /// Used after NaN recovery to stabilize training before returning to normal LR.
+    fn apply_lr_cooldown(&mut self, factor: f64, duration_steps: usize) {
+        self.base_lr_muon *= factor;
+        self.base_lr_lion *= factor;
+        tracing::warn!(
+            "LR cooldown: reduced by {:.0}% for next {} steps (muon={:.6}, lion={:.6})",
+            (1.0 - factor) * 100.0,
+            duration_steps,
+            self.base_lr_muon,
+            self.base_lr_lion,
+        );
+    }
+
+    /// Restore original learning rates after cooldown period.
+    fn restore_lr(&mut self) {
+        self.base_lr_muon = self.config.lr;
+        self.base_lr_lion = self.config.mhc_lr;
+        tracing::info!(
+            "LR cooldown ended, restored to muon={:.6}, lion={:.6}",
+            self.base_lr_muon,
+            self.base_lr_lion,
+        );
+    }
+
     /// Production training loop with per-step logging and checkpointing.
+    ///
+    /// Includes NaN/divergence recovery: on non-finite loss, reloads the last
+    /// checkpoint and reduces LR by 50% for 100 steps. Aborts after 3 consecutive
+    /// NaN steps.
     ///
     /// # Arguments
     /// * `keep_last_checkpoints` - Number of checkpoints to keep (0 = keep all)
@@ -978,6 +1008,9 @@ impl Trainer {
         let mut running_gnorm = 0.0;
         let mut running_toks = 0.0;
         let mut interval_steps = 0usize;
+        let mut consecutive_nan_count = 0usize;
+        let mut cooldown_steps_remaining = 0usize;
+        let mut last_checkpoint_path: Option<String> = None;
 
         for epoch in 0..epochs {
             let epoch_start = Instant::now();
@@ -993,6 +1026,65 @@ impl Trainer {
             for batch in loader {
                 let (input_ids, target_ids) = batch?;
                 let stats = self.train_step(&input_ids, &target_ids)?;
+
+                // NaN/divergence detection and recovery
+                if !stats.loss.is_finite() {
+                    consecutive_nan_count += 1;
+                    tracing::error!(
+                        "NaN/Inf loss detected at step {} (consecutive: {})",
+                        self.global_step,
+                        consecutive_nan_count,
+                    );
+
+                    if consecutive_nan_count >= 3 {
+                        return Err(candle_core::Error::Msg(format!(
+                            "Aborting: {} consecutive NaN/Inf losses at step {}",
+                            consecutive_nan_count, self.global_step,
+                        )));
+                    }
+
+                    // Try to recover from last checkpoint
+                    if let Some(ref ckpt_path) = last_checkpoint_path {
+                        tracing::warn!("Reloading weights from {}", ckpt_path);
+                        let weights_path = format!("{}/model.safetensors", ckpt_path);
+                        self.varmap.load(&weights_path).map_err(|e| {
+                            candle_core::Error::Msg(format!(
+                                "NaN recovery weight reload failed: {}", e
+                            ))
+                        })?;
+                        // Read step from checkpoint meta
+                        let meta_path = format!("{}/meta.json", ckpt_path);
+                        if let Ok(meta_json) = std::fs::read_to_string(&meta_path) {
+                            if let Ok(meta) = serde_json::from_str::<crate::checkpoint::CheckpointMeta>(&meta_json) {
+                                self.global_step = meta.step;
+                            }
+                        }
+                        self.load_optimizer_state(ckpt_path)?;
+                        self.clear_caches();
+                        // Apply LR cooldown: 50% reduction for 100 steps
+                        self.apply_lr_cooldown(0.5, 100);
+                        cooldown_steps_remaining = 100;
+                        tracing::warn!(
+                            "Recovered to step {}, LR halved for 100 steps",
+                            self.global_step,
+                        );
+                    } else {
+                        tracing::warn!("No checkpoint available for NaN recovery, continuing");
+                        self.clear_caches();
+                    }
+                    continue;
+                }
+
+                // Reset NaN counter on successful step
+                consecutive_nan_count = 0;
+
+                // Track LR cooldown expiration
+                if cooldown_steps_remaining > 0 {
+                    cooldown_steps_remaining -= 1;
+                    if cooldown_steps_remaining == 0 {
+                        self.restore_lr();
+                    }
+                }
 
                 running_loss += stats.loss;
                 running_gnorm += stats.grad_norm;
@@ -1070,6 +1162,7 @@ impl Trainer {
                         )
                         .map_err(|e| candle_core::Error::Msg(format!("checkpoint save: {}", e)))?;
                         self.save_optimizer_state(&path)?;
+                        last_checkpoint_path = Some(path.clone());
 
                         // Report checkpoint size
                         if let Ok(size) = checkpoint_manager::dir_size(std::path::Path::new(&path))

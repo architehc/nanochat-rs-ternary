@@ -789,6 +789,20 @@ impl TrainConfig {
         }
     }
 
+    /// 7B model tuned for a 6-day single-GPU training run (~1500 optimizer steps).
+    ///
+    /// Same architecture as `large_7b()` but with schedule/hyperparams adjusted for
+    /// limited compute: fewer total steps, shorter warmup, gentler learning rate.
+    /// All E3 features remain enabled (8-bit Muon, GaLore-512, MTP-4, Collider-35%).
+    pub fn large_7b_6day() -> Self {
+        let mut cfg = Self::large_7b();
+        cfg.total_steps = 1_500;
+        cfg.warmup_steps = 150;       // 10% of total (was 8000 for 300K run)
+        cfg.decay_start_frac = 0.75;  // Start decay at step 1125
+        cfg.lr = 0.004;               // Halved from 0.008 — fewer steps need gentler LR
+        cfg
+    }
+
     /// E3 profile with FP4 path enabled for Blackwell-oriented experimentation.
     pub fn d20_e3_fp4() -> Self {
         let mut cfg = Self::d20_e3_full();
@@ -856,6 +870,27 @@ mod tests {
         let params = cfg.param_count_estimate();
         assert!(params > 1_600_000_000, "Too few params: {}", params);
         assert!(params < 2_500_000_000, "Too many params: {}", params);
+    }
+
+    #[test]
+    fn test_large_7b_6day_schedule() {
+        let cfg = TrainConfig::large_7b_6day();
+        assert_eq!(cfg.total_steps, 1_500);
+        assert_eq!(cfg.warmup_steps, 150);
+        assert!((cfg.decay_start_frac - 0.75).abs() < 1e-10);
+        assert!((cfg.lr - 0.004).abs() < 1e-10);
+        // Architecture matches large_7b
+        assert_eq!(cfg.dim, 4096);
+        assert_eq!(cfg.n_layers, 32);
+        assert_eq!(cfg.vocab_size, 128000);
+        // E3 features all enabled
+        assert!(cfg.use_8bit_optim);
+        assert!(cfg.use_galore);
+        assert!(cfg.use_mtp);
+        assert!(cfg.use_collider);
+        assert!(cfg.use_async_loader);
+        // Validation should pass
+        cfg.validate().expect("large_7b_6day should validate");
     }
 
     #[test]

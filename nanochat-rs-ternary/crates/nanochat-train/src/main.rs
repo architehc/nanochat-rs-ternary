@@ -11,10 +11,12 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
             Some(TrainConfig::d20_e3_full())
         }
         "d20-e3-fp4" | "d20_e3_fp4" => Some(TrainConfig::d20_e3_fp4()),
+        "d20-loop" | "d20_loop" => Some(TrainConfig::d20_loop()),
         "nano-125m" | "nano_125m" => Some(TrainConfig::nano_125m()),
         "nano-1b" | "nano_1b" => Some(TrainConfig::nano_1b()),
         "medium-3b" | "medium_3b" => Some(TrainConfig::medium_3b()),
         "large-7b" | "large_7b" => Some(TrainConfig::large_7b()),
+        "large-7b-6day" | "large_7b_6day" => Some(TrainConfig::large_7b_6day()),
         "tiny-cpu" | "tiny_cpu" => Some(TrainConfig::tiny_cpu()),
         "test-8bit" | "test_8bit" => Some(TrainConfig::test_8bit()),
         _ => None,
@@ -206,7 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(cfg) => cfg,
                 None => {
                     tracing::error!(
-                        "Unknown config: {}. Use d20, d20-mtp, d20-e3-full, d20-e3-fp4, nano-125m, nano-1b, medium-3b, large-7b, tiny-cpu, or test-8bit.",
+                        "Unknown config: {}. Use d20, d20-loop, d20-mtp, d20-e3-full, d20-e3-fp4, nano-125m, nano-1b, medium-3b, large-7b, large-7b-6day, tiny-cpu, or test-8bit.",
                         config
                     );
                     std::process::exit(1);
@@ -370,6 +372,8 @@ mod tests {
             "d20_e3_full",
             "d20-e3-fp4",
             "d20_e3_fp4",
+            "d20-loop",
+            "d20_loop",
             "nano-125m",
             "nano_125m",
             "nano-1b",
@@ -378,6 +382,8 @@ mod tests {
             "medium_3b",
             "large-7b",
             "large_7b",
+            "large-7b-6day",
+            "large_7b_6day",
             "tiny-cpu",
             "tiny_cpu",
             "test-8bit",
