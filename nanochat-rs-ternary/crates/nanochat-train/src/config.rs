@@ -198,14 +198,14 @@ impl TrainConfig {
             errors.push("n_heads must be greater than 0".to_string());
         }
 
-        if self.dim % self.n_heads != 0 {
+        if !self.dim.is_multiple_of(self.n_heads) {
             errors.push(format!(
                 "dim ({}) must be divisible by n_heads ({})",
                 self.dim, self.n_heads
             ));
         }
 
-        if self.dim % self.group_size != 0 {
+        if !self.dim.is_multiple_of(self.group_size) {
             errors.push(format!(
                 "dim ({}) must be divisible by group_size ({})",
                 self.dim, self.group_size

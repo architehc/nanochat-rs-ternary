@@ -207,7 +207,7 @@ impl TrainerBuilder {
             )));
         }
 
-        let device = self.device.unwrap_or_else(|| Device::Cpu);
+        let device = self.device.unwrap_or(Device::Cpu);
 
         if let Some(ckpt) = self.checkpoint_path {
             Trainer::from_checkpoint(&ckpt, device)
