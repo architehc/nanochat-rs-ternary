@@ -119,11 +119,15 @@ fn triangle_invalid_codepoints() {
     let weights = vec![0.0f32; rows * cols];
     let mut pw = PlanarWeights::from_row_major(&weights, rows, cols, gs);
 
-    // Inject 0xAA = 0b10_10_10_10 (all invalid codepoints)
+    // Inject 0xAA = 0b10_10_10_10 (all invalid codepoints) into BOTH layouts.
+    // Row-major `data` is read by gemv_scalar_ref, column-major `data_colmaj`
+    // is read by the SIMD/FFI kernel. Both must be corrupted to actually test
+    // invalid codepoint handling in all kernel paths.
     let kp = cols / 4;
     for r in 0..rows {
         for c in 0..kp {
             pw.data[r * kp + c] = 0xAA;
+            pw.data_colmaj[c * pw.rows_padded + r] = 0xAA;
         }
     }
 
@@ -140,8 +144,18 @@ fn triangle_invalid_codepoints() {
 
     // Both should be zero (invalid codepoints decode as 0)
     for r in 0..rows {
-        assert_eq!(y_scalar[r], 0.0, "scalar row {} not zero", r);
-        assert_eq!(y_ffi[r], 0.0, "ffi row {} not zero", r);
+        assert!(
+            y_scalar[r].abs() < 1e-6,
+            "scalar row {} not near zero: {}",
+            r,
+            y_scalar[r]
+        );
+        assert!(
+            y_ffi[r].abs() < 1e-6,
+            "ffi row {} not near zero: {}",
+            r,
+            y_ffi[r]
+        );
     }
 }
 

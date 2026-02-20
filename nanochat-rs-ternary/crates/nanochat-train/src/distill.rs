@@ -898,7 +898,7 @@ fn kl_divergence_loss(
     let student_scaled = student_logits.affine(1.0 / temp, 0.0)?;
 
     // Teacher probabilities (detached, no grad)
-    let teacher_probs = candle_nn::ops::softmax_last_dim(&teacher_scaled)?;
+    let teacher_probs = candle_nn::ops::softmax_last_dim(&teacher_scaled.detach())?;
 
     // Student log probabilities
     let student_log_probs = candle_nn::ops::log_softmax(&student_scaled, candle_core::D::Minus1)?;

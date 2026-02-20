@@ -4,6 +4,7 @@
 //! Also validates mHC binary I/O roundtrip.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mhc_lite::{
     load_mhc_file, save_mhc_file, verify_doubly_stochastic, verify_doubly_stochastic_2x2,
@@ -16,7 +17,13 @@ use ternary_core::verify::{gemv_scalar_ref, verify_gemv};
 use ternary_kernels::cpu;
 
 fn test_path(name: &str) -> PathBuf {
-    let base = std::env::temp_dir().join("nanochat-roundtrip-tests");
+    static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+    let run_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let base = std::env::temp_dir().join(format!(
+        "nanochat-roundtrip-tests-{}-{}",
+        std::process::id(),
+        run_id
+    ));
     std::fs::create_dir_all(&base).ok();
     base.join(name)
 }

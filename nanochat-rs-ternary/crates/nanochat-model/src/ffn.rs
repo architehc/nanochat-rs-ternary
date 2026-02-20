@@ -184,9 +184,19 @@ impl FfnLayer {
 
 /// Select top-k indices from a slice of values (largest first).
 pub fn top_k_indices(values: &[f32], k: usize) -> Vec<usize> {
+    assert!(
+        k <= values.len(),
+        "top_k_indices: k ({}) exceeds number of experts ({})",
+        k,
+        values.len()
+    );
     let mut indexed: Vec<(usize, f32)> = values.iter().enumerate().map(|(i, &v)| (i, v)).collect();
-    // Sort by value descending
-    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Sort by value descending; break ties by index for deterministic routing.
+    indexed.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
     indexed.iter().take(k).map(|&(i, _)| i).collect()
 }
 
@@ -294,6 +304,20 @@ mod tests {
         // Highest is index 2 (0.9), second is index 4 (0.8)
         assert_eq!(top2[0], 2, "top-1 should be expert 2 (value 0.9)");
         assert_eq!(top2[1], 4, "top-2 should be expert 4 (value 0.8)");
+    }
+
+    #[test]
+    fn test_router_top_k_selection_tie_break_by_index() {
+        let logits = vec![0.5, 0.9, 0.9, 0.4];
+        let top2 = top_k_indices(&logits, 2);
+        assert_eq!(top2, vec![1, 2], "ties should be ordered by expert index");
+    }
+
+    #[test]
+    #[should_panic(expected = "top_k_indices: k")]
+    fn test_router_top_k_selection_panics_if_k_exceeds_len() {
+        let logits = vec![0.1, 0.2];
+        let _ = top_k_indices(&logits, 3);
     }
 
     #[test]

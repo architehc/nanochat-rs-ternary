@@ -13,7 +13,6 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
 use tokio_stream::wrappers::ReceiverStream;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::cors::CorsLayer;
@@ -286,10 +285,16 @@ async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest)
                 )
             })?;
 
-            let mut engine = engine_lock.lock().unwrap_or_else(|poisoned| {
-                eprintln!("WARNING: engine mutex was poisoned (previous task panicked), recovering");
-                poisoned.into_inner()
-            });
+            let mut engine = match engine_lock.lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    eprintln!("ERROR: engine mutex poisoned; refusing to use potentially corrupt state");
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "engine unavailable due to prior panic; restart service".to_string(),
+                    ));
+                }
+            };
 
             // Use generate_streaming with cancellation check so the task
             // stops promptly when the request timeout fires.
@@ -475,15 +480,13 @@ async fn stream_completion(
         let _active_guard = metrics::ActiveRequestGuard::new();
         let _timer = metrics::LatencyTimer::new();
 
-        let try_send = |tx: &mpsc::Sender<Result<Event, Infallible>>, data: String| -> bool {
-            match tx.try_send(Ok(Event::default().data(data))) {
+        let send_event = |tx: &mpsc::Sender<Result<Event, Infallible>>, data: String| -> bool {
+            match tx.blocking_send(Ok(Event::default().data(data))) {
                 Ok(()) => true,
-                Err(TrySendError::Full(_)) => {
+                Err(_) => {
                     metrics::INFERENCE_ERRORS.inc();
-                    eprintln!("ERROR: stream channel backpressure (buffer full)");
                     false
                 }
-                Err(TrySendError::Closed(_)) => false,
             }
         };
 
@@ -504,11 +507,11 @@ async fn stream_completion(
                 }],
             };
             if let Ok(json) = serde_json::to_string(&error_chunk) {
-                let _ = try_send(&tx, json);
+                let _ = send_event(&tx, json);
             } else {
                 eprintln!("ERROR: Failed to serialize streaming error chunk");
             }
-            let _ = try_send(&tx, "[DONE]".to_string());
+            let _ = send_event(&tx, "[DONE]".to_string());
         };
 
         let prompt_ids = match state.tokenizer.encode(prompt.as_str(), false) {
@@ -573,25 +576,29 @@ async fn stream_completion(
             }],
         };
         if let Ok(json) = serde_json::to_string(&initial) {
-            if !try_send(&tx, json) {
+            if !send_event(&tx, json) {
                 return;
             }
         } else {
             metrics::INFERENCE_ERRORS.inc();
             eprintln!("ERROR: Failed to serialize initial streaming chunk");
-            let _ = try_send(&tx, "[DONE]".to_string());
+            let _ = send_event(&tx, "[DONE]".to_string());
             return;
         }
 
-        let mut engine = engine_lock.lock().unwrap_or_else(|poisoned| {
-            eprintln!("WARNING: engine mutex was poisoned (previous task panicked), recovering");
-            poisoned.into_inner()
-        });
+        let mut engine = match engine_lock.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                metrics::INFERENCE_ERRORS.inc();
+                eprintln!("ERROR: engine mutex poisoned; refusing to use potentially corrupt state");
+                send_error("engine unavailable due to prior panic; restart service".to_string());
+                return;
+            }
+        };
 
         let mut token_count = 0usize;
         let mut had_degraded = false;
         let mut timed_out = false;
-        let mut backpressured = false;
         engine.generate_streaming(&token_ids, &params, |tok| {
             if started.elapsed() >= request_timeout {
                 timed_out = true;
@@ -614,9 +621,9 @@ async fn stream_completion(
                     }],
                 };
                 if let Ok(json) = serde_json::to_string(&timeout_chunk) {
-                    let _ = try_send(&tx, json);
+                    let _ = send_event(&tx, json);
                 }
-                let _ = try_send(&tx, "[DONE]".to_string());
+                let _ = send_event(&tx, "[DONE]".to_string());
                 return false;
             }
 
@@ -661,13 +668,7 @@ async fn stream_completion(
             };
 
             match serde_json::to_string(&chunk) {
-                Ok(json) => {
-                    let sent = try_send(&tx, json);
-                    if !sent {
-                        backpressured = true;
-                    }
-                    sent
-                }
+                Ok(json) => send_event(&tx, json),
                 Err(err) => {
                     metrics::INFERENCE_ERRORS.inc();
                     eprintln!("ERROR: Failed to serialize streaming chunk: {}", err);
@@ -695,9 +696,6 @@ async fn stream_completion(
         if timed_out {
             return;
         }
-        if backpressured {
-            return;
-        }
 
         // Track generated tokens
         metrics::TOKENS_GENERATED.inc_by(token_count as f64);
@@ -710,7 +708,7 @@ async fn stream_completion(
         }
 
         // Send [DONE]
-        let _ = try_send(&tx, "[DONE]".to_string());
+        let _ = send_event(&tx, "[DONE]".to_string());
     });
 
     Sse::new(ReceiverStream::new(rx))
@@ -959,6 +957,18 @@ mod tests {
         state
     }
 
+    fn poison_first_engine(state: &Arc<AppState>) {
+        let engine_mutex = state
+            .engines
+            .first()
+            .expect("test state should contain at least one engine");
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = engine_mutex.lock().expect("engine lock should succeed before poison");
+            panic!("intentional panic to poison mutex");
+        }));
+        assert!(engine_mutex.lock().is_err(), "engine mutex should be poisoned");
+    }
+
     #[tokio::test]
     async fn test_chat_ui() {
         let state = make_test_state();
@@ -1070,6 +1080,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_chat_completions_non_streaming_rejects_poisoned_engine() {
+        let state = make_test_state();
+        poison_first_engine(&state);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 3,
+            "temperature": 0.0
+        });
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(resp.into_body(), 100000)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let message = json["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("engine unavailable due to prior panic"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_chat_completions_streaming() {
         let state = make_test_state();
         let app = build_router(state);
@@ -1138,6 +1182,57 @@ mod tests {
             }
         }
         assert!(got_content, "Expected at least one content delta chunk");
+    }
+
+    #[tokio::test]
+    async fn test_chat_completions_streaming_poisoned_engine_emits_error_and_done() {
+        let state = make_test_state();
+        poison_first_engine(&state);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 3,
+            "temperature": 0.0,
+            "stream": true
+        });
+
+        let resp = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 100000)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        let data_lines: Vec<&str> = text.lines().filter(|l| l.starts_with("data: ")).collect();
+        assert!(!data_lines.is_empty(), "expected SSE data lines");
+
+        let error_line = data_lines
+            .iter()
+            .find(|line| {
+                line.contains("\"finish_reason\":\"error\"")
+                    && line.contains("engine unavailable due to prior panic")
+            })
+            .copied();
+        assert!(
+            error_line.is_some(),
+            "expected streaming error chunk, got:\n{}",
+            text
+        );
+
+        assert_eq!(
+            data_lines.last().unwrap().strip_prefix("data: ").unwrap().trim(),
+            "[DONE]",
+            "expected [DONE] terminator"
+        );
     }
 
     #[tokio::test]

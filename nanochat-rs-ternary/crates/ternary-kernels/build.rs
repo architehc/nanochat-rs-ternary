@@ -52,19 +52,22 @@ fn main() {
         return; // No CUDA, skip GPU kernel
     };
 
-    // Use a custom cfg flag instead of feature="cuda" to avoid conflicting
-    // with Cargo's feature system. Rust source gates on:
-    //   #[cfg(any(feature = "cuda", has_cuda))]
-    println!("cargo:rustc-cfg=has_cuda");
-
     let nvcc = format!("{}/bin/nvcc", cuda_path);
+    if !std::path::Path::new(&nvcc).exists() {
+        println!(
+            "cargo:warning=CUDA detected but nvcc not found at {}; skipping CUDA kernel build",
+            nvcc
+        );
+        return;
+    }
+
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let obj_path = format!("{}/ternary_dp4a.o", out_dir);
     let lib_path = format!("{}/libternary_dp4a.a", out_dir);
 
     // Compile CUDA kernel to object file
     let cuda_arch = std::env::var("CUDA_ARCH").unwrap_or_else(|_| "sm_89".to_string());
-    let status = Command::new(&nvcc)
+    let status = match Command::new(&nvcc)
         .args([
             "-c",
             "csrc/ternary_dp4a.cu",
@@ -77,21 +80,43 @@ fn main() {
             "-DNDEBUG",
         ])
         .status()
-        .expect("Failed to run nvcc");
+    {
+        Ok(status) => status,
+        Err(err) => {
+            println!(
+                "cargo:warning=Failed to run nvcc at {}: {}; skipping CUDA kernel build",
+                nvcc, err
+            );
+            return;
+        }
+    };
 
     if !status.success() {
-        panic!("nvcc compilation of ternary_dp4a.cu failed");
+        println!("cargo:warning=nvcc compilation of ternary_dp4a.cu failed; skipping CUDA kernel build");
+        return;
     }
 
     // Archive into static library
-    let status = Command::new("ar")
-        .args(["rcs", &lib_path, &obj_path])
-        .status()
-        .expect("Failed to run ar");
+    let status = match Command::new("ar").args(["rcs", &lib_path, &obj_path]).status() {
+        Ok(status) => status,
+        Err(err) => {
+            println!(
+                "cargo:warning=Failed to run ar for CUDA static library: {}; skipping CUDA kernel build",
+                err
+            );
+            return;
+        }
+    };
 
     if !status.success() {
-        panic!("ar failed to create libternary_dp4a.a");
+        println!("cargo:warning=ar failed to create libternary_dp4a.a; skipping CUDA kernel build");
+        return;
     }
+
+    // Use a custom cfg flag instead of feature="cuda" to avoid conflicting
+    // with Cargo's feature system. Rust source gates on:
+    //   #[cfg(any(feature = "cuda", has_cuda))]
+    println!("cargo:rustc-cfg=has_cuda");
 
     // Link the CUDA library
     println!("cargo:rustc-link-search=native={}", out_dir);

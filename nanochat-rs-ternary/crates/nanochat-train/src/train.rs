@@ -1049,11 +1049,16 @@ impl Trainer {
                         }
 
                         let path = format!("{}/step_{}", dir, self.global_step);
+                        let checkpoint_loss = if interval_steps > 0 {
+                            running_loss / interval_steps as f64
+                        } else {
+                            stats.loss
+                        };
                         crate::checkpoint::save_checkpoint(
                             &self.varmap,
                             &self.config,
                             self.global_step,
-                            running_loss / interval_steps.max(1) as f64,
+                            checkpoint_loss,
                             &path,
                         )
                         .map_err(|e| candle_core::Error::Msg(format!("checkpoint save: {}", e)))?;
