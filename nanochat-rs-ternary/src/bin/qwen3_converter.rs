@@ -797,4 +797,69 @@ mod tests {
         assert_eq!(tensors[1].name, "b.weight");
         Ok(())
     }
+
+    #[test]
+    fn test_resolve_checkpoint_files_from_index_json() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let shard_a = dir.path().join("model-00001-of-00002.safetensors");
+        let shard_b = dir.path().join("model-00002-of-00002.safetensors");
+        std::fs::write(&shard_a, b"stub-a")?;
+        std::fs::write(&shard_b, b"stub-b")?;
+
+        let index = serde_json::json!({
+            "weight_map": {
+                "tok_embed.weight": "model-00002-of-00002.safetensors",
+                "blocks.0.wq.weight": "model-00001-of-00002.safetensors",
+                "blocks.0.wk.weight": "model-00001-of-00002.safetensors"
+            }
+        });
+        std::fs::write(
+            dir.path().join("model.safetensors.index.json"),
+            serde_json::to_vec(&index)?,
+        )?;
+
+        let files = resolve_checkpoint_files(dir.path())?;
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0], shard_a);
+        assert_eq!(files[1], shard_b);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_checkpoint_files_missing_shard_from_index() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let index = serde_json::json!({
+            "weight_map": {
+                "tok_embed.weight": "model-00001-of-00002.safetensors"
+            }
+        });
+        std::fs::write(
+            dir.path().join("model.safetensors.index.json"),
+            serde_json::to_vec(&index)?,
+        )?;
+
+        let err = resolve_checkpoint_files(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_checkpoint_errors_on_duplicate_tensor_names_across_shards() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let shard_a = dir.path().join("model-00001-of-00002.safetensors");
+        let shard_b = dir.path().join("model-00002-of-00002.safetensors");
+
+        write_safetensors(
+            &shard_a,
+            &[("shared.weight", "F32", vec![1], f32_bytes(&[1.0]))],
+        )?;
+        write_safetensors(
+            &shard_b,
+            &[("shared.weight", "F32", vec![1], f32_bytes(&[2.0]))],
+        )?;
+
+        let err = load_checkpoint(dir.path(), false).unwrap_err();
+        assert!(err.to_string().contains("Duplicate tensor shared.weight"));
+        Ok(())
+    }
 }

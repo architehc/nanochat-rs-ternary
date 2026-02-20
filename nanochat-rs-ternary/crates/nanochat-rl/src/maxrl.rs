@@ -299,6 +299,11 @@ impl MaxRLBatch {
 mod tests {
     use super::*;
 
+    fn approx_eq(a: f64, b: f64, eps: f64) {
+        let diff = (a - b).abs();
+        assert!(diff <= eps, "expected {a} ≈ {b} (diff={diff}, eps={eps})");
+    }
+
     #[test]
     fn test_maxrl_all_correct() {
         let config = MaxRLConfig {
@@ -371,5 +376,107 @@ mod tests {
         assert_eq!(n_correct, 2);
         assert_eq!(n_total, 4);
         assert_eq!(rate, 0.5);
+    }
+
+    #[test]
+    fn test_maxrl_kl_penalty_matches_expected_formula() {
+        let config = MaxRLConfig {
+            correctness_threshold: 0.0,
+            temperature: 1.0,
+            kl_coef: 0.5,
+            ..Default::default()
+        };
+        let trainer = MaxRLTrainer::new(config);
+
+        // All samples are "correct" due to threshold 0.0.
+        let log_probs = vec![-1.0, -2.0];
+        let rewards = vec![1.0, 1.0];
+        let ref_log_probs = vec![-1.5, -1.0];
+        let (loss, stats) = trainer.compute_maxrl_loss(&log_probs, &rewards, Some(&ref_log_probs));
+
+        // Base loss: -mean(log_probs) = 1.5
+        // KL term: mean(log_probs - ref_log_probs) = ((0.5) + (-1.0)) / 2 = -0.25
+        // Total: 1.5 + 0.5 * (-0.25) = 1.375
+        approx_eq(loss, 1.375, 1e-12);
+        approx_eq(stats.loss, loss, 1e-12);
+    }
+
+    #[test]
+    fn test_maxrl_weight_clamp_prevents_overflow() {
+        let config = MaxRLConfig {
+            correctness_threshold: 0.0,
+            temperature: 1e-9, // extreme scale -> huge unclamped exponent
+            ..Default::default()
+        };
+        let trainer = MaxRLTrainer::new(config);
+
+        let log_probs = vec![-3.0];
+        let rewards = vec![1_000_000.0];
+        let (loss, stats) = trainer.compute_maxrl_loss(&log_probs, &rewards, None);
+
+        assert!(loss.is_finite());
+        assert!(stats.loss.is_finite());
+        // Single-sample weighted average should stay exactly -log_prob.
+        approx_eq(loss, 3.0, 1e-9);
+    }
+
+    #[test]
+    fn test_maxrl_fallback_with_nonnegative_rewards_is_zero() {
+        let config = MaxRLConfig {
+            correctness_threshold: 100.0, // ensure no "correct" sample
+            ..Default::default()
+        };
+        let trainer = MaxRLTrainer::new(config);
+
+        let log_probs = vec![-1.0, -2.0, -3.0];
+        let rewards = vec![0.0, 1.0, 2.0]; // all penalties are zero
+        let (loss, stats) = trainer.compute_maxrl_loss(&log_probs, &rewards, None);
+
+        approx_eq(loss, 0.0, 1e-12);
+        assert_eq!(stats.n_correct, 0);
+    }
+
+    #[test]
+    fn test_maxrl_normalized_handles_zero_variance_rewards() {
+        let config = MaxRLConfig {
+            correctness_threshold: 1.0,
+            temperature: 1.0,
+            ..Default::default()
+        };
+        let trainer = MaxRLTrainer::new(config);
+
+        let log_probs = vec![-2.0, -2.5, -1.5];
+        let rewards = vec![5.0, 5.0, 5.0];
+        let (loss, stats) = trainer.compute_maxrl_loss_normalized(&log_probs, &rewards);
+
+        assert!(loss.is_finite());
+        assert!(stats.loss.is_finite());
+        assert_eq!(stats.n_correct, 3);
+    }
+
+    #[test]
+    fn test_maxrl_normalized_returns_high_loss_when_none_correct() {
+        let config = MaxRLConfig {
+            correctness_threshold: 10.0,
+            ..Default::default()
+        };
+        let trainer = MaxRLTrainer::new(config);
+
+        let log_probs = vec![-1.0, -2.0];
+        let rewards = vec![1.0, 2.0];
+        let (loss, stats) = trainer.compute_maxrl_loss_normalized(&log_probs, &rewards);
+
+        approx_eq(loss, 1000.0, 1e-12);
+        assert_eq!(stats.n_correct, 0);
+        assert_eq!(stats.correctness_rate, 0.0);
+    }
+
+    #[test]
+    fn test_maxrl_batch_correctness_stats_empty_batch() {
+        let batch = MaxRLBatch::new(Vec::new(), 4);
+        let (n_correct, n_total, rate) = batch.correctness_stats();
+        assert_eq!(n_correct, 0);
+        assert_eq!(n_total, 0);
+        assert_eq!(rate, 0.0);
     }
 }

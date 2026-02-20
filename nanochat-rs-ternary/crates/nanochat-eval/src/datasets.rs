@@ -228,7 +228,15 @@ fn decode_humaneval_payload(bytes: &[u8]) -> Result<String, anyhow::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_extract_function_name() {
@@ -317,6 +325,67 @@ mod tests {
 
         let ds = MBPPDataset::load(&path)?;
         assert_eq!(ds.problems()[0].entry_point, "solution");
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_humaneval_payload_plain_text() -> Result<(), anyhow::Error> {
+        let payload = b"{\"task_id\":\"HumanEval/0\"}\n";
+        let decoded = decode_humaneval_payload(payload)?;
+        assert_eq!(decoded, "{\"task_id\":\"HumanEval/0\"}\n");
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_humaneval_payload_gzip() -> Result<(), anyhow::Error> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"{\"task_id\":\"HumanEval/1\"}\n")?;
+        let compressed = encoder.finish()?;
+
+        let decoded = decode_humaneval_payload(&compressed)?;
+        assert_eq!(decoded, "{\"task_id\":\"HumanEval/1\"}\n");
+        Ok(())
+    }
+
+    #[test]
+    fn test_humaneval_cache_path_uses_env_override() {
+        let _guard = env_lock().lock().unwrap();
+        let original = std::env::var_os("NANOCHAT_HUMANEVAL_CACHE");
+        let expected = "/tmp/nanochat-custom-humaneval.jsonl";
+        std::env::set_var("NANOCHAT_HUMANEVAL_CACHE", expected);
+
+        let path = humaneval_cache_path();
+        assert_eq!(path, PathBuf::from(expected));
+
+        if let Some(prev) = original {
+            std::env::set_var("NANOCHAT_HUMANEVAL_CACHE", prev);
+        } else {
+            std::env::remove_var("NANOCHAT_HUMANEVAL_CACHE");
+        }
+    }
+
+    #[test]
+    fn test_load_from_url_uses_cache_when_present() -> Result<(), anyhow::Error> {
+        let _guard = env_lock().lock().unwrap();
+        let original = std::env::var_os("NANOCHAT_HUMANEVAL_CACHE");
+        let dir = tempdir()?;
+        let cache_path = dir.path().join("HumanEval.jsonl");
+        let sample = r#"{"task_id":"HumanEval/3","prompt":"def f():\n    pass\n","entry_point":"f","canonical_solution":null,"test":"def check(candidate):\n    pass\n"}"#;
+        std::fs::write(&cache_path, format!("{sample}\n"))?;
+        std::env::set_var("NANOCHAT_HUMANEVAL_CACHE", &cache_path);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let ds = rt.block_on(HumanEvalDataset::load_from_url())?;
+        assert_eq!(ds.len(), 1);
+        assert_eq!(ds.problems()[0].task_id, "HumanEval/3");
+
+        if let Some(prev) = original {
+            std::env::set_var("NANOCHAT_HUMANEVAL_CACHE", prev);
+        } else {
+            std::env::remove_var("NANOCHAT_HUMANEVAL_CACHE");
+        }
         Ok(())
     }
 }
