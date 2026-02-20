@@ -29,7 +29,7 @@ pub struct MhcLiteN2Train {
 }
 
 impl MhcLiteN2Train {
-    /// Identity-like initialization (alpha_logit=5.0 -> sigmoid~1.0).
+    /// Balanced initialization (alpha_logit=0.0 -> sigmoid=0.5).
     pub fn new(vb: VarBuilder) -> Result<Self> {
         // FIXED: alpha_logit = 0.0 (not 5.0) to prevent identity bypass.
         // With alpha_logit=5.0, alpha=sigmoid(5.0)≈0.993, making H_res≈identity.

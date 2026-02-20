@@ -109,10 +109,12 @@ impl Muon {
             self.momentum_buffers[i] = new_buf.clone();
 
             let update = if var.as_tensor().dims().len() >= 2 {
-                // Nesterov: update = beta * buf + (1 - beta) * grad
-                let nest_grad = (&grad * (1.0 - self.beta))?;
-                let nest_buf = (&prev_buf * self.beta)?;
-                let nesterov = (&nest_grad + &nest_buf)?;
+                // Nesterov look-ahead: extrapolate along momentum direction.
+                // nesterov = new_buf + β*(new_buf - prev_buf)
+                // This looks ahead in the direction momentum is moving,
+                // unlike plain momentum which just uses new_buf directly.
+                let delta = (&new_buf - &prev_buf)?;
+                let nesterov = (&new_buf + (&delta * self.beta)?)?;
                 // Reshape to 2D for orthogonalization
                 let orig_shape = nesterov.dims().to_vec();
                 let rows = orig_shape[0];
@@ -164,10 +166,9 @@ impl Muon {
             self.momentum_buffers[i] = new_buf.clone();
 
             let update = if var.as_tensor().dims().len() >= 2 {
-                // Nesterov: update = beta * buf + (1 - beta) * grad
-                let nest_grad = (&grad * (1.0 - self.beta))?;
-                let nest_buf = (&prev_buf * self.beta)?;
-                let nesterov = (&nest_grad + &nest_buf)?;
+                // Nesterov look-ahead: extrapolate along momentum direction.
+                let delta = (&new_buf - &prev_buf)?;
+                let nesterov = (&new_buf + (&delta * self.beta)?)?;
                 // Reshape to 2D for orthogonalization
                 let orig_shape = nesterov.dims().to_vec();
                 let rows = orig_shape[0];

@@ -253,7 +253,7 @@ fn sigmoid(x: f32) -> f32 {
 #[inline]
 fn l2_normalize(v: &mut [f32]) {
     let norm_sq: f32 = v.iter().map(|&x| x * x).sum();
-    if norm_sq <= 1e-12 {
+    if norm_sq <= 1e-8 {
         for x in v.iter_mut() {
             *x = 0.0;
         }

@@ -614,6 +614,23 @@ impl Trainer {
         })
     }
 
+    /// Clamp mHC alpha_logit parameters to [-3, 3] to prevent identity bypass.
+    ///
+    /// Without clamping, optimizer updates can push alpha_logit to extreme values
+    /// (e.g., 5.0 → sigmoid≈0.993 → H_res≈identity), causing the model to bypass
+    /// all transformer layers and predict current tokens instead of next tokens.
+    /// See MEMORY.md "mHC identity bypass (CRITICAL)" for full description.
+    fn clamp_alpha_logits(&self) -> Result<()> {
+        let data = self.varmap.data().lock().unwrap();
+        for (name, var) in data.iter() {
+            if name.ends_with("alpha_logit") {
+                let clamped = var.as_tensor().clamp(-3f32, 3f32)?;
+                var.set(&clamped)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Execute a single training step.
     pub fn train_step(&mut self, input_ids: &Tensor, target_ids: &Tensor) -> Result<StepStats> {
         let step_start = Instant::now();
@@ -763,6 +780,10 @@ impl Trainer {
 
             self.muon.step(&grads_to_apply, clip_scale)?;
             self.lion.step(&grads_to_apply, clip_scale)?;
+
+            // Clamp mHC alpha_logit to [-3, 3] to prevent identity bypass.
+            // sigmoid(-3)=0.05, sigmoid(3)=0.95 — ensures meaningful stream mixing.
+            self.clamp_alpha_logits()?;
 
             self.global_step += 1;
             let mult = wsd_schedule(

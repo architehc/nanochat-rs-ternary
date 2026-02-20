@@ -1,7 +1,7 @@
 //! Axum HTTP server with OpenAI-compatible endpoints.
 
 use std::convert::Infallible;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -90,14 +90,16 @@ fn error_json(status: StatusCode, message: &str) -> (StatusCode, Json<serde_json
 }
 
 /// Constant-time string comparison to prevent timing attacks on API keys.
+/// Iterates over max(a.len(), b.len()) to avoid leaking length via timing.
 fn constant_time_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
+    let mut result = (a.len() ^ b.len()) as u8;
+    let max_len = a.len().max(b.len());
+    for i in 0..max_len {
+        let ab = a.as_bytes().get(i).copied().unwrap_or(0);
+        let bb = b.as_bytes().get(i).copied().unwrap_or(0);
+        result |= ab ^ bb;
     }
-    a.bytes()
-        .zip(b.bytes())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
+    result == 0
 }
 
 fn unauthorized_response() -> Response {
@@ -206,6 +208,10 @@ async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest)
     let max_seq_len = state.max_seq_len;
     let request_timeout = state.request_timeout;
 
+    // Cancellation flag: set when timeout fires so the blocking task stops generating.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_inner = cancel.clone();
+
     let result = tokio::time::timeout(
         request_timeout,
         tokio::task::spawn_blocking(move || {
@@ -267,13 +273,32 @@ async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest)
                 )
             })?;
 
-            let mut engine = engine_lock.lock().map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal engine state unavailable".to_string(),
-                )
-            })?;
-            let (output_ids, finish_reason) = engine.generate(&token_ids, &params);
+            let mut engine = engine_lock.lock().unwrap_or_else(|poisoned| {
+                eprintln!("WARNING: engine mutex was poisoned (previous task panicked), recovering");
+                poisoned.into_inner()
+            });
+
+            // Use generate_streaming with cancellation check so the task
+            // stops promptly when the request timeout fires.
+            let mut output_ids = Vec::new();
+            let mut finish_reason = crate::engine::FinishReason::Stop;
+            engine.generate_streaming(&token_ids, &params, |tok| {
+                if cancel_inner.load(Ordering::Relaxed) {
+                    return false; // Timeout fired — stop generating
+                }
+                output_ids.push(tok.token_id);
+                if let Some(ref fr) = tok.finish_reason {
+                    if fr == "length" {
+                        finish_reason = crate::engine::FinishReason::Length;
+                    }
+                }
+                tok.finish_reason.is_none()
+            });
+            if output_ids.len() >= params.max_tokens
+                && finish_reason == crate::engine::FinishReason::Stop
+            {
+                finish_reason = crate::engine::FinishReason::Length;
+            }
             let output_len = output_ids.len();
 
             // Record tokens per second
@@ -342,6 +367,8 @@ async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest)
             .into_response();
         }
         Err(_) => {
+            // Signal the blocking task to stop generating tokens.
+            cancel.store(true, Ordering::Relaxed);
             metrics::INFERENCE_ERRORS.inc();
             return error_json(
                 StatusCode::REQUEST_TIMEOUT,
@@ -356,18 +383,16 @@ async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest)
     // Track generated tokens
     metrics::TOKENS_GENERATED.inc_by(completion_tokens as f64);
 
-    if degraded {
-        if let Some(reason) = degraded_reason.as_deref() {
-            eprintln!(
-                "WARNING: non-stream generation degraded ({}) but returning standard finish reason",
-                reason
-            );
-        } else {
-            eprintln!(
-                "WARNING: non-stream generation degraded but returning standard finish reason"
-            );
-        }
-    }
+    let warning = if degraded {
+        let reason = degraded_reason.unwrap_or_else(|| "LoopLM forward pass error".to_string());
+        eprintln!(
+            "WARNING: non-stream generation degraded: {}",
+            reason
+        );
+        Some(format!("Model output may be unreliable: {}", reason))
+    } else {
+        None
+    };
 
     Json(ChatCompletionResponse {
         id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -383,6 +408,7 @@ async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest)
             finish_reason: finish_reason.as_str().to_string(),
         }],
         usage: Usage::new(prompt_tokens, completion_tokens),
+        warning,
     })
     .into_response()
 }
@@ -544,14 +570,10 @@ async fn stream_completion(
             return;
         }
 
-        let mut engine = match engine_lock.lock() {
-            Ok(engine) => engine,
-            Err(_) => {
-                metrics::INFERENCE_ERRORS.inc();
-                send_error("internal engine state unavailable".to_string());
-                return;
-            }
-        };
+        let mut engine = engine_lock.lock().unwrap_or_else(|poisoned| {
+            eprintln!("WARNING: engine mutex was poisoned (previous task panicked), recovering");
+            poisoned.into_inner()
+        });
 
         let mut token_count = 0usize;
         let mut had_degraded = false;

@@ -179,6 +179,9 @@ pub struct ChatCompletionResponse {
     pub model: String,
     pub choices: Vec<ChatChoice>,
     pub usage: Usage,
+    /// Warning when model output may be unreliable (e.g., LoopLM degraded forward pass).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 /// A single choice in the response.
@@ -448,6 +451,7 @@ mod tests {
                 finish_reason: "stop".to_string(),
             }],
             usage: Usage::new(5, 3),
+            warning: None,
         };
 
         let json = serde_json::to_string(&resp).unwrap();
