@@ -9,7 +9,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use safetensors::SafeTensors;
-use std::collections::HashMap;
+use serde::Deserialize;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -58,6 +59,11 @@ enum TensorClass {
     Ternary,
     /// Keep in original precision (router, norms, embeddings, etc.)
     KeepPrecision,
+}
+
+#[derive(Debug, Deserialize)]
+struct SafetensorsIndex {
+    weight_map: HashMap<String, String>,
 }
 
 fn main() -> Result<()> {
@@ -131,7 +137,13 @@ fn main() -> Result<()> {
     }
 
     // 4. Export to hybrid GGUF
-    export_gguf(&args.output, &config, &converted, args.group_size, args.verbose)?;
+    export_gguf(
+        &args.output,
+        &config,
+        &converted,
+        args.group_size,
+        args.verbose,
+    )?;
 
     if args.verbose {
         println!("Exported to: {}", args.output.display());
@@ -146,20 +158,122 @@ fn load_checkpoint(path: &Path, verbose: bool) -> Result<Vec<TensorMeta>> {
         println!("Loading checkpoint from {}...", path.display());
     }
 
-    // Check if it's a single file or sharded
-    let model_file = if path.is_file() {
-        path.to_path_buf()
-    } else {
-        // Look for model.safetensors or model-00001-of-NNNNN.safetensors
-        let single = path.join("model.safetensors");
-        if single.exists() {
-            single
-        } else {
-            // TODO: Handle sharded safetensors (model-00001-of-00008.safetensors, etc.)
-            anyhow::bail!("Sharded safetensors not yet supported. Please provide single model.safetensors file.");
-        }
-    };
+    let model_files = resolve_checkpoint_files(path)?;
 
+    if verbose {
+        println!("Found {} safetensors file(s)", model_files.len());
+    }
+
+    let mut tensors = Vec::new();
+    let mut seen_names = HashSet::new();
+
+    for (idx, model_file) in model_files.iter().enumerate() {
+        if verbose {
+            println!(
+                "  [{}/{}] loading {}",
+                idx + 1,
+                model_files.len(),
+                model_file.display()
+            );
+        }
+
+        let shard_tensors = load_safetensors_file(model_file)?;
+        for tensor in shard_tensors {
+            if !seen_names.insert(tensor.name.clone()) {
+                anyhow::bail!(
+                    "Duplicate tensor {} encountered while loading shards",
+                    tensor.name
+                );
+            }
+            tensors.push(tensor);
+        }
+    }
+
+    // Keep tensor ordering deterministic across filesystems/shard layouts.
+    tensors.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(tensors)
+}
+
+fn resolve_checkpoint_files(path: &Path) -> Result<Vec<PathBuf>> {
+    if path.is_file() {
+        return Ok(vec![path.to_path_buf()]);
+    }
+
+    if !path.is_dir() {
+        anyhow::bail!("Checkpoint path does not exist: {}", path.display());
+    }
+
+    let single = path.join("model.safetensors");
+    if single.exists() {
+        return Ok(vec![single]);
+    }
+
+    let index_path = path.join("model.safetensors.index.json");
+    if index_path.exists() {
+        let reader = BufReader::new(
+            File::open(&index_path)
+                .with_context(|| format!("Failed to open {}", index_path.display()))?,
+        );
+        let index: SafetensorsIndex = serde_json::from_reader(reader)
+            .with_context(|| format!("Failed to parse {}", index_path.display()))?;
+
+        if index.weight_map.is_empty() {
+            anyhow::bail!(
+                "Sharded index {} has empty weight_map",
+                index_path.display()
+            );
+        }
+
+        let mut shard_names = BTreeSet::new();
+        for shard in index.weight_map.values() {
+            shard_names.insert(shard.clone());
+        }
+
+        let mut files = Vec::with_capacity(shard_names.len());
+        for shard in shard_names {
+            let shard_path = path.join(&shard);
+            if !shard_path.exists() {
+                anyhow::bail!(
+                    "Shard {} referenced in {} does not exist",
+                    shard_path.display(),
+                    index_path.display()
+                );
+            }
+            files.push(shard_path);
+        }
+        return Ok(files);
+    }
+
+    let mut shard_files = Vec::new();
+    for entry in std::fs::read_dir(path)
+        .with_context(|| format!("Failed to read directory {}", path.display()))?
+    {
+        let entry = entry?;
+        let file_path = entry.path();
+        if !file_path.is_file() {
+            continue;
+        }
+        let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if file_name.starts_with("model-") && file_name.ends_with(".safetensors") {
+            shard_files.push(file_path);
+        }
+    }
+    shard_files.sort();
+
+    if !shard_files.is_empty() {
+        return Ok(shard_files);
+    }
+
+    anyhow::bail!(
+        "No model.safetensors, model.safetensors.index.json, or model-*-of-*.safetensors found in {}",
+        path.display()
+    );
+}
+
+fn load_safetensors_file(model_file: &Path) -> Result<Vec<TensorMeta>> {
     // Load safetensors file
     let mut file = File::open(&model_file)
         .with_context(|| format!("Failed to open {}", model_file.display()))?;
@@ -415,7 +529,10 @@ fn export_gguf(
     }
 
     // Optional Qwen3-specific fields
-    metadata.insert("nanochat.group_size".to_string(), GgufValue::U32(group_size as u32));
+    metadata.insert(
+        "nanochat.group_size".to_string(),
+        GgufValue::U32(group_size as u32),
+    );
     metadata.insert("nanochat.mhc_n_streams".to_string(), GgufValue::U32(4));
     metadata.insert(
         "nanochat.gated_attention".to_string(),
@@ -658,10 +775,7 @@ mod tests {
         let ckpt_dir = dir.path().join("checkpoint");
         std::fs::create_dir_all(&ckpt_dir)?;
         let model_path = ckpt_dir.join("model.safetensors");
-        write_safetensors(
-            &model_path,
-            &[("bias", "F32", vec![1], f32_bytes(&[3.0]))],
-        )?;
+        write_safetensors(&model_path, &[("bias", "F32", vec![1], f32_bytes(&[3.0]))])?;
         let tensors_dir = load_checkpoint(&ckpt_dir, false)?;
         assert_eq!(tensors_dir.len(), 1);
         assert_eq!(tensors_dir[0].name, "bias");
@@ -669,12 +783,18 @@ mod tests {
     }
 
     #[test]
-    fn test_load_checkpoint_sharded_not_supported_error() -> anyhow::Result<()> {
+    fn test_load_checkpoint_sharded_files() -> anyhow::Result<()> {
         let dir = tempdir()?;
-        let shard = dir.path().join("model-00001-of-00002.safetensors");
-        std::fs::write(&shard, b"not used")?;
-        let err = load_checkpoint(dir.path(), false).unwrap_err();
-        assert!(err.to_string().contains("Sharded safetensors not yet supported"));
+        let shard_a = dir.path().join("model-00001-of-00002.safetensors");
+        let shard_b = dir.path().join("model-00002-of-00002.safetensors");
+
+        write_safetensors(&shard_a, &[("b.weight", "F32", vec![1], f32_bytes(&[2.0]))])?;
+        write_safetensors(&shard_b, &[("a.weight", "F32", vec![1], f32_bytes(&[1.0]))])?;
+
+        let tensors = load_checkpoint(dir.path(), false)?;
+        assert_eq!(tensors.len(), 2);
+        assert_eq!(tensors[0].name, "a.weight");
+        assert_eq!(tensors[1].name, "b.weight");
         Ok(())
     }
 }

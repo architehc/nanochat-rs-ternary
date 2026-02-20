@@ -30,6 +30,10 @@ DEVICE="cuda:0"
 BATCH_SIZE=2
 TARGET_STEPS=15000
 CHECKPOINT_INTERVAL=500
+RUN_EVAL="${RUN_EVAL:-0}"
+MODEL_ENDPOINT="${MODEL_ENDPOINT:-http://localhost:8080/v1/completions}"
+HUMANEVAL_PATH="${HUMANEVAL_PATH:-HumanEval.jsonl}"
+MBPP_PATH="${MBPP_PATH:-MBPP.json}"
 
 # Timestamps
 START_TIME=$(date +%s)
@@ -181,14 +185,37 @@ echo "  PHASE 3: Evaluation"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 
-# TODO: Run benchmarks when available
-echo "Evaluation benchmarks:"
-echo "  [ ] HumanEval-Rust"
-echo "  [ ] MBPP-Rust"
-echo "  [ ] Exercism tasks"
-echo ""
-echo "Manual testing recommended:"
-echo "  cargo run --example generate_code"
+if [ "$RUN_EVAL" = "1" ]; then
+    echo "Running automated benchmarks..."
+
+    if [ -f "$HUMANEVAL_PATH" ]; then
+        echo "  → HumanEval benchmark"
+        cargo run --release --example evaluate_codegen -- \
+            --dataset humaneval \
+            --data-path "$HUMANEVAL_PATH" \
+            --model-endpoint "$MODEL_ENDPOINT" \
+            --num-samples 10 || echo "  ⚠ HumanEval benchmark failed"
+    else
+        echo "  → Skipping HumanEval (missing file: $HUMANEVAL_PATH)"
+    fi
+
+    if [ -f "$MBPP_PATH" ]; then
+        echo "  → MBPP benchmark"
+        cargo run --release --example evaluate_codegen -- \
+            --dataset mbpp \
+            --data-path "$MBPP_PATH" \
+            --model-endpoint "$MODEL_ENDPOINT" \
+            --num-samples 10 || echo "  ⚠ MBPP benchmark failed"
+    else
+        echo "  → Skipping MBPP (missing file: $MBPP_PATH)"
+    fi
+else
+    echo "Skipping automated benchmarks (set RUN_EVAL=1 to enable)."
+    echo "Expected inputs:"
+    echo "  HUMANEVAL_PATH=$HUMANEVAL_PATH"
+    echo "  MBPP_PATH=$MBPP_PATH"
+    echo "  MODEL_ENDPOINT=$MODEL_ENDPOINT"
+fi
 echo ""
 
 # ═══════════════════════════════════════════════════════════
@@ -211,11 +238,21 @@ else
     echo "Using RL checkpoint: $BEST_RL"
 fi
 
-# TODO: Export to GGUF when export tool is ready
+FINAL_GGUF="$FINAL_DIR/model.gguf"
+FINAL_MHC="$FINAL_DIR/model.mhc"
 echo "Export to GGUF:"
 echo "  Source: $BEST_RL"
-echo "  Target: $FINAL_DIR/model.gguf"
-echo "  Status: Manual export required"
+echo "  Target: $FINAL_GGUF"
+
+if [ -d "$BEST_RL" ]; then
+    cargo run --release -p nanochat-train -- \
+        export \
+        --checkpoint "$BEST_RL" \
+        --gguf "$FINAL_GGUF" \
+        --mhc "$FINAL_MHC" || echo "Warning: GGUF export failed"
+else
+    echo "Warning: source checkpoint directory not found: $BEST_RL"
+fi
 echo ""
 
 # ═══════════════════════════════════════════════════════════

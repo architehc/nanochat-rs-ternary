@@ -8,13 +8,15 @@
 //!     --total-steps 10000 \
 //!     --checkpoint-dir checkpoints/nano-125m
 
+use candle_core::Device;
+use clap::Parser;
 use nanochat_train::{
+    checkpoint::save_checkpoint,
     config::TrainConfig,
     data::{Dataset, SyntheticDataset},
     distill::{DistillConfig, DistillationTrainer, TeacherMode},
 };
-use candle_core::Device;
-use clap::Parser;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(name = "train_nano_125m")]
@@ -85,11 +87,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let device = if args.device.starts_with("cuda") {
         #[cfg(feature = "cuda")]
         {
-            let gpu_id = args.device.strip_prefix("cuda:")
+            let gpu_id = args
+                .device
+                .strip_prefix("cuda:")
                 .and_then(|s| s.parse::<usize>().ok())
                 .unwrap_or(0);
-            Device::new_cuda(gpu_id)
-                .map_err(|e| format!("Failed to create CUDA device: {}", e))?
+            Device::new_cuda(gpu_id).map_err(|e| format!("Failed to create CUDA device: {}", e))?
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -173,6 +176,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("✓ Dataset created: {} samples", dataset.len());
     println!();
+    std::fs::create_dir_all(&args.checkpoint_dir)?;
+    let checkpoint_interval = args.checkpoint_interval.max(1);
+    let mut completed_steps = 0usize;
+    let mut next_checkpoint_step = checkpoint_interval;
+    let mut last_loss = 0.0f64;
 
     // Training loop
     println!("═══════════════════════════════════════════════════════════");
@@ -193,21 +201,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Steps: {}", stats.steps);
         println!("  Time: {:.1}s", epoch_time);
         println!();
+        completed_steps += stats.steps;
+        last_loss = stats.avg_loss;
 
-        // Save checkpoint every N epochs
-        if (epoch + 1) % (args.checkpoint_interval / 1000) == 0 {
-            let checkpoint_path = format!("{}/epoch_{:04}", args.checkpoint_dir, epoch + 1);
-            std::fs::create_dir_all(&checkpoint_path)?;
+        while completed_steps >= next_checkpoint_step {
+            let checkpoint_path =
+                format!("{}/step_{:06}", args.checkpoint_dir, next_checkpoint_step);
             println!("  Saving checkpoint to {}...", checkpoint_path);
-            // TODO: Implement checkpoint saving
+            save_checkpoint(
+                &trainer.student_varmap,
+                &trainer.config.train_config,
+                trainer.global_step,
+                stats.avg_loss,
+                &checkpoint_path,
+            )?;
             println!("  ✓ Checkpoint saved");
-        }
 
-        // Cleanup old checkpoints
-        if args.keep_last_checkpoints > 0 && epoch >= args.keep_last_checkpoints {
-            // TODO: Implement cleanup
+            if args.keep_last_checkpoints > 0 {
+                let removed =
+                    cleanup_old_checkpoints(&args.checkpoint_dir, args.keep_last_checkpoints)?;
+                if removed > 0 {
+                    println!("  ✓ Removed {} old checkpoint(s)", removed);
+                }
+            }
+
+            next_checkpoint_step += checkpoint_interval;
         }
     }
+
+    let final_checkpoint = format!("{}/final", args.checkpoint_dir);
+    println!("Saving final checkpoint to {}...", final_checkpoint);
+    save_checkpoint(
+        &trainer.student_varmap,
+        &trainer.config.train_config,
+        trainer.global_step,
+        last_loss,
+        &final_checkpoint,
+    )?;
+    println!("✓ Final checkpoint saved");
 
     println!();
     println!("═══════════════════════════════════════════════════════════");
@@ -240,4 +271,38 @@ fn format_count(n: usize) -> String {
     } else {
         n.to_string()
     }
+}
+
+fn cleanup_old_checkpoints(
+    checkpoint_dir: &str,
+    keep_last: usize,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut checkpoints: Vec<(PathBuf, usize)> = Vec::new();
+    for entry in std::fs::read_dir(checkpoint_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(step_str) = name.strip_prefix("step_") else {
+            continue;
+        };
+        let Ok(step) = step_str.parse::<usize>() else {
+            continue;
+        };
+        checkpoints.push((path, step));
+    }
+
+    checkpoints.sort_by_key(|(_, step)| *step);
+    let to_remove = checkpoints.len().saturating_sub(keep_last);
+    let mut removed = 0usize;
+    for (path, _) in checkpoints.into_iter().take(to_remove) {
+        std::fs::remove_dir_all(path)?;
+        removed += 1;
+    }
+
+    Ok(removed)
 }

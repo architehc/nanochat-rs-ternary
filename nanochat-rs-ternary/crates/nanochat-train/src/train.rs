@@ -848,19 +848,24 @@ impl Trainer {
     ///
     /// On OOM error, clears internal caches and retries once.
     /// Returns `StepAttempt` indicating the outcome.
-    pub fn train_step_with_recovery(&mut self, input_ids: &Tensor, target_ids: &Tensor) -> StepAttempt {
+    pub fn train_step_with_recovery(
+        &mut self,
+        input_ids: &Tensor,
+        target_ids: &Tensor,
+    ) -> StepAttempt {
         match self.train_step(input_ids, target_ids) {
             Ok(stats) => StepAttempt::Success(stats),
             Err(e) => {
                 let err_str = format!("{}", e);
-                if err_str.contains("out of memory") || 
-                   err_str.contains("OOM") || 
-                   err_str.contains("CUDA out of memory") {
+                if err_str.contains("out of memory")
+                    || err_str.contains("OOM")
+                    || err_str.contains("CUDA out of memory")
+                {
                     tracing::warn!("OOM detected, attempting recovery...");
-                    
+
                     // Clear caches
                     self.clear_caches();
-                    
+
                     // Retry once
                     match self.train_step(input_ids, target_ids) {
                         Ok(stats) => StepAttempt::Success(stats),
@@ -884,18 +889,18 @@ impl Trainer {
         self.accum_grads = None;
         self.accum_micro_steps = 0;
         self.accum_loss_sum = 0.0;
-        
+
         // Force synchronization on CUDA to ensure all pending ops complete
         // before freeing gradient buffers.
         #[cfg(feature = "cuda")]
         {
-            // TODO: Call cudarc::driver::result::device::synchronize() or
-            // equivalent Device::synchronize() from candle's CudaDevice when
-            // the CUDA feature is enabled. Without sync, gradient accumulation
-            // buffers may be freed while async GPU ops still reference them.
-            tracing::debug!("CUDA sync needed before cache clear (not yet implemented)");
+            if self.device.is_cuda() {
+                if let Err(e) = self.device.synchronize() {
+                    tracing::warn!("CUDA synchronize during cache clear failed: {}", e);
+                }
+            }
         }
-        
+
         tracing::info!("Trainer caches cleared");
     }
 
@@ -909,8 +914,10 @@ impl Trainer {
         if self.config.use_async_loader {
             // Note: This requires Dataset to be Send + Sync
             // For now, fall back to synchronous if not available
-            tracing::info!("Using async data loader with {} workers", 
-                self.config.async_n_workers);
+            tracing::info!(
+                "Using async data loader with {} workers",
+                self.config.async_n_workers
+            );
 
             // Create a wrapper that implements required traits
             // This is a simplified version - full implementation would need
@@ -1415,13 +1422,13 @@ mod tests {
 
         for step in [1u32, 2, 3] {
             let step_dir = ckpt.join(format!("step_{}", step));
-            std::fs::create_dir_all(&step_dir).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            std::fs::create_dir_all(&step_dir)
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
             std::fs::write(step_dir.join("model.safetensors"), vec![step as u8; 64])
                 .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         }
 
-        let total_before = checkpoint_manager::dir_size(&ckpt)
-            .map_err(candle_core::Error::Msg)?;
+        let total_before = checkpoint_manager::dir_size(&ckpt).map_err(candle_core::Error::Msg)?;
         assert!(total_before >= 64 * 3);
 
         let removed = checkpoint_manager::cleanup_old_checkpoints(&ckpt, 1)
@@ -1469,7 +1476,10 @@ mod tests {
                     .is_some_and(|name| name.starts_with("step_"))
             })
             .count();
-        assert!(step_dirs <= 2, "expected limited number of step directories");
+        assert!(
+            step_dirs <= 2,
+            "expected limited number of step directories"
+        );
         Ok(())
     }
 }

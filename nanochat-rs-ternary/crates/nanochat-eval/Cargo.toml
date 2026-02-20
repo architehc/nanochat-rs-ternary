@@ -24,6 +24,7 @@ candle-core = { version = "0.9" }
 candle-nn = { version = "0.9" }
 rand = "0.8"
 syn = { version = "2", features = ["full", "parsing"] }
+flate2 = "1"
 
 [dev-dependencies]
 tempfile = "3"

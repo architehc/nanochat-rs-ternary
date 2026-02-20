@@ -307,7 +307,7 @@ impl QuantizedMuon {
     }
 }
 
-/// TODO: This is a placeholder stub for MuonOptimizer.
+/// Placeholder stub for MuonOptimizer.
 /// The real implementation lives in nanochat-rs-ternary/crates/nanochat-train/src/optim.rs.
 /// This stub only exists so that GaLore2Optimizer and QuantizedMuon can compile
 /// without pulling in the full training crate dependency.
@@ -315,7 +315,7 @@ pub struct MuonOptimizer;
 
 impl Optimizer for MuonOptimizer {
     fn step(&mut self, _grads: &HashMap<String, Tensor>) -> Result<()> {
-        // TODO: Replace with real Muon optimizer (Nesterov momentum on orthogonalized gradients)
+        // Placeholder behavior; no-op optimizer in this standalone demo file.
         Ok(())
     }
 

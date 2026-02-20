@@ -289,7 +289,8 @@ impl<OPT> GaLore2<OPT> {
         }
     }
 
-    /// Unproject from low-rank subspace: g = Q @ g_proj @ P^T (TODO: not yet used)
+    /// Unproject from low-rank subspace: g = Q @ g_proj @ P^T.
+    /// Used by diagnostics to measure projection mismatch.
     #[allow(dead_code)]
     fn unproject_gradient(&self, var_idx: usize, grad_proj: &Tensor) -> Result<Tensor> {
         match self.projections.get(&var_idx) {

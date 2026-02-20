@@ -531,12 +531,16 @@ impl DistillationTrainer {
         let kl_loss =
             kl_divergence_loss(&teacher_logits, &student_logits, self.config.temperature)?;
 
-        // 3. MoE-specific losses (if model has MoE)
-        // TODO: Extract router outputs from student model to compute load balancing
-        // and auxiliary losses. Currently these are zero, meaning MoE training will
-        // not receive expert balancing signals.
-        if self.config.load_balance_weight > 0.0 || self.config.router_aux_weight > 0.0 {
-            tracing::warn!("MoE distillation: load_balance_loss and router_aux_loss are not yet implemented; MoE balancing signals are zero");
+        // 3. MoE-specific losses.
+        // Current student model API does not expose router logits/masks, so we
+        // disable MoE auxiliary terms explicitly instead of silently assuming
+        // they are computed elsewhere.
+        if self.global_step == 0
+            && (self.config.load_balance_weight > 0.0 || self.config.router_aux_weight > 0.0)
+        {
+            tracing::warn!(
+                "MoE auxiliary losses requested but router outputs are unavailable in NanochatTrainModel; load-balance and router-aux terms are disabled"
+            );
         }
         let load_balance_loss = Tensor::new(0.0f32, &self.device)?;
         let router_aux_loss = Tensor::new(0.0f32, &self.device)?;
@@ -975,12 +979,12 @@ pub fn router_auxiliary_loss(router_logits: &Tensor) -> Result<Tensor> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::SyntheticDataset;
     use candle_core::{DType, Device};
     use candle_nn::VarMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
-    use crate::data::SyntheticDataset;
 
     fn tiny_train_config() -> TrainConfig {
         TrainConfig {
@@ -1220,11 +1224,8 @@ mod tests {
         let err = client_missing.query_logits(&input).unwrap_err();
         assert!(err.to_string().contains("Missing 'logits'"));
 
-        let endpoint_shape = spawn_teacher_server(
-            "200 OK",
-            serde_json::json!({"logits": [[]]}).to_string(),
-            1,
-        );
+        let endpoint_shape =
+            spawn_teacher_server("200 OK", serde_json::json!({"logits": [[]]}).to_string(), 1);
         let client_shape = RemoteTeacherClient::new(endpoint_shape, None, 5, 1)?;
         let err = client_shape.query_logits(&input).unwrap_err();
         assert!(err.to_string().contains("empty sequence dimension"));
@@ -1314,8 +1315,10 @@ mod tests {
         crate::checkpoint::save_checkpoint(&varmap, &cfg, 1, 0.0, dir_path)
             .map_err(|e| candle_core::Error::Msg(format!("save checkpoint: {}", e)))?;
 
-        let mut trainer =
-            DistillationTrainer::new(DistillConfig::with_local_teacher(cfg.clone(), dir.path()), device)?;
+        let mut trainer = DistillationTrainer::new(
+            DistillConfig::with_local_teacher(cfg.clone(), dir.path()),
+            device,
+        )?;
         let ds = SyntheticDataset::new(cfg.vocab_size as u32, 8, 4, 42);
         let epoch = trainer.train_epoch(&ds, 0)?;
         assert!(epoch.avg_loss.is_finite());
@@ -1341,7 +1344,8 @@ mod tests {
         let input_b = Tensor::zeros((1, 8), DType::U32, &trainer.device)?;
         let target_b = Tensor::zeros((1, 8), DType::U32, &trainer.device)?;
 
-        let stats = trainer.train_step_parallel(vec![&input_a, &input_b], vec![&target_a, &target_b])?;
+        let stats =
+            trainer.train_step_parallel(vec![&input_a, &input_b], vec![&target_a, &target_b])?;
         assert!(stats.total_loss.is_finite());
         assert!(stats.ce_loss.is_finite());
         assert!(stats.kl_loss.is_finite());

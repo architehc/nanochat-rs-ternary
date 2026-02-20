@@ -8,21 +8,19 @@
 //! - MaxRL: Uses only correct samples (reward > threshold)
 //! - Result: 20x better test-time scaling
 
+use anyhow::Result;
+use candle_core::{Device, Tensor};
+use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarBuilder};
+use clap::Parser;
 use nanochat_rl::{
-    CompilerFeedback, analyze_ast, compute_reward, RewardConfig,
-    MaxRLConfig, MaxRLTrainer, MaxRLStats,
+    analyze_ast, compute_reward, CompilerFeedback, MaxRLConfig, MaxRLTrainer, RewardConfig,
 };
 use nanochat_train::{
     checkpoint::{load_checkpoint, save_checkpoint},
     model::NanochatTrainModel,
-    config::TrainConfig,
 };
-use candle_core::{Device, Tensor};
-use candle_nn::{VarBuilder, VarMap, Var};
-use tokenizers::Tokenizer;
-use clap::Parser;
 use std::time::Instant;
-use anyhow::Result;
+use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
 #[command(name = "train_maxrl")]
@@ -73,7 +71,8 @@ struct Args {
 fn get_prompts() -> Vec<String> {
     vec![
         "Write a function to calculate the factorial of a number using recursion.".to_string(),
-        "Implement a struct representing a 2D point with methods for distance calculation.".to_string(),
+        "Implement a struct representing a 2D point with methods for distance calculation."
+            .to_string(),
         "Create a function that reverses a string in place.".to_string(),
         "Write a binary search function for a sorted array.".to_string(),
         "Implement a simple stack data structure with push, pop, and peek.".to_string(),
@@ -92,7 +91,8 @@ fn generate_sample(
     temperature: f32,
     device: &Device,
 ) -> Result<String> {
-    let encoding = tokenizer.encode(prompt, false)
+    let encoding = tokenizer
+        .encode(prompt, false)
         .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?;
     let mut token_ids: Vec<u32> = encoding.get_ids().to_vec();
 
@@ -115,7 +115,8 @@ fn generate_sample(
         token_ids.push(next_token as u32);
     }
 
-    let output = tokenizer.decode(&token_ids, true)
+    let output = tokenizer
+        .decode(&token_ids, true)
         .map_err(|e| anyhow::anyhow!("Decode error: {}", e))?;
     Ok(output)
 }
@@ -158,7 +159,8 @@ fn compute_log_probs(
     text: &str,
     device: &Device,
 ) -> Result<f64> {
-    let encoding = tokenizer.encode(text, false)
+    let encoding = tokenizer
+        .encode(text, false)
         .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?;
     let token_ids = encoding.get_ids();
 
@@ -186,6 +188,60 @@ fn compute_log_probs(
     Ok(total_log_prob)
 }
 
+/// Build weighted supervised loss from correct MaxRL samples.
+///
+/// Weights follow the same temperature scaling used by MaxRL:
+/// exp((reward - threshold) / temperature).
+fn compute_weighted_ml_loss(
+    model: &NanochatTrainModel,
+    tokenizer: &Tokenizer,
+    samples_with_rewards: &[(String, f64)],
+    correctness_threshold: f64,
+    temperature: f64,
+    device: &Device,
+) -> Result<Option<Tensor>> {
+    let mut weighted_loss: Option<Tensor> = None;
+    let mut total_weight = 0.0f64;
+    let temp = temperature.max(1e-6);
+
+    for (code, reward) in samples_with_rewards {
+        if *reward <= correctness_threshold {
+            continue;
+        }
+
+        let encoding = tokenizer
+            .encode(code, false)
+            .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?;
+        let token_ids = encoding.get_ids();
+        if token_ids.len() < 2 {
+            continue;
+        }
+
+        let input = Tensor::new(&token_ids[..token_ids.len() - 1], device)?.unsqueeze(0)?;
+        let target = Tensor::new(&token_ids[1..], device)?.unsqueeze(0)?;
+        let sample_loss = model.forward_loss(&input, &target)?;
+
+        let exponent = ((*reward - correctness_threshold) / temp).clamp(-20.0, 20.0);
+        let weight = exponent.exp();
+        let scaled = sample_loss.affine(weight, 0.0)?;
+
+        weighted_loss = Some(match weighted_loss {
+            Some(acc) => acc.add(&scaled)?,
+            None => scaled,
+        });
+        total_weight += weight;
+    }
+
+    if total_weight == 0.0 {
+        return Ok(None);
+    }
+
+    let loss = weighted_loss
+        .ok_or_else(|| anyhow::anyhow!("Missing weighted loss despite non-zero total weight"))?
+        .affine(1.0 / total_weight, 0.0)?;
+    Ok(Some(loss))
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -195,7 +251,9 @@ fn main() -> Result<()> {
 
     // Setup device
     let device = if args.device.starts_with("cuda") {
-        let gpu_id = args.device.strip_prefix("cuda:")
+        let gpu_id = args
+            .device
+            .strip_prefix("cuda:")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
         Device::new_cuda(gpu_id).unwrap_or(Device::Cpu)
@@ -214,6 +272,15 @@ fn main() -> Result<()> {
     let vb = VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
     let model = NanochatTrainModel::new(&config, vb)?;
     println!("✓ Model initialized\n");
+
+    let mut optimizer = AdamW::new(
+        varmap.all_vars(),
+        ParamsAdamW {
+            lr: args.lr,
+            ..Default::default()
+        },
+    )?;
+    println!("✓ Optimizer initialized (AdamW, lr={})\n", args.lr);
 
     // Load tokenizer
     let tokenizer = Tokenizer::from_file("models/gpt2-tokenizer.json")
@@ -246,6 +313,7 @@ fn main() -> Result<()> {
     println!("═══════════════════════════════════════════════════════════\n");
 
     let start_time = Instant::now();
+    let mut last_loss = 0.0f64;
 
     for iter in 1..=args.iterations {
         println!("───────────────────────────────────────────────────────────");
@@ -254,10 +322,15 @@ fn main() -> Result<()> {
 
         let mut all_log_probs = Vec::new();
         let mut all_rewards = Vec::new();
+        let mut samples_with_rewards = Vec::new();
 
         // Generate samples for each prompt
         for (prompt_idx, prompt) in prompts.iter().take(args.batch_size).enumerate() {
-            println!("Prompt {}: {}", prompt_idx + 1, prompt.chars().take(60).collect::<String>());
+            println!(
+                "Prompt {}: {}",
+                prompt_idx + 1,
+                prompt.chars().take(60).collect::<String>()
+            );
 
             for sample_idx in 1..=args.n_samples {
                 // Generate code
@@ -273,40 +346,66 @@ fn main() -> Result<()> {
 
                 all_log_probs.push(log_prob);
                 all_rewards.push(reward);
+                samples_with_rewards.push((code, reward));
 
                 let status = if compile_result.success { "✓" } else { "✗" };
-                println!("  Sample {}: {} | Reward: {:.2} | LogProb: {:.2}",
-                         sample_idx, status, reward, log_prob);
+                println!(
+                    "  Sample {}: {} | Reward: {:.2} | LogProb: {:.2}",
+                    sample_idx, status, reward, log_prob
+                );
             }
             println!();
         }
 
         // Compute MaxRL loss
-        let (loss, stats) = maxrl_trainer.compute_maxrl_loss(
-            &all_log_probs,
-            &all_rewards,
-            None,
-        );
+        let (loss, stats) = maxrl_trainer.compute_maxrl_loss(&all_log_probs, &all_rewards, None);
 
         println!("Iteration {} Statistics:", iter);
         println!("  Loss: {:.4}", loss);
-        println!("  Correct samples: {}/{} ({:.1}%)",
-                 stats.n_correct, stats.n_total, stats.correctness_rate * 100.0);
+        println!(
+            "  Correct samples: {}/{} ({:.1}%)",
+            stats.n_correct,
+            stats.n_total,
+            stats.correctness_rate * 100.0
+        );
         println!("  Avg correct reward: {:.2}", stats.avg_correct_reward);
-        println!("  Compile success: {:.1}%",
-                 all_rewards.iter().filter(|&&r| r > args.correctness_threshold).count() as f64
-                 / all_rewards.len() as f64 * 100.0);
+        println!(
+            "  Compile success: {:.1}%",
+            all_rewards
+                .iter()
+                .filter(|&&r| r > args.correctness_threshold)
+                .count() as f64
+                / all_rewards.len() as f64
+                * 100.0
+        );
         println!();
+        last_loss = loss;
 
-        // TODO: Backward pass and optimizer step
-        // This requires integrating with the training infrastructure
-        // For now, this demonstrates the MaxRL loss computation
+        if let Some(update_loss) = compute_weighted_ml_loss(
+            &model,
+            &tokenizer,
+            &samples_with_rewards,
+            args.correctness_threshold,
+            args.temperature,
+            &device,
+        )? {
+            let update_loss_value = update_loss.to_scalar::<f32>()? as f64;
+            let grads = update_loss.backward()?;
+            optimizer.step(&grads)?;
+            println!(
+                "  Optimizer step: update_loss={:.4} using {} correct samples",
+                update_loss_value, stats.n_correct
+            );
+        } else {
+            println!("  Optimizer step: skipped (no correct samples)");
+        }
+        println!();
 
         // Save checkpoint
         if iter % args.save_interval == 0 {
             let checkpoint_path = format!("{}/iter_{}", args.output, iter);
             println!("  Saving checkpoint: {}", checkpoint_path);
-            save_checkpoint(&checkpoint_path, &varmap, &config, iter, loss)?;
+            save_checkpoint(&varmap, &config, iter, loss, &checkpoint_path)?;
         }
 
         let elapsed = start_time.elapsed().as_secs();
@@ -316,14 +415,18 @@ fn main() -> Result<()> {
     // Save final checkpoint
     let final_path = format!("{}/final", args.output);
     println!("Saving final checkpoint: {}", final_path);
-    save_checkpoint(&final_path, &varmap, &config, args.iterations, 0.0)?;
+    save_checkpoint(&varmap, &config, args.iterations, last_loss, &final_path)?;
 
     println!("\n═══════════════════════════════════════════════════════════");
     println!("  MaxRL Training Complete!");
     println!("═══════════════════════════════════════════════════════════\n");
 
     let total_time = start_time.elapsed().as_secs();
-    println!("Total time: {}h {}m", total_time / 3600, (total_time % 3600) / 60);
+    println!(
+        "Total time: {}h {}m",
+        total_time / 3600,
+        (total_time % 3600) / 60
+    );
     println!("Final checkpoint: {}", final_path);
 
     Ok(())

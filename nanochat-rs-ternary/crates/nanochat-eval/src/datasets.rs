@@ -1,7 +1,9 @@
 //! Dataset loaders for HumanEval and MBPP code generation benchmarks.
 
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 /// A code generation problem with test cases.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,11 +71,25 @@ impl HumanEvalDataset {
 
     /// Load from standard HumanEval URL (downloads if not cached).
     pub async fn load_from_url() -> Result<Self, anyhow::Error> {
-        const _HUMANEVAL_URL: &str =
+        const HUMANEVAL_URL: &str =
             "https://raw.githubusercontent.com/openai/human-eval/master/data/HumanEval.jsonl.gz";
 
-        // TODO: Download and cache
-        anyhow::bail!("URL loading not implemented yet - please download manually");
+        let cache_path = humaneval_cache_path();
+
+        if cache_path.exists() {
+            return Self::load(&cache_path);
+        }
+
+        if let Some(parent) = cache_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let response = reqwest::get(HUMANEVAL_URL).await?.error_for_status()?;
+        let bytes = response.bytes().await?;
+        let content = decode_humaneval_payload(&bytes)?;
+        std::fs::write(&cache_path, content.as_bytes())?;
+
+        Self::load(&cache_path)
     }
 
     pub fn problems(&self) -> &[CodeProblem] {
@@ -175,6 +191,38 @@ fn extract_function_name(code: &str) -> Option<String> {
     use regex::Regex;
     let re = Regex::new(r"def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(").ok()?;
     re.captures(code)?.get(1).map(|m| m.as_str().to_string())
+}
+
+fn humaneval_cache_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("NANOCHAT_HUMANEVAL_CACHE") {
+        return PathBuf::from(path);
+    }
+
+    if let Some(xdg_cache) = std::env::var_os("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg_cache)
+            .join("nanochat-eval")
+            .join("HumanEval.jsonl");
+    }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join(".cache")
+            .join("nanochat-eval")
+            .join("HumanEval.jsonl");
+    }
+
+    PathBuf::from(".nanochat-eval-human-eval.jsonl")
+}
+
+fn decode_humaneval_payload(bytes: &[u8]) -> Result<String, anyhow::Error> {
+    if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
+        let mut decoder = GzDecoder::new(bytes);
+        let mut out = String::new();
+        decoder.read_to_string(&mut out)?;
+        Ok(out)
+    } else {
+        Ok(String::from_utf8(bytes.to_vec())?)
+    }
 }
 
 #[cfg(test)]

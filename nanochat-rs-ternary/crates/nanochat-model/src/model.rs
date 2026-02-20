@@ -1367,12 +1367,6 @@ impl NanochatModel {
 
         // Count actual blocks in model (standard or loop architecture)
         let mut attn_total = 0usize;
-        #[allow(unused_assignments)] // TODO: Actually count FFN/norm/mHC params
-        let mut ffn_total = 0usize;
-        #[allow(unused_assignments)]
-        let mut norm_total = 0usize;
-        #[allow(unused_assignments)]
-        let mut mhc_total = 0usize;
         let mut actual_layer_count = 0usize;
 
         // Standard blocks
@@ -1414,7 +1408,7 @@ impl NanochatModel {
             0
         };
 
-        ffn_total = (actual_layer_count
+        let ffn_total = (actual_layer_count
             - if self.shared_loop_block.is_some() {
                 1
             } else {
@@ -1424,10 +1418,10 @@ impl NanochatModel {
             + shared_loop_ffn;
 
         let norm_per_layer = dim * 2; // attn_norm + ffn_norm
-        norm_total = actual_layer_count * norm_per_layer;
+        let norm_total = actual_layer_count * norm_per_layer;
 
         let mhc_per_layer = 9 * 2; // 9 params each for attn + ffn mHC (N=2)
-        mhc_total = actual_layer_count * mhc_per_layer;
+        let mhc_total = actual_layer_count * mhc_per_layer;
 
         let lm_head = if self.weight_tied {
             0
