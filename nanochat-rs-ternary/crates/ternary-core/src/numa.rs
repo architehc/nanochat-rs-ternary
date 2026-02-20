@@ -115,7 +115,7 @@ impl NumaAllocator {
 
                 // MPOL_BIND = 2, MPOL_MF_STRICT = 1, MPOL_MF_MOVE = 2
                 let result = libc::syscall(
-                    237, // SYS_mbind on x86_64
+                    libc::SYS_mbind,
                     ptr,
                     size,
                     2, // MPOL_BIND

@@ -37,6 +37,8 @@ struct DeviceAlloc {
 
 impl DeviceAlloc {
     fn alloc(bytes: usize, label: &str) -> GpuResult<Self> {
+        // SAFETY: cuda_alloc wraps cudaMalloc which returns a valid device pointer
+        // or null on failure. We check for null below.
         let ptr = unsafe { cuda_alloc(bytes) };
         if ptr.is_null() {
             return Err(format!("GPU alloc failed for {} ({} bytes)", label, bytes));
@@ -58,6 +60,8 @@ impl DeviceAlloc {
 impl Drop for DeviceAlloc {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
+            // SAFETY: self.ptr was allocated by cuda_alloc (cudaMalloc) and has not
+            // been freed yet. We null it via into_raw() when ownership is transferred.
             unsafe {
                 cuda_free(self.ptr);
             }
@@ -69,6 +73,8 @@ impl Drop for DeviceAlloc {
 pub fn init() -> GpuResult<()> {
     INIT_RESULT
         .get_or_init(|| {
+            // SAFETY: cuda_ternary_gemv_init initializes the constant-memory decode LUT
+            // on the GPU. Safe to call multiple times (OnceLock ensures single init).
             let ret = unsafe { cuda_ternary_gemv_init() };
             if ret == 0 {
                 Ok(())
@@ -145,12 +151,16 @@ impl GpuWeights {
         let d_scales = DeviceAlloc::alloc(scales_bytes, "scales")?;
 
         // Upload row-major data
+        // SAFETY: d_data is a valid device allocation of data_bytes. pw.data is a valid
+        // host buffer of at least data_bytes (rows * kp). cuda_memcpy_h2d wraps cudaMemcpy H2D.
         let ret = unsafe { cuda_memcpy_h2d(d_data.as_ptr(), pw.data.as_ptr(), data_bytes) };
         if ret != 0 {
             return Err("H2D copy failed for data".to_string());
         }
 
         // Upload row-major scales
+        // SAFETY: d_scales is a valid device allocation of scales_bytes. pw.scales_rm
+        // contains rows * n_groups f32 values. Pointer cast to *const u8 is valid for memcpy.
         let ret = unsafe {
             cuda_memcpy_h2d(
                 d_scales.as_ptr(),
@@ -176,6 +186,9 @@ impl GpuWeights {
 
 impl Drop for GpuWeights {
     fn drop(&mut self) {
+        // SAFETY: d_data and d_scales were allocated by cuda_alloc (cudaMalloc) in
+        // from_planar() and ownership was transferred via into_raw(). They have not
+        // been freed elsewhere.
         unsafe {
             cuda_free(self.d_data);
             cuda_free(self.d_scales);
@@ -246,12 +259,17 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) -> Gpu
     let d_y = DeviceAlloc::alloc(y_bytes, "y")?;
 
     // Upload x
+    // SAFETY: d_x is a valid device allocation of x_bytes. x is a valid i8 slice of
+    // length gw.cols (checked above). Pointer cast to *const u8 is valid for memcpy.
     let ret = unsafe { cuda_memcpy_h2d(d_x.as_ptr(), x.as_ptr() as *const u8, x_bytes) };
     if ret != 0 {
         return Err("H2D copy failed for x".to_string());
     }
 
     // Launch kernel
+    // SAFETY: All device pointers (gw.d_data, gw.d_scales, d_x, d_y) are valid allocations
+    // from cuda_alloc. Dimensions are validated above and fit in i32. The kernel reads
+    // from d_data/d_scales/d_x and writes gw.rows floats to d_y.
     let ret = unsafe {
         cuda_ternary_gemv(
             gw.d_data,
@@ -269,6 +287,8 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) -> Gpu
     }
 
     // Download y
+    // SAFETY: d_y contains gw.rows f32 values written by the kernel. y is a valid mutable
+    // slice of gw.rows f32 values (checked above). y_bytes = gw.rows * sizeof(f32).
     let ret = unsafe {
         cuda_memcpy_d2h(
             y.as_mut_ptr() as *mut u8,
@@ -285,6 +305,7 @@ pub fn gemv_gpu(gw: &GpuWeights, x: &[i8], act_scale: f32, y: &mut [f32]) -> Gpu
     // synchronous and implicitly waits for all prior GPU work to complete).
     // Kept as a defensive safety net in case the CUDA runtime behavior changes
     // or the D2H implementation is switched to an async variant in the future.
+    // SAFETY: cuda_synchronize wraps cudaDeviceSynchronize — no pointers, always safe to call.
     let ret = unsafe { cuda_synchronize() };
     if ret != 0 {
         return Err("CUDA synchronize failed".to_string());

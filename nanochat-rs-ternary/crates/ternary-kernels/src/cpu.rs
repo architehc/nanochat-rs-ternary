@@ -189,6 +189,9 @@ pub fn gemv(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
     );
 
     let c_pw = to_c_struct(pw);
+    // SAFETY: All pointers in c_pw come from AlignedVec (128-byte aligned, valid for pw lifetime).
+    // x and y are valid slices whose lengths are validated above against pw dimensions.
+    // The C function reads exactly pw.cols bytes from x and writes exactly pw.rows floats to y.
     unsafe {
         ternary_gemv(&c_pw, x.as_ptr(), act_scale, y.as_mut_ptr());
     }
@@ -198,6 +201,10 @@ pub fn gemv(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
 pub fn gemv_scalar_ref(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
     validate_planar_for_ffi(pw, x.len(), y.len());
 
+    // SAFETY: All pointers come from validated PlanarWeights (AlignedVec, correct lengths).
+    // x and y lengths are checked by validate_planar_for_ffi above.
+    // The C scalar reference reads data[rows * kp], scales_rm[rows * gprow], x[cols],
+    // and writes y[rows].
     unsafe {
         gemv_dp4a_ref(
             pw.data.as_ptr(),
@@ -285,6 +292,9 @@ pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]
             // Column-major and group-major arrays use rows_padded as stride,
             // so we offset by row_start within each column/group.
             // Row-major arrays are contiguous per row, so we offset by row_start * items_per_row.
+            // SAFETY: Pointer arithmetic is bounds-checked by the asserts above.
+            // Row-major arrays: offset by row_start * items_per_row.
+            // Column-major/group-major arrays: offset by row_start (stride is rows_padded).
             let sub_pw = PlanarWeightsC {
                 data: unsafe { pw.data.as_ptr().add(row_start * kp) },
                 data_colmaj: unsafe { pw.data_colmaj.as_ptr().add(row_start) },
@@ -296,6 +306,10 @@ pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]
                 rows_padded: pw.rows_padded as i32, // keep original — it's the column stride
             };
 
+            // SAFETY: sub_pw points into the parent PlanarWeights arrays at validated offsets.
+            // x is the full activation vector (shared, read-only). y_chunk is a disjoint
+            // mutable slice from par_chunks_mut, so no aliasing. The C kernel reads
+            // chunk_rows from the sub-struct and writes chunk_rows floats to y_chunk.
             unsafe {
                 ternary_gemv(&sub_pw, x.as_ptr(), act_scale, y_chunk.as_mut_ptr());
             }

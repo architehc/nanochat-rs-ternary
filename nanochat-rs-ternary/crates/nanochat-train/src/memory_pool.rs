@@ -103,8 +103,14 @@ impl TensorPool {
         if let Some(vec) = self.buffers.get_mut(&key) {
             if let Some(tensor) = vec.pop() {
                 self.total_reused += 1;
-                // Reset to zeros for cleanliness
-                return tensor.zeros_like();
+                // IMPORTANT: Candle tensors are immutable (no in-place zeroing).
+                // We drop the pooled tensor first to reclaim its memory before
+                // allocating new zeros. This prevents holding two tensors of the
+                // same shape simultaneously. True buffer reuse would require a
+                // raw-buffer pool beneath the Candle API.
+                let (dt, dev) = (tensor.dtype(), tensor.device().clone());
+                drop(tensor);
+                return Tensor::zeros(shape.clone(), dt, &dev);
             }
         }
 

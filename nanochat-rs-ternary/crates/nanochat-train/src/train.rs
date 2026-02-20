@@ -885,11 +885,15 @@ impl Trainer {
         self.accum_micro_steps = 0;
         self.accum_loss_sum = 0.0;
         
-        // Force synchronization on CUDA
+        // Force synchronization on CUDA to ensure all pending ops complete
+        // before freeing gradient buffers.
         #[cfg(feature = "cuda")]
         {
-            // Note: Would need actual CUDA sync call here
-            tracing::debug!("Synchronizing CUDA device");
+            // TODO: Call cudarc::driver::result::device::synchronize() or
+            // equivalent Device::synchronize() from candle's CudaDevice when
+            // the CUDA feature is enabled. Without sync, gradient accumulation
+            // buffers may be freed while async GPU ops still reference them.
+            tracing::debug!("CUDA sync needed before cache clear (not yet implemented)");
         }
         
         tracing::info!("Trainer caches cleared");

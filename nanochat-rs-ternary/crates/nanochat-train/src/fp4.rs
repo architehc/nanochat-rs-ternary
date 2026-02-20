@@ -58,9 +58,10 @@ impl FP4Trainer {
         let scale = (&absmax / 6.0)?; // max E2M1 value is 6.0
         let scaled = tensor.broadcast_div(&scale)?;
 
-        // Pull to host, snap each element to nearest E2M1 level, push back.
-        // This is fine for training (small activation tensors); production
-        // inference would use a GPU kernel.
+        // WARNING: Host round-trip — flatten_all().to_vec1() pulls data to CPU,
+        // then Tensor::from_vec() pushes back. This is a significant performance
+        // bottleneck for GPU training. For production use, implement a custom CUDA
+        // kernel that performs nearest-neighbor E2M1 lookup entirely on-device.
         let flat = scaled.flatten_all()?.to_vec1::<f32>()?;
         let snapped: Vec<f32> = flat
             .iter()

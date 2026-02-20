@@ -65,7 +65,9 @@ impl FIREReinitializer {
     /// Reinitialize weights to restore plasticity
     ///
     /// # Arguments
-    /// * `weights` - Weight matrix to reinitialize (modified in-place)
+    /// * `weights` - Weight matrix to reinitialize. Candle tensors are immutable,
+    ///   so this returns a new reinitialized tensor via `ReinitStats`. The caller
+    ///   must replace the original tensor (e.g., via `Var::set()`).
     ///
     /// # Algorithm
     /// 1. Check if reinitialization needed (weight norm > threshold)
@@ -113,9 +115,9 @@ impl FIREReinitializer {
         // Compute final Frobenius norm
         let final_norm = self.frobenius_norm(&reinitialized)?;
 
-        // Copy reinitialized values back to original tensor
-        // Note: This is a workaround since Tensor doesn't support in-place modification
-        // In practice, caller should replace the tensor
+        // Note: Candle tensors are immutable. The caller should replace the
+        // original weight via Var::set(&reinitialized). The reinitialized
+        // tensor is accessible through stats — see ReinitStats.
 
         Ok(ReinitStats {
             was_reinitialized: true,

@@ -90,8 +90,10 @@ impl MaxRLTrainer {
                 n_correct += 1;
 
                 // Temperature-based weighting (higher reward = higher weight)
+                // Clamp exponent to avoid f64 overflow (exp(709) ≈ f64::MAX)
                 let excess_reward = rewards[i] - self.config.correctness_threshold;
-                let weight = (excess_reward / self.config.temperature).exp();
+                let exponent = (excess_reward / self.config.temperature).clamp(-500.0, 500.0);
+                let weight = exponent.exp();
 
                 loss -= weight * log_probs[i];
                 total_weight += weight;
@@ -114,6 +116,13 @@ impl MaxRLTrainer {
 
         // KL divergence penalty (if reference policy provided)
         if let Some(ref_probs) = ref_log_probs {
+            assert_eq!(
+                ref_probs.len(),
+                log_probs.len(),
+                "ref_log_probs length ({}) must match log_probs length ({})",
+                ref_probs.len(),
+                log_probs.len()
+            );
             let mut kl = 0.0;
             for i in 0..log_probs.len() {
                 kl += log_probs[i] - ref_probs[i];

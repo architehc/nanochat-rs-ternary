@@ -132,6 +132,13 @@ impl GrpoTrainer {
 
         // KL divergence penalty (if reference policy provided)
         if let Some(ref_probs) = ref_log_probs {
+            assert_eq!(
+                ref_probs.len(),
+                log_probs.len(),
+                "ref_log_probs length ({}) must match log_probs length ({})",
+                ref_probs.len(),
+                log_probs.len()
+            );
             let mut kl = 0.0;
             for i in 0..log_probs.len() {
                 kl += log_probs[i] - ref_probs[i];
@@ -141,6 +148,13 @@ impl GrpoTrainer {
         }
 
         // Entropy bonus (encourage exploration)
+        assert_eq!(
+            entropy.len(),
+            log_probs.len(),
+            "entropy length ({}) must match log_probs length ({})",
+            entropy.len(),
+            log_probs.len()
+        );
         let avg_entropy: f64 = entropy.iter().sum::<f64>() / n;
         loss -= self.config.entropy_coef * avg_entropy;
 

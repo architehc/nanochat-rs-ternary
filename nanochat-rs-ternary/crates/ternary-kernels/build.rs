@@ -4,30 +4,30 @@ fn main() {
     // Declare has_cuda as a valid cfg so #[cfg(has_cuda)] doesn't warn.
     println!("cargo::rustc-check-cfg=cfg(has_cuda)");
 
+    // Allow overriding the target architecture via TERNARY_MARCH env var.
+    // Default: "native" (best perf on build machine, NOT portable).
+    // For portable builds: set TERNARY_MARCH=x86-64 (or x86-64-v3 for AVX2 baseline).
+    // The C code uses runtime CPUID dispatch for SIMD kernels, so -march=x86-64
+    // is safe — it just may produce slower non-kernel helper code.
+    let march = std::env::var("TERNARY_MARCH").unwrap_or_else(|_| "native".to_string());
+    let march_flag = format!("-march={}", march);
+    println!("cargo:rerun-if-env-changed=TERNARY_MARCH");
+
     // AVX2 kernel — compiled separately with AVX2+FMA target.
-    // NOTE: -march=native means the resulting binary is NOT portable to machines
-    // with a different (older) CPU microarchitecture. For portable builds,
-    // replace with explicit -mavx2 -mfma or use function multi-versioning.
     cc::Build::new()
         .file("csrc/ternary_gemv_avx2.c")
         .flag("-O3")
-        .flag("-march=native")
+        .flag(&march_flag)
         .flag("-fno-strict-aliasing")
         .flag("-DNDEBUG")
         .flag("-w")
         .compile("ternary_gemv_avx2");
 
-    // CPU kernels — compile with native arch detection.
-    // NOTE: -march=native means the resulting binary is NOT portable to machines
-    // with a different (older) CPU microarchitecture. The C code uses runtime
-    // CPUID dispatch so it will not emit illegal instructions, but the compiler
-    // may still use native-only optimizations in non-kernel helper functions.
-    // For portable builds, replace with -march=x86-64 (baseline) and rely
-    // solely on the runtime dispatch + function-level target attributes.
+    // CPU kernels — compile with arch detection.
     cc::Build::new()
         .file("csrc/ternary_gemv.c")
         .flag("-O3")
-        .flag("-march=native")
+        .flag(&march_flag)
         .flag("-fno-strict-aliasing")
         .flag("-DNDEBUG")
         // Rename main() so it doesn't conflict with Rust binary

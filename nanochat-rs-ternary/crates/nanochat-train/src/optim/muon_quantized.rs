@@ -200,10 +200,10 @@ impl QuantizedMuon {
             self.momentum_buffers[i].assign_from_tensor(&new_buf, &self.quant_config)?;
 
             let update = if var.as_tensor().dims().len() >= 2 {
-                // Nesterov: update = beta * buf + (1 - beta) * grad
-                let nest_grad = (&grad * (1.0 - self.beta))?;
-                let nest_buf = (&prev_buf * self.beta)?;
-                let nesterov = (&nest_grad + &nest_buf)?;
+                // Nesterov look-ahead: extrapolate momentum in the update direction
+                // nesterov = new_buf + beta * (new_buf - prev_buf)
+                let delta = (&new_buf - &prev_buf)?;
+                let nesterov = (&new_buf + &((&delta) * self.beta)?)?;
 
                 // Reshape to 2D for orthogonalization
                 let orig_shape = nesterov.dims().to_vec();
@@ -260,10 +260,10 @@ impl QuantizedMuon {
             self.momentum_buffers[i].assign_from_tensor(&new_buf, &self.quant_config)?;
 
             let update = if var.as_tensor().dims().len() >= 2 {
-                // Nesterov: update = beta * buf + (1 - beta) * grad
-                let nest_grad = (&grad * (1.0 - self.beta))?;
-                let nest_buf = (&prev_buf * self.beta)?;
-                let nesterov = (&nest_grad + &nest_buf)?;
+                // Nesterov look-ahead: extrapolate momentum in the update direction
+                // nesterov = new_buf + beta * (new_buf - prev_buf)
+                let delta = (&new_buf - &prev_buf)?;
+                let nesterov = (&new_buf + &((&delta) * self.beta)?)?;
 
                 // Reshape to 2D for orthogonalization
                 let orig_shape = nesterov.dims().to_vec();

@@ -146,8 +146,21 @@ async fn chat_ui() -> impl IntoResponse {
     (headers, Html(CHAT_HTML))
 }
 
-async fn health() -> &'static str {
-    "ok"
+async fn health(State(state): State<Arc<AppState>>) -> Response {
+    if state.engines.is_empty() {
+        return (StatusCode::SERVICE_UNAVAILABLE, "no engines available").into_response();
+    }
+    // Probe each engine mutex to detect poisoning (prior panic).
+    for (i, engine_mutex) in state.engines.iter().enumerate() {
+        if engine_mutex.lock().is_err() {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("engine {} mutex poisoned", i),
+            )
+                .into_response();
+        }
+    }
+    (StatusCode::OK, "ok").into_response()
 }
 
 async fn prometheus_metrics_authed(

@@ -82,8 +82,14 @@ impl CompilerFeedback {
 
     /// Compile a Rust code snippet and return detailed feedback
     pub fn compile(&self, code: &str) -> Result<CompileResult> {
-        // Write code to temporary file
-        let code_path = self.temp_dir.path().join("generated.rs");
+        // Use a unique file name per invocation to avoid races when compile()
+        // is called concurrently on the same CompilerFeedback instance.
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let file_name = format!("generated_{:x}_{:x}.rs", unique_id, code.len());
+        let code_path = self.temp_dir.path().join(&file_name);
         fs::write(&code_path, code).context("Failed to write code to temp file")?;
 
         // Run rustc with JSON output for structured error messages
@@ -94,7 +100,7 @@ impl CompilerFeedback {
             .arg("--edition=2021")
             .arg(&code_path)
             .arg("-o")
-            .arg(self.temp_dir.path().join("output.rlib"))
+            .arg(self.temp_dir.path().join(format!("output_{:x}.rlib", unique_id)))
             .output()
             .context("Failed to run rustc")?;
 

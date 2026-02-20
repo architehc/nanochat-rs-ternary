@@ -23,7 +23,13 @@ pub fn encode_trit(val: i8) -> u8 {
         -1 => 0b11,
         0 => 0b00,
         1 => 0b01,
-        _ => 0b00, // fallback for release mode
+        _ => {
+            eprintln!(
+                "WARNING: encode_trit called with invalid value {} (expected -1, 0, or +1), returning 0b00",
+                val
+            );
+            0b00
+        }
     }
 }
 

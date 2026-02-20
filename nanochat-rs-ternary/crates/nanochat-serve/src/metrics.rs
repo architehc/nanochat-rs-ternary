@@ -20,18 +20,22 @@ pub struct SafeCounter {
 
 impl SafeCounter {
     fn new(name: &str, help: &str) -> Self {
-        let counter = Counter::with_opts(Opts::new(name, help))
-            .unwrap_or_else(|err| panic!("failed to create counter {}: {}", name, err));
-        Self {
-            inner: Some(counter),
+        match Counter::with_opts(Opts::new(name, help)) {
+            Ok(counter) => Self {
+                inner: Some(counter),
+            },
+            Err(err) => {
+                eprintln!("WARNING: failed to create counter {}: {}", name, err);
+                Self { inner: None }
+            }
         }
     }
 
     fn register(&self, registry: &Registry) {
         if let Some(metric) = &self.inner {
-            registry
-                .register(Box::new(metric.clone()))
-                .unwrap_or_else(|err| panic!("failed to register counter metric: {}", err));
+            if let Err(err) = registry.register(Box::new(metric.clone())) {
+                eprintln!("WARNING: failed to register counter metric: {}", err);
+            }
         }
     }
 
@@ -59,16 +63,20 @@ pub struct SafeGauge {
 
 impl SafeGauge {
     fn new(name: &str, help: &str) -> Self {
-        let gauge = Gauge::with_opts(Opts::new(name, help))
-            .unwrap_or_else(|err| panic!("failed to create gauge {}: {}", name, err));
-        Self { inner: Some(gauge) }
+        match Gauge::with_opts(Opts::new(name, help)) {
+            Ok(gauge) => Self { inner: Some(gauge) },
+            Err(err) => {
+                eprintln!("WARNING: failed to create gauge {}: {}", name, err);
+                Self { inner: None }
+            }
+        }
     }
 
     fn register(&self, registry: &Registry) {
         if let Some(metric) = &self.inner {
-            registry
-                .register(Box::new(metric.clone()))
-                .unwrap_or_else(|err| panic!("failed to register gauge metric: {}", err));
+            if let Err(err) = registry.register(Box::new(metric.clone())) {
+                eprintln!("WARNING: failed to register gauge metric: {}", err);
+            }
         }
     }
 
@@ -103,18 +111,22 @@ pub struct SafeHistogram {
 impl SafeHistogram {
     fn new(name: &str, help: &str, buckets: Vec<f64>) -> Self {
         let opts = HistogramOpts::new(name, help).buckets(buckets);
-        let histogram = Histogram::with_opts(opts)
-            .unwrap_or_else(|err| panic!("failed to create histogram {}: {}", name, err));
-        Self {
-            inner: Some(histogram),
+        match Histogram::with_opts(opts) {
+            Ok(histogram) => Self {
+                inner: Some(histogram),
+            },
+            Err(err) => {
+                eprintln!("WARNING: failed to create histogram {}: {}", name, err);
+                Self { inner: None }
+            }
         }
     }
 
     fn register(&self, registry: &Registry) {
         if let Some(metric) = &self.inner {
-            registry
-                .register(Box::new(metric.clone()))
-                .unwrap_or_else(|err| panic!("failed to register histogram metric: {}", err));
+            if let Err(err) = registry.register(Box::new(metric.clone())) {
+                eprintln!("WARNING: failed to register histogram metric: {}", err);
+            }
         }
     }
 

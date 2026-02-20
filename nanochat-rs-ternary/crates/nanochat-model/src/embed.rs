@@ -44,6 +44,10 @@ impl Embedding {
         assert_eq!(out.len(), self.dim);
         let token_idx = token_id as usize;
         if token_idx >= self.vocab_size {
+            eprintln!(
+                "WARNING: embed OOB token_id {} >= vocab_size {}, returning zeros (possible tokenizer bug)",
+                token_id, self.vocab_size
+            );
             out.fill(0.0);
             return;
         }

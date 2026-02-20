@@ -115,7 +115,8 @@ impl<T: Copy + Default> AlignedVec<T> {
 
         let layout = Layout::from_size_align(size, align).expect("invalid layout");
 
-        // Safety: layout has nonzero size
+        // SAFETY: layout has nonzero size (len > 0 checked above) and valid alignment (128).
+        // alloc_zeroed returns a properly aligned, zeroed allocation or null.
         let raw = unsafe { alloc::alloc_zeroed(layout) };
         let ptr = NonNull::new(raw as *mut T).expect("allocation failed");
 
@@ -125,6 +126,8 @@ impl<T: Copy + Default> AlignedVec<T> {
         #[cfg(target_os = "linux")]
         {
             if size >= 2 * 1024 * 1024 {
+                // SAFETY: raw is a valid allocation of `size` bytes from alloc_zeroed above.
+                // madvise is advisory — failure is non-fatal.
                 unsafe {
                     let ret = libc::madvise(raw as *mut libc::c_void, size, libc::MADV_HUGEPAGE);
                     if ret != 0 {
@@ -183,12 +186,17 @@ impl<T: Copy + Default> AlignedVec<T> {
             // which is automatically >= 128-byte aligned.
             let raw = unsafe { numa_alloc_onnode(size, node as libc::c_int) };
             if raw.is_null() {
-                // NUMA allocation failed, fall back to standard
+                eprintln!(
+                    "WARNING: NUMA allocation failed for {} bytes on node {} (falling back to standard allocator)",
+                    size, node
+                );
                 return Self::new_zeroed(len);
             }
 
             // Zero the memory (Linux mmap typically returns zeroed pages,
             // but be explicit for safety)
+            // SAFETY: raw is a valid allocation of `size` bytes from numa_alloc_onnode
+            // (checked non-null above). write_bytes zeroes the entire allocation.
             unsafe {
                 std::ptr::write_bytes(raw as *mut u8, 0, size);
             }
@@ -264,6 +272,8 @@ impl<T: Copy + Default> Deref for AlignedVec<T> {
         if self.len == 0 {
             return &[];
         }
+        // SAFETY: ptr was allocated with at least self.len * size_of::<T>() bytes,
+        // properly aligned, and is valid for the lifetime of self.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 }
@@ -273,6 +283,8 @@ impl<T: Copy + Default> DerefMut for AlignedVec<T> {
         if self.len == 0 {
             return &mut [];
         }
+        // SAFETY: ptr was allocated with at least self.len * size_of::<T>() bytes,
+        // properly aligned, and is valid for the lifetime of &mut self (exclusive access).
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 }
@@ -290,14 +302,20 @@ impl<T: Copy + Default> Drop for AlignedVec<T> {
                     "standard allocation bookkeeping mismatch"
                 );
                 let layout = Layout::from_size_align(self.alloc_bytes, 128).unwrap();
+                // SAFETY: ptr was allocated by alloc::alloc_zeroed with this exact layout.
+                // alloc_bytes > 0 (checked at top of drop). ptr has not been freed elsewhere.
                 unsafe {
                     alloc::dealloc(self.ptr.as_ptr() as *mut u8, layout);
                 }
             }
             #[cfg(all(target_os = "linux", has_numa))]
-            AllocSource::Numa { .. } => unsafe {
-                numa_free(self.ptr.as_ptr() as *mut libc::c_void, self.alloc_bytes);
-            },
+            AllocSource::Numa { .. } => {
+                // SAFETY: ptr was allocated by numa_alloc_onnode with alloc_bytes size.
+                // alloc_bytes > 0 (checked at top of drop). ptr has not been freed elsewhere.
+                unsafe {
+                    numa_free(self.ptr.as_ptr() as *mut libc::c_void, self.alloc_bytes);
+                }
+            }
         }
     }
 }

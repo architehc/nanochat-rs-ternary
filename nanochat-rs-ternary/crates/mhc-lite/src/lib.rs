@@ -41,6 +41,10 @@ pub(crate) fn softmax_24(logits: &[f32; 24]) -> [f32; 24] {
     let max_val = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
     if !max_val.is_finite() {
         // Degenerate case (all -inf/NaN): keep DS invariants by falling back to uniform.
+        eprintln!(
+            "WARNING: softmax_24 received degenerate input (max={:.6}), returning uniform distribution (possible upstream bug)",
+            max_val
+        );
         return [1.0 / 24.0; 24];
     }
 
@@ -58,6 +62,10 @@ pub(crate) fn softmax_24(logits: &[f32; 24]) -> [f32; 24] {
     }
 
     if !sum.is_finite() || sum <= 0.0 {
+        eprintln!(
+            "WARNING: softmax_24 exp sum is degenerate (sum={:.6}), returning uniform distribution",
+            sum
+        );
         return [1.0 / 24.0; 24];
     }
 
