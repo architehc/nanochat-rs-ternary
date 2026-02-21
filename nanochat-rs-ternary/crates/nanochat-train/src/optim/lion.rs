@@ -74,9 +74,12 @@ impl Lion {
             var.set(&new_val)?;
 
             // 4. Update momentum: m = beta2*m + (1-beta2)*grad
+            // CRITICAL: detach() breaks the computation graph chain.
+            // Without this, each step's EMA buffer retains references to
+            // the previous step's forward/backward graph, causing unbounded GPU memory growth.
             let m2_scaled = (m * self.beta2)?;
             let g2_scaled = (&grad * (1.0 - self.beta2))?;
-            self.exp_avg[i] = (&m2_scaled + &g2_scaled)?;
+            self.exp_avg[i] = (&m2_scaled + &g2_scaled)?.detach();
         }
         Ok(())
     }

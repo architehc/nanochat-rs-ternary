@@ -106,15 +106,20 @@ impl Muon {
             let buf_scaled = (&prev_buf * self.beta)?;
             let grad_scaled = (&grad * (1.0 - self.beta))?;
             let new_buf = (&buf_scaled + &grad_scaled)?;
-            self.momentum_buffers[i] = new_buf.clone();
+            // CRITICAL: detach() breaks the computation graph chain.
+            // Without this, each step's momentum buffer retains references to
+            // the previous step's forward/backward graph, causing unbounded GPU memory growth.
+            self.momentum_buffers[i] = new_buf.detach();
 
             let update = if var.as_tensor().dims().len() >= 2 {
                 // Nesterov look-ahead: extrapolate along momentum direction.
                 // nesterov = new_buf + β*(new_buf - prev_buf)
                 // This looks ahead in the direction momentum is moving,
                 // unlike plain momentum which just uses new_buf directly.
-                let delta = (&new_buf - &prev_buf)?;
-                let nesterov = (&new_buf + (&delta * self.beta)?)?;
+                // Use the detached buffer for Nesterov to avoid graph retention.
+                let new_buf_d = &self.momentum_buffers[i];
+                let delta = (new_buf_d - &prev_buf)?;
+                let nesterov = (new_buf_d + (&delta * self.beta)?)?;
                 // Reshape to 2D for orthogonalization
                 let orig_shape = nesterov.dims().to_vec();
                 let rows = orig_shape[0];
@@ -123,8 +128,8 @@ impl Muon {
                 let orth = newton_schulz_orthogonalize(&nesterov_2d, self.ns_steps)?;
                 orth.reshape(orig_shape)?
             } else {
-                // 1D: plain momentum
-                new_buf
+                // 1D: plain momentum (use detached buffer)
+                self.momentum_buffers[i].clone()
             };
 
             // Weight decay (multiplicative)
@@ -163,12 +168,14 @@ impl Muon {
             let buf_scaled = (&prev_buf * self.beta)?;
             let grad_scaled = (&grad * (1.0 - self.beta))?;
             let new_buf = (&buf_scaled + &grad_scaled)?;
-            self.momentum_buffers[i] = new_buf.clone();
+            // CRITICAL: detach to break computation graph chain (see step() comment)
+            self.momentum_buffers[i] = new_buf.detach();
 
             let update = if var.as_tensor().dims().len() >= 2 {
                 // Nesterov look-ahead: extrapolate along momentum direction.
-                let delta = (&new_buf - &prev_buf)?;
-                let nesterov = (&new_buf + (&delta * self.beta)?)?;
+                let new_buf_d = &self.momentum_buffers[i];
+                let delta = (new_buf_d - &prev_buf)?;
+                let nesterov = (new_buf_d + (&delta * self.beta)?)?;
                 // Reshape to 2D for orthogonalization
                 let orig_shape = nesterov.dims().to_vec();
                 let rows = orig_shape[0];
@@ -177,8 +184,8 @@ impl Muon {
                 let orth = newton_schulz_orthogonalize(&nesterov_2d, self.ns_steps)?;
                 orth.reshape(orig_shape)?
             } else {
-                // 1D: plain momentum
-                new_buf
+                // 1D: plain momentum (use detached buffer)
+                self.momentum_buffers[i].clone()
             };
 
             // Weight decay (multiplicative)
