@@ -53,6 +53,19 @@ pub enum LayerType {
     DeltaNetAttention,
 }
 
+/// Wave Field attention configuration.
+#[derive(Debug, Clone)]
+pub struct WaveFieldConfig {
+    /// Field size for wave propagation (default: 1024).
+    pub field_size: usize,
+    /// Number of wave field heads (default: same as n_heads).
+    pub n_wave_heads: usize,
+    /// Head dimension for wave field (default: dim / n_wave_heads).
+    pub head_dim: usize,
+    /// Whether to use inter-head coupling (default: true).
+    pub use_head_coupling: bool,
+}
+
 /// Configuration for a nanochat ternary model.
 #[derive(Debug, Clone)]
 pub struct ModelConfig {
@@ -101,6 +114,10 @@ pub struct ModelConfig {
     pub gated_attention: bool,
     /// LoopLM configuration (None = standard fixed-depth transformer)
     pub loop_config: Option<LoopConfig>,
+    /// Wave Field attention configuration (None = no wave field layers)
+    pub wavefield_config: Option<WaveFieldConfig>,
+    /// Fraction of layers using wave field attention (0.0-1.0, None = 0)
+    pub wavefield_ratio: Option<f32>,
 }
 
 impl ModelConfig {
@@ -129,6 +146,8 @@ impl ModelConfig {
             weight_tied: false,
             gated_attention: false,
             loop_config: None,
+            wavefield_config: None,
+            wavefield_ratio: None,
         }
     }
 
@@ -166,6 +185,8 @@ impl ModelConfig {
                     perplexity_threshold: 5.0,
                 }),
             }),
+            wavefield_config: None,
+            wavefield_ratio: None,
         }
     }
 
@@ -194,6 +215,8 @@ impl ModelConfig {
             weight_tied: false,
             gated_attention: false,
             loop_config: None,
+            wavefield_config: None,
+            wavefield_ratio: None,
         }
     }
 
@@ -222,6 +245,8 @@ impl ModelConfig {
             weight_tied: false,
             gated_attention: false,
             loop_config: None,
+            wavefield_config: None,
+            wavefield_ratio: None,
         }
     }
 
@@ -250,6 +275,8 @@ impl ModelConfig {
             weight_tied: true,
             gated_attention: false,
             loop_config: None,
+            wavefield_config: None,
+            wavefield_ratio: None,
         }
     }
 
@@ -278,6 +305,8 @@ impl ModelConfig {
             weight_tied: false,
             gated_attention: false,
             loop_config: None,
+            wavefield_config: None,
+            wavefield_ratio: None,
         }
     }
 
@@ -306,6 +335,8 @@ impl ModelConfig {
             weight_tied: false,
             gated_attention: false,
             loop_config: None,
+            wavefield_config: None,
+            wavefield_ratio: None,
         }
     }
 
@@ -334,6 +365,8 @@ impl ModelConfig {
             weight_tied: false,
             gated_attention: false,
             loop_config: None,
+            wavefield_config: None,
+            wavefield_ratio: None,
         }
     }
 
@@ -387,6 +420,8 @@ impl ModelConfig {
             weight_tied: false,
             gated_attention: true, // Qwen3 uses gated attention
             loop_config: None,
+            wavefield_config: None,
+            wavefield_ratio: None,
         }
     }
 
@@ -477,6 +512,8 @@ impl ModelConfig {
             weight_tied: false,
             gated_attention: false,
             loop_config: None,
+            wavefield_config: None,
+            wavefield_ratio: None,
         }
     }
 
@@ -537,6 +574,46 @@ impl ModelConfig {
             LayerSequence::Pattern(pattern) => {
                 let idx = layer_idx % pattern.len();
                 pattern[idx] == LayerType::DeltaNetAttention
+            }
+        }
+    }
+
+    /// Determine whether a layer should use wave field attention.
+    ///
+    /// Wave field layers are placed using the same interleaving logic as DeltaNet.
+    /// A layer cannot be both DeltaNet and WaveField; DeltaNet takes priority
+    /// if both ratios would select the same layer.
+    pub fn is_wavefield_layer(&self, layer_idx: usize) -> bool {
+        if self.wavefield_config.is_none() {
+            return false;
+        }
+        match self.wavefield_ratio {
+            None => false,
+            Some(r) if r <= 0.0 => false,
+            Some(r) if r >= 1.0 => !self.is_deltanet_layer(layer_idx),
+            Some(r) => {
+                // Don't overlap with DeltaNet layers
+                if self.is_deltanet_layer(layer_idx) {
+                    return false;
+                }
+                if self.n_layers == 0 {
+                    return false;
+                }
+                let n_wavefield = ((self.n_layers as f32) * r).round() as usize;
+                if n_wavefield == 0 {
+                    return false;
+                }
+                // Integer-safe interleaving (same algorithm as DeltaNet)
+                for k in 0..n_wavefield {
+                    let num = (2u128 * k as u128 + 1) * self.n_layers as u128;
+                    let den = 2u128 * n_wavefield as u128;
+                    let wf_idx = usize::try_from(num / den).unwrap_or(usize::MAX);
+                    let wf_idx = wf_idx.min(self.n_layers - 1);
+                    if wf_idx == layer_idx {
+                        return true;
+                    }
+                }
+                false
             }
         }
     }

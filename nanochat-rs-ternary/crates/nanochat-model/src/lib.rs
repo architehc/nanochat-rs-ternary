@@ -9,3 +9,4 @@ pub mod ffn;
 pub mod loop_block;
 pub mod model;
 pub mod norm;
+pub mod wavefield;

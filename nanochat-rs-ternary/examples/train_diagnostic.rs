@@ -100,6 +100,11 @@ fn main() -> Result<()> {
         async_prefetch_size: 8,
         use_fp4: false,
         fp4_stochastic_rounding: false,
+        use_wave_field: false,
+        wavefield_field_size: 1024,
+        wavefield_n_heads: 0,
+        wavefield_head_coupling: true,
+        wavefield_ratio: 1.0,
     };
 
     println!("Model config:");

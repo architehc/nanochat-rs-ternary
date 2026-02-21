@@ -84,6 +84,36 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
         }
     }
 
+    // Wave field metadata (if enabled)
+    if config.use_wave_field {
+        let wf_heads = if config.wavefield_n_heads == 0 {
+            config.n_heads
+        } else {
+            config.wavefield_n_heads
+        };
+        let wf_head_dim = config.dim / wf_heads;
+        writer.add_metadata(
+            "nanochat.wavefield.field_size",
+            GgufValue::U32(config.wavefield_field_size as u32),
+        );
+        writer.add_metadata(
+            "nanochat.wavefield.n_wave_heads",
+            GgufValue::U32(wf_heads as u32),
+        );
+        writer.add_metadata(
+            "nanochat.wavefield.head_dim",
+            GgufValue::U32(wf_head_dim as u32),
+        );
+        writer.add_metadata(
+            "nanochat.wavefield.head_coupling",
+            GgufValue::Bool(config.wavefield_head_coupling),
+        );
+        writer.add_metadata(
+            "nanochat.wavefield.ratio_pct",
+            GgufValue::U32((config.wavefield_ratio * 100.0) as u32),
+        );
+    }
+
     // Token embedding (FP32 -> stored as f32 in GGUF)
     let embed_data = model
         .tok_embed
@@ -371,6 +401,11 @@ mod tests {
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 

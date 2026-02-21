@@ -127,6 +127,11 @@ mod tests {
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 

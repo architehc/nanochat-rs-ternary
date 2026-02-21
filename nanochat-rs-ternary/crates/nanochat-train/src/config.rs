@@ -38,6 +38,18 @@ fn default_fp4_stochastic_rounding() -> bool {
     true
 }
 
+fn default_wavefield_field_size() -> usize {
+    1024
+}
+
+fn default_wavefield_ratio() -> f32 {
+    1.0
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Adaptive loop control for inference (LoopLM).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveLoopConfig {
@@ -173,6 +185,23 @@ pub struct TrainConfig {
     /// Loop scale penalty weight (annealed during training)
     #[serde(default)]
     pub loop_scale_penalty: f64,
+
+    // Wave Field Attention
+    /// Enable wave field attention (O(n log n) FFT-based physics attention)
+    #[serde(default)]
+    pub use_wave_field: bool,
+    /// Wave field spatial resolution (default: 1024)
+    #[serde(default = "default_wavefield_field_size")]
+    pub wavefield_field_size: usize,
+    /// Number of wave field heads (0 = use n_heads)
+    #[serde(default)]
+    pub wavefield_n_heads: usize,
+    /// Enable inter-head coupling matrix
+    #[serde(default = "default_true")]
+    pub wavefield_head_coupling: bool,
+    /// Fraction of layers using wave field (1.0 = all layers when enabled)
+    #[serde(default = "default_wavefield_ratio")]
+    pub wavefield_ratio: f32,
 }
 
 impl TrainConfig {
@@ -272,6 +301,26 @@ impl TrainConfig {
             ));
         }
 
+        // Wave field validation
+        if self.use_wave_field {
+            if self.wavefield_field_size == 0 {
+                errors.push("wavefield_field_size must be > 0".to_string());
+            }
+            if !(0.0..=1.0).contains(&self.wavefield_ratio) {
+                errors.push(format!(
+                    "wavefield_ratio ({}) must be in [0, 1]",
+                    self.wavefield_ratio
+                ));
+            }
+            let wf_heads = if self.wavefield_n_heads == 0 { self.n_heads } else { self.wavefield_n_heads };
+            if self.dim > 0 && wf_heads > 0 && self.dim % wf_heads != 0 {
+                errors.push(format!(
+                    "dim ({}) must be divisible by wavefield n_heads ({})",
+                    self.dim, wf_heads
+                ));
+            }
+        }
+
         // Log warnings
         for warning in &warnings {
             tracing::warn!("Config warning: {}", warning);
@@ -362,6 +411,11 @@ impl TrainConfig {
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 
@@ -411,6 +465,11 @@ impl TrainConfig {
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 
@@ -482,6 +541,11 @@ impl TrainConfig {
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 
@@ -531,6 +595,11 @@ impl TrainConfig {
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 
@@ -589,6 +658,11 @@ impl TrainConfig {
             distill_teacher: None, // Can be set to teacher model path
             distill_kl_weight: 1.0,
             loop_scale_penalty: 0.1, // Annealed during training
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 
@@ -639,6 +713,11 @@ impl TrainConfig {
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 
@@ -688,6 +767,11 @@ impl TrainConfig {
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 
@@ -737,6 +821,11 @@ impl TrainConfig {
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 
@@ -786,6 +875,11 @@ impl TrainConfig {
             distill_teacher: None,
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
         }
     }
 
@@ -808,6 +902,39 @@ impl TrainConfig {
         let mut cfg = Self::d20_e3_full();
         cfg.use_fp4 = true;
         cfg.fp4_stochastic_rounding = true;
+        cfg
+    }
+
+    /// d20 with all wave field attention layers (for smoke testing).
+    pub fn d20_wavefield() -> Self {
+        let mut cfg = Self::d20();
+        cfg.use_wave_field = true;
+        cfg.wavefield_field_size = 256;
+        cfg.wavefield_n_heads = 0; // use n_heads
+        cfg.wavefield_head_coupling = true;
+        cfg.wavefield_ratio = 1.0; // all layers wave field
+        cfg
+    }
+
+    /// 125M param variant with all wave field attention.
+    pub fn nano_125m_wavefield() -> Self {
+        let mut cfg = Self::nano_125m();
+        cfg.use_wave_field = true;
+        cfg.wavefield_field_size = 512;
+        cfg.wavefield_n_heads = 0;
+        cfg.wavefield_head_coupling = true;
+        cfg.wavefield_ratio = 1.0;
+        cfg
+    }
+
+    /// 125M hybrid: 50% standard attention + 50% wave field (interleaved).
+    pub fn nano_125m_hybrid() -> Self {
+        let mut cfg = Self::nano_125m();
+        cfg.use_wave_field = true;
+        cfg.wavefield_field_size = 512;
+        cfg.wavefield_n_heads = 0;
+        cfg.wavefield_head_coupling = true;
+        cfg.wavefield_ratio = 0.5; // half the layers
         cfg
     }
 }

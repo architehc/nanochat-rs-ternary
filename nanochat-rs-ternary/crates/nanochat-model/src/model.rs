@@ -80,7 +80,9 @@ impl NanochatModel {
             // Layer indices: [0..local_before) then shared_loop, then [local_before+1..local_before+1+local_after)
             let before: Vec<_> = (0..loop_cfg.local_before)
                 .map(|i| {
-                    if config.is_deltanet_layer(i) {
+                    if config.is_wavefield_layer(i) {
+                        TransformerBlock::new_random_wavefield(&config)
+                    } else if config.is_deltanet_layer(i) {
                         TransformerBlock::new_random_deltanet(&config)
                     } else {
                         TransformerBlock::new_random(&config)
@@ -99,7 +101,9 @@ impl NanochatModel {
             let after: Vec<_> = (0..loop_cfg.local_after)
                 .map(|i| {
                     let layer_idx = loop_cfg.local_before + 1 + i; // Skip shared loop index
-                    if config.is_deltanet_layer(layer_idx) {
+                    if config.is_wavefield_layer(layer_idx) {
+                        TransformerBlock::new_random_wavefield(&config)
+                    } else if config.is_deltanet_layer(layer_idx) {
                         TransformerBlock::new_random_deltanet(&config)
                     } else {
                         TransformerBlock::new_random(&config)
@@ -126,7 +130,9 @@ impl NanochatModel {
             // Standard architecture: n_layers blocks
             let blocks: Vec<_> = (0..config.n_layers)
                 .map(|i| {
-                    if config.is_deltanet_layer(i) {
+                    if config.is_wavefield_layer(i) {
+                        TransformerBlock::new_random_wavefield(&config)
+                    } else if config.is_deltanet_layer(i) {
                         TransformerBlock::new_random_deltanet(&config)
                     } else {
                         TransformerBlock::new_random(&config)
@@ -724,6 +730,37 @@ impl NanochatModel {
             weight_tied,
             gated_attention,
             loop_config,
+            wavefield_config: {
+                use crate::config::WaveFieldConfig;
+                match gguf.metadata.get("nanochat.wavefield.field_size") {
+                    Some(GgufValue::U32(field_size)) => {
+                        let n_wave_heads = match gguf.metadata.get("nanochat.wavefield.n_wave_heads") {
+                            Some(GgufValue::U32(v)) => *v as usize,
+                            _ => get_u32("nanochat.n_heads")?,
+                        };
+                        let dim = get_u32("nanochat.dim")?;
+                        let head_dim = match gguf.metadata.get("nanochat.wavefield.head_dim") {
+                            Some(GgufValue::U32(v)) => *v as usize,
+                            _ => dim / n_wave_heads,
+                        };
+                        let use_head_coupling = match gguf.metadata.get("nanochat.wavefield.head_coupling") {
+                            Some(GgufValue::Bool(v)) => *v,
+                            _ => true,
+                        };
+                        Some(WaveFieldConfig {
+                            field_size: *field_size as usize,
+                            n_wave_heads,
+                            head_dim,
+                            use_head_coupling,
+                        })
+                    }
+                    _ => None,
+                }
+            },
+            wavefield_ratio: match gguf.metadata.get("nanochat.wavefield.ratio_pct") {
+                Some(GgufValue::U32(v)) if *v > 0 => Some(*v as f32 / 100.0),
+                _ => None,
+            },
         })
     }
 
@@ -1362,6 +1399,13 @@ impl NanochatModel {
                     let dn_heads = self.config.deltanet_qk_heads.unwrap_or(self.config.n_heads);
                     4 * dim * dim + dn_heads * dim
                 }
+                AttentionLayer::WaveField(wf) => {
+                    // scatter (dim * n_heads*head_dim) + gate (dim * n_heads) + out (n_heads*head_dim * dim)
+                    // + physics (3 * n_heads) + coupling (n_heads^2)
+                    let total_proj = wf.n_heads * wf.head_dim;
+                    dim * total_proj + dim * wf.n_heads + total_proj * dim + 3 * wf.n_heads
+                        + if wf.coupling.is_some() { wf.n_heads * wf.n_heads } else { 0 }
+                }
             }
         };
 
@@ -1546,6 +1590,7 @@ mod tests {
             match state {
                 AttentionState::Kv(cache) => assert_eq!(cache.len, 0),
                 AttentionState::Recurrent(_) => {} // Recurrent states are reset to zeros
+                AttentionState::WaveField(_) => {} // Wave field states are reset to zeros
             }
         }
     }
@@ -1751,6 +1796,7 @@ mod tests {
             match state {
                 AttentionState::Kv(cache) => assert_eq!(cache.len, 2),
                 AttentionState::Recurrent(_) => {} // DeltaNet state doesn't track len
+                AttentionState::WaveField(_) => {} // WaveField state doesn't track len
             }
         }
 
@@ -1760,6 +1806,7 @@ mod tests {
             match state {
                 AttentionState::Kv(cache) => assert_eq!(cache.len, 0),
                 AttentionState::Recurrent(s) => assert!(s.s.iter().all(|&v| v == 0.0)),
+                AttentionState::WaveField(s) => assert!(s.fields.iter().all(|&v| v == 0.0)),
             }
         }
     }
@@ -1979,6 +2026,13 @@ mod tests {
                     assert!(
                         matches!(state, AttentionState::Kv(_)),
                         "Standard layer {} should have KV cache, not Recurrent state",
+                        i
+                    );
+                }
+                AttentionLayer::WaveField(_) => {
+                    assert!(
+                        matches!(state, AttentionState::WaveField(_)),
+                        "WaveField layer {} should have WaveField state",
                         i
                     );
                 }

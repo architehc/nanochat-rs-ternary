@@ -49,6 +49,7 @@ pub mod optim;
 pub mod quantize;
 pub mod sensitivity;
 pub mod train;
+pub mod wavefield;
 
 #[cfg(feature = "cuda")]
 pub mod cuda_ops;

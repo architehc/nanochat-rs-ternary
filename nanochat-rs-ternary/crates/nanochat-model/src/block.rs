@@ -12,6 +12,7 @@ use crate::config::ModelConfig;
 use crate::deltanet::{DeltaNetAttention, DeltaNetState};
 use crate::ffn::{FeedForward, FfnLayer, MoeExperts};
 use crate::norm::RMSNorm;
+use crate::wavefield::{WaveFieldAttention, WaveFieldState};
 use mhc_lite::MhcLiteN2;
 use std::sync::Mutex;
 
@@ -35,7 +36,7 @@ struct TokenWorkspace {
     residual_tmp: Vec<f32>,
 }
 
-/// Attention layer variant -- standard MHA/GQA or DeltaNet recurrent.
+/// Attention layer variant -- standard MHA/GQA, DeltaNet recurrent, or WaveField.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum AttentionLayer {
@@ -43,6 +44,8 @@ pub enum AttentionLayer {
     Standard(Attention),
     /// DeltaNet linear recurrent attention with recurrent state.
     DeltaNet(DeltaNetAttention),
+    /// Wave field attention with FFT-based propagation.
+    WaveField(WaveFieldAttention),
 }
 
 /// Attention state variant -- matches the attention layer type.
@@ -52,6 +55,8 @@ pub enum AttentionState {
     Kv(KvCache),
     /// Recurrent state for DeltaNet attention.
     Recurrent(DeltaNetState),
+    /// Wave field state (constant size, no KV cache).
+    WaveField(WaveFieldState),
 }
 
 impl AttentionState {
@@ -60,6 +65,7 @@ impl AttentionState {
         match self {
             AttentionState::Kv(cache) => cache.len = 0,
             AttentionState::Recurrent(state) => state.reset(),
+            AttentionState::WaveField(state) => state.reset(),
         }
     }
 }
@@ -190,6 +196,34 @@ impl TransformerBlock {
         )
     }
 
+    /// Create a block with wave field attention and random weights (for testing).
+    pub fn new_random_wavefield(config: &ModelConfig) -> Self {
+        let wf_cfg = config
+            .wavefield_config
+            .as_ref()
+            .expect("wavefield_config must be set for wave field layers");
+
+        let ffn = if config.n_experts.is_some() {
+            FfnLayer::Moe(Box::new(MoeExperts::new_random(config)))
+        } else {
+            FfnLayer::Dense(Box::new(FeedForward::new_random(config)))
+        };
+
+        Self::from_parts(
+            MhcLiteN2::new_identity(),
+            MhcLiteN2::new_identity(),
+            RMSNorm::new(config.dim),
+            RMSNorm::new(config.dim),
+            AttentionLayer::WaveField(WaveFieldAttention::new_random(
+                wf_cfg,
+                config.dim,
+                config.max_seq_len,
+            )),
+            ffn,
+            config.dim,
+        )
+    }
+
     /// Create the appropriate attention state for this block's attention type.
     pub fn create_attn_state(&self, config: &ModelConfig) -> AttentionState {
         match &self.attention {
@@ -203,6 +237,13 @@ impl TransformerBlock {
                 AttentionState::Recurrent(DeltaNetState::new(
                     dn_heads,
                     config.deltanet_qk_head_dim(),
+                ))
+            }
+            AttentionLayer::WaveField(wf) => {
+                AttentionState::WaveField(WaveFieldState::new(
+                    wf.n_heads,
+                    wf.field_size,
+                    wf.head_dim,
                 ))
             }
         }
@@ -260,6 +301,9 @@ impl TransformerBlock {
             }
             (AttentionLayer::DeltaNet(attn), AttentionState::Recurrent(state)) => {
                 attn.forward(normed, state, attn_out);
+            }
+            (AttentionLayer::WaveField(wf), AttentionState::WaveField(state)) => {
+                wf.forward(normed, state, pos, attn_out);
             }
             _ => unreachable!("attention layer type and state type mismatch"),
         }
@@ -351,6 +395,9 @@ impl TransformerBlock {
             }
             (AttentionLayer::DeltaNet(attn), AttentionState::Recurrent(state)) => {
                 attn.forward_batch(normed_batch, seq_len, state, attn_out_batch);
+            }
+            (AttentionLayer::WaveField(wf), AttentionState::WaveField(state)) => {
+                wf.forward_batch(normed_batch, state, start_pos, seq_len, attn_out_batch);
             }
             _ => unreachable!("attention layer type and state type mismatch"),
         }
@@ -546,6 +593,7 @@ mod tests {
                 );
             }
             AttentionState::Kv(_) => panic!("expected DeltaNet recurrent state"),
+            AttentionState::WaveField(_) => panic!("expected DeltaNet recurrent state"),
         }
     }
 
