@@ -13,17 +13,8 @@ fn main() {
     let march_flag = format!("-march={}", march);
     println!("cargo:rerun-if-env-changed=TERNARY_MARCH");
 
-    // AVX2 kernel — compiled separately with AVX2+FMA target.
-    cc::Build::new()
-        .file("csrc/ternary_gemv_avx2.c")
-        .flag("-O3")
-        .flag(&march_flag)
-        .flag("-fno-strict-aliasing")
-        .flag("-DNDEBUG")
-        .flag("-w")
-        .compile("ternary_gemv_avx2");
-
-    // CPU kernels — compile with arch detection.
+    // CPU kernels (v3.4.0) — AVX2 Nibble-Split kernel is self-contained.
+    // No separate AVX2 file needed (consolidated in ternary_gemv.c).
     cc::Build::new()
         .file("csrc/ternary_gemv.c")
         .flag("-O3")
@@ -38,8 +29,6 @@ fn main() {
 
     println!("cargo:rerun-if-changed=csrc/ternary_gemv.c");
     println!("cargo:rerun-if-changed=csrc/ternary_gemv.h");
-    println!("cargo:rerun-if-changed=csrc/ternary_gemv_avx2.c");
-    println!("cargo:rerun-if-changed=csrc/ternary_gemv_avx2.h");
     println!("cargo:rerun-if-changed=csrc/ternary_dp4a.cu");
     println!("cargo:rerun-if-env-changed=CUDA_ARCH");
 
