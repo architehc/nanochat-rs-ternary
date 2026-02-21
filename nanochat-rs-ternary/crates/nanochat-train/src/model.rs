@@ -38,7 +38,18 @@ pub struct NanochatTrainModel {
 
 impl NanochatTrainModel {
     pub fn new(config: &TrainConfig, vb: VarBuilder) -> Result<Self> {
-        let tok_embed = candle_nn::embedding(config.vocab_size, config.dim, vb.pp("tok_embed"))?;
+        // NOTE: candle_nn::embedding uses Init::Randn { stdev: 1.0 } by default,
+        // which is way too large for weight-tied models (produces logits with absmax ~800).
+        // Use GPT-2 standard: N(0, 0.02) for proper loss scale at initialization.
+        let embed_weights = vb.pp("tok_embed").get_with_hints(
+            (config.vocab_size, config.dim),
+            "weight",
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: 0.02,
+            },
+        )?;
+        let tok_embed = candle_nn::Embedding::new(embed_weights, config.dim);
 
         // Build architecture based on loop_config
         let (blocks, local_blocks_before, shared_loop_block, local_blocks_after) =

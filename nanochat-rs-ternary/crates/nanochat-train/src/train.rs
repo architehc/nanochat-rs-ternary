@@ -756,7 +756,13 @@ impl Trainer {
         };
 
         // Backward pass for this micro-step.
-        let grads = scaled_loss.backward()?;
+        let mut grads = scaled_loss.backward()?;
+
+        // Detach gradients from the computation graph so forward-pass tensors
+        // can be freed. Without this, storing gradients in self.accum_grads
+        // keeps the entire forward graph alive, leaking ~2GB/step on GPU.
+        detach_grad_store_inplace(&mut grads, &self.varmap);
+
         if let Some(accum) = self.accum_grads.as_mut() {
             accumulate_grad_store(accum, &grads, &self.varmap)?;
         } else {
@@ -1244,13 +1250,26 @@ fn apply_collider_gradient_mask(logits: &Tensor, mask: &Tensor) -> Result<Tensor
     &kept + &dropped_no_grad
 }
 
+/// Detach all gradient tensors in a GradStore from the computation graph.
+/// This breaks references to forward-pass tensors so they can be freed.
+fn detach_grad_store_inplace(store: &mut GradStore, varmap: &VarMap) {
+    for var in sorted_vars(varmap) {
+        if let Some(g) = store.get(var.as_tensor()) {
+            store.insert(var.as_tensor(), g.detach());
+        }
+    }
+}
+
 fn accumulate_grad_store(dst: &mut GradStore, src: &GradStore, varmap: &VarMap) -> Result<()> {
     for var in sorted_vars(varmap) {
         let Some(g_src) = src.get(var.as_tensor()) else {
             continue;
         };
         if let Some(g_dst) = dst.get(var.as_tensor()) {
-            let sum = (g_dst + g_src)?;
+            // detach() breaks the computation graph chain so old gradient tensors
+            // can be freed. Without this, each micro-step's sum keeps references
+            // to all previous gradients, causing a GPU memory leak.
+            let sum = (g_dst + g_src)?.detach();
             dst.insert(var.as_tensor(), sum);
         } else {
             dst.insert(var.as_tensor(), g_src.clone());
