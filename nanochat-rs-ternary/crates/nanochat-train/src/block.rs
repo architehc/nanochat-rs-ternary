@@ -10,6 +10,13 @@ use crate::config::TrainConfig;
 use crate::ffn::FeedForwardTrain;
 use crate::layers::RMSNormTrain;
 use crate::mhc::MhcLiteN2Train;
+use crate::wavefield::WaveFieldAttentionTrain;
+
+/// Attention layer variant for training.
+pub enum AttentionTrainLayer {
+    Standard(AttentionTrain),
+    WaveField(WaveFieldAttentionTrain),
+}
 
 /// A single transformer block with mHC residual connections.
 pub struct TransformerBlockTrain {
@@ -17,28 +24,64 @@ pub struct TransformerBlockTrain {
     pub mhc_ffn: MhcLiteN2Train,
     pub norm_attn: RMSNormTrain,
     pub norm_ffn: RMSNormTrain,
-    pub attention: AttentionTrain,
+    pub attention: AttentionTrainLayer,
     pub ffn: FeedForwardTrain,
     pub dim: usize,
+    pub max_seq_len: usize,
 }
 
 impl TransformerBlockTrain {
     pub fn new(config: &TrainConfig, vb: VarBuilder) -> Result<Self> {
+        Self::new_standard(config, vb)
+    }
+
+    /// Create a standard attention block.
+    pub fn new_standard(config: &TrainConfig, vb: VarBuilder) -> Result<Self> {
         let ffn_dim = config.ffn_dim();
         Ok(Self {
             mhc_attn: MhcLiteN2Train::new(vb.pp("mhc_attn"))?,
             mhc_ffn: MhcLiteN2Train::new(vb.pp("mhc_ffn"))?,
             norm_attn: RMSNormTrain::new(config.dim, vb.pp("norm_attn"))?,
             norm_ffn: RMSNormTrain::new(config.dim, vb.pp("norm_ffn"))?,
-            attention: AttentionTrain::new(
+            attention: AttentionTrainLayer::Standard(AttentionTrain::new(
                 config.dim,
                 config.n_heads,
                 config.n_kv_heads,
                 config.group_size,
                 vb.pp("attn"),
-            )?,
+            )?),
             ffn: FeedForwardTrain::new(config.dim, ffn_dim, config.group_size, vb.pp("ffn"))?,
             dim: config.dim,
+            max_seq_len: config.max_seq_len,
+        })
+    }
+
+    /// Create a wave field attention block.
+    pub fn new_wavefield(config: &TrainConfig, vb: VarBuilder) -> Result<Self> {
+        let ffn_dim = config.ffn_dim();
+        let wf_heads = if config.wavefield_n_heads == 0 {
+            config.n_heads
+        } else {
+            config.wavefield_n_heads
+        };
+        let wf_head_dim = config.dim / wf_heads;
+        Ok(Self {
+            mhc_attn: MhcLiteN2Train::new(vb.pp("mhc_attn"))?,
+            mhc_ffn: MhcLiteN2Train::new(vb.pp("mhc_ffn"))?,
+            norm_attn: RMSNormTrain::new(config.dim, vb.pp("norm_attn"))?,
+            norm_ffn: RMSNormTrain::new(config.dim, vb.pp("norm_ffn"))?,
+            attention: AttentionTrainLayer::WaveField(WaveFieldAttentionTrain::new(
+                config.dim,
+                wf_heads,
+                wf_head_dim,
+                config.wavefield_field_size,
+                config.group_size,
+                config.wavefield_head_coupling,
+                vb.pp("wavefield"),
+            )?),
+            ffn: FeedForwardTrain::new(config.dim, ffn_dim, config.group_size, vb.pp("ffn"))?,
+            dim: config.dim,
+            max_seq_len: config.max_seq_len,
         })
     }
 
@@ -47,7 +90,10 @@ impl TransformerBlockTrain {
         // Attention sub-layer with mHC
         let attn_in = self.mhc_attn.prepare_input(x_exp, self.dim)?;
         let attn_normed = self.norm_attn.forward(&attn_in)?;
-        let attn_out = self.attention.forward(&attn_normed, cos, sin)?;
+        let attn_out = match &self.attention {
+            AttentionTrainLayer::Standard(attn) => attn.forward(&attn_normed, cos, sin)?,
+            AttentionTrainLayer::WaveField(wf) => wf.forward(&attn_normed, self.max_seq_len)?,
+        };
         let x_exp = self.mhc_attn.apply(x_exp, &attn_out, self.dim)?;
 
         // FFN sub-layer with mHC
@@ -59,15 +105,21 @@ impl TransformerBlockTrain {
 
     /// Collect all linear weight parameters.
     pub fn linear_params(&self) -> Vec<&Tensor> {
-        let mut params = self.attention.linear_params();
+        let mut params = match &self.attention {
+            AttentionTrainLayer::Standard(attn) => attn.linear_params(),
+            AttentionTrainLayer::WaveField(wf) => wf.linear_params(),
+        };
         params.extend(self.ffn.linear_params());
         params
     }
 
-    /// Collect all mHC parameters.
+    /// Collect all mHC parameters (includes wave field physics params).
     pub fn mhc_params(&self) -> Vec<&Tensor> {
         let mut params = self.mhc_attn.params().into_iter().collect::<Vec<_>>();
         params.extend(self.mhc_ffn.params());
+        if let AttentionTrainLayer::WaveField(wf) = &self.attention {
+            params.extend(wf.physics_params());
+        }
         params
     }
 

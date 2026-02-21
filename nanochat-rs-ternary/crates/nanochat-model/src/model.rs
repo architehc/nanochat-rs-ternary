@@ -10,6 +10,7 @@ use crate::config::{LayerSequence, ModelConfig};
 use crate::deltanet::DeltaNetAttention;
 use crate::embed::Embedding;
 use crate::ffn::{FeedForward, FfnLayer, MoeExperts};
+use crate::wavefield::{HeadCoupling, WaveFieldAttention, WaveKernelCache, WavePhysicsParams};
 use crate::loop_block::SharedLoopBlock;
 use crate::norm::RMSNorm;
 use mhc_lite::MhcLiteN2;
@@ -226,23 +227,72 @@ impl NanochatModel {
         // Helper to load a single transformer block
         let load_block = |prefix: &str,
                           layer_idx: usize,
-                          use_deltanet: bool|
+                          use_deltanet: bool,
+                          use_wavefield: bool|
          -> io::Result<TransformerBlock> {
-            // Attention weights
-            let wq = BitLinear::new(
-                gguf.load_planar_weights(&format!("{prefix}.attention.wq.weight"), group_size)?,
-            );
-            let wk = BitLinear::new(
-                gguf.load_planar_weights(&format!("{prefix}.attention.wk.weight"), group_size)?,
-            );
-            let wv = BitLinear::new(
-                gguf.load_planar_weights(&format!("{prefix}.attention.wv.weight"), group_size)?,
-            );
-            let wo = BitLinear::new(
-                gguf.load_planar_weights(&format!("{prefix}.attention.wo.weight"), group_size)?,
-            );
+            let attention = if use_wavefield {
+                // Wave field attention: load ternary projections + physics params
+                let wf_config = config.wavefield_config.as_ref().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "wavefield layer but no wavefield_config")
+                })?;
+                let n_heads = wf_config.n_wave_heads;
+                let head_dim = wf_config.head_dim;
+                let field_size = wf_config.field_size;
 
-            let attention = if use_deltanet {
+                let scatter_proj = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.wavefield.scatter.weight"), group_size)?,
+                );
+                let gate_proj = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.wavefield.gate.weight"), group_size)?,
+                );
+                let out_proj = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.wavefield.out.weight"), group_size)?,
+                );
+
+                let omega = Self::load_f32_vec(&gguf, &format!("{prefix}.wavefield.omega"))?;
+                let alpha_raw = Self::load_f32_vec(&gguf, &format!("{prefix}.wavefield.alpha_raw"))?;
+                let phi = Self::load_f32_vec(&gguf, &format!("{prefix}.wavefield.phi"))?;
+
+                // Convert alpha_raw through softplus to get positive damping
+                let alpha: Vec<f32> = alpha_raw.iter().map(|&a| (1.0 + a.exp()).ln()).collect();
+
+                let physics = WavePhysicsParams { omega, alpha, phi };
+                let kernel_cache = WaveKernelCache::from_physics(&physics, field_size);
+
+                let coupling = if wf_config.use_head_coupling {
+                    let logits_data = Self::load_f32_vec(&gguf, &format!("{prefix}.wavefield.coupling_logits"));
+                    match logits_data {
+                        Ok(logits) => Some(HeadCoupling::from_logits(&logits, n_heads)),
+                        Err(_) => Some(HeadCoupling::identity(n_heads)),
+                    }
+                } else {
+                    None
+                };
+
+                let stride = if config.max_seq_len > 1 {
+                    (field_size - 1) as f32 / (config.max_seq_len - 1) as f32
+                } else {
+                    0.0
+                };
+
+                AttentionLayer::WaveField(WaveFieldAttention::from_parts(
+                    scatter_proj, gate_proj, out_proj, physics, coupling,
+                    kernel_cache, n_heads, head_dim, field_size, stride,
+                ))
+            } else if use_deltanet {
+                // Attention weights
+                let wq = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.attention.wq.weight"), group_size)?,
+                );
+                let wk = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.attention.wk.weight"), group_size)?,
+                );
+                let wv = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.attention.wv.weight"), group_size)?,
+                );
+                let wo = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.attention.wo.weight"), group_size)?,
+                );
                 let w_beta = BitLinear::new(gguf.load_planar_weights(
                     &format!("{prefix}.attention.w_beta.weight"),
                     group_size,
@@ -257,6 +307,19 @@ impl NanochatModel {
                     head_dim: config.deltanet_qk_head_dim(),
                 })
             } else {
+                // Attention weights
+                let wq = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.attention.wq.weight"), group_size)?,
+                );
+                let wk = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.attention.wk.weight"), group_size)?,
+                );
+                let wv = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.attention.wv.weight"), group_size)?,
+                );
+                let wo = BitLinear::new(
+                    gguf.load_planar_weights(&format!("{prefix}.attention.wo.weight"), group_size)?,
+                );
                 AttentionLayer::Standard(Attention {
                     wq,
                     wk,
@@ -398,6 +461,7 @@ impl NanochatModel {
                         &format!("local_before.{}", i),
                         mhc_idx,
                         config.is_deltanet_layer(i),
+                        config.is_wavefield_layer(i),
                     );
                     mhc_idx += 1;
                     result
@@ -422,6 +486,7 @@ impl NanochatModel {
                         &format!("local_after.{}", i),
                         mhc_idx,
                         config.is_deltanet_layer(layer_num),
+                        config.is_wavefield_layer(layer_num),
                     );
                     mhc_idx += 1;
                     result
@@ -446,7 +511,7 @@ impl NanochatModel {
         } else {
             // Standard architecture: load n_layers blocks
             let blocks: Vec<_> = (0..config.n_layers)
-                .map(|i| load_block(&format!("blocks.{}", i), i, config.is_deltanet_layer(i)))
+                .map(|i| load_block(&format!("blocks.{}", i), i, config.is_deltanet_layer(i), config.is_wavefield_layer(i)))
                 .collect::<io::Result<Vec<_>>>()?;
 
             let attn_states: Vec<_> = blocks
@@ -948,6 +1013,25 @@ impl NanochatModel {
             vocab_size,
             dim,
         })
+    }
+
+    /// Load a raw f32 vector from GGUF tensor data.
+    fn load_f32_vec(gguf: &GgufFile, name: &str) -> io::Result<Vec<f32>> {
+        let tensor = gguf
+            .tensors
+            .iter()
+            .find(|t| t.name == name)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("tensor '{name}' not found"),
+                )
+            })?;
+        let data = gguf.tensor_data(tensor)?;
+        Ok(data
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect())
     }
 
     fn load_norm(gguf: &GgufFile, name: &str) -> io::Result<RMSNorm> {

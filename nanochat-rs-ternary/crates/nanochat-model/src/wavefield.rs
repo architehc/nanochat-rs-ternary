@@ -284,6 +284,34 @@ impl WaveFieldAttention {
         }
     }
 
+    /// Construct from pre-loaded parts (for GGUF loading).
+    pub fn from_parts(
+        scatter_proj: BitLinear,
+        gate_proj: BitLinear,
+        out_proj: BitLinear,
+        physics: WavePhysicsParams,
+        coupling: Option<HeadCoupling>,
+        kernel_cache: WaveKernelCache,
+        n_heads: usize,
+        head_dim: usize,
+        field_size: usize,
+        stride: f32,
+    ) -> Self {
+        Self {
+            scatter_proj,
+            gate_proj,
+            out_proj,
+            physics,
+            coupling,
+            kernel_cache,
+            n_heads,
+            head_dim,
+            field_size,
+            stride,
+            workspace: Mutex::new(WaveFieldWorkspace::default()),
+        }
+    }
+
     /// Single-token autoregressive forward.
     ///
     /// x: [dim]

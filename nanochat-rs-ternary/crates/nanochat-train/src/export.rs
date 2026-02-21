@@ -126,28 +126,76 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
         &embed_data,
     );
 
+    // Helper to export a BitLinearSTE as a ternary tensor
+    let export_ternary_layer = |writer: &mut GgufWriter,
+                                 name: &str,
+                                 layer: &crate::layers::BitLinearSTE|
+     -> Result<()> {
+        let (w_ternary, scales) = layer.get_ternary_weights()?;
+        let w_deq = dequantize_ternary(&w_ternary, &scales, layer.group_size)?;
+        let w_flat = w_deq.flatten_all()?.to_vec1::<f32>()?;
+        let rows = layer.out_features;
+        let cols = layer.in_features;
+        let pw = PlanarWeights::from_row_major(&w_flat, rows, cols, config.group_size);
+        writer.add_ternary_tensor(name, &pw);
+        Ok(())
+    };
+
     // Helper to export a single block's weights
     let export_block = |writer: &mut GgufWriter,
                         prefix: &str,
                         block: &crate::block::TransformerBlockTrain|
      -> Result<()> {
-        // Attention ternary weights
-        // Dequantize using original per-group scales so PlanarWeights::from_row_major
-        // can recompute accurate scales instead of seeing only {-1,0,+1} magnitudes.
-        for (name, layer) in [
-            ("attention.wq", &block.attention.wq),
-            ("attention.wk", &block.attention.wk),
-            ("attention.wv", &block.attention.wv),
-            ("attention.wo", &block.attention.wo),
-        ] {
-            let (w_ternary, scales) = layer.get_ternary_weights()?;
-            let w_deq = dequantize_ternary(&w_ternary, &scales, layer.group_size)?;
-            let w_flat = w_deq.flatten_all()?.to_vec1::<f32>()?;
-            let rows = layer.out_features;
-            let cols = layer.in_features;
-
-            let pw = PlanarWeights::from_row_major(&w_flat, rows, cols, config.group_size);
-            writer.add_ternary_tensor(&format!("{}.{}.weight", prefix, name), &pw);
+        // Attention weights — dispatch based on attention type
+        match &block.attention {
+            crate::block::AttentionTrainLayer::Standard(attn) => {
+                for (name, layer) in [
+                    ("attention.wq", &attn.wq),
+                    ("attention.wk", &attn.wk),
+                    ("attention.wv", &attn.wv),
+                    ("attention.wo", &attn.wo),
+                ] {
+                    export_ternary_layer(writer, &format!("{}.{}.weight", prefix, name), layer)?;
+                }
+            }
+            crate::block::AttentionTrainLayer::WaveField(wf) => {
+                // Ternary projections
+                for (name, layer) in [
+                    ("wavefield.scatter", &wf.scatter_proj),
+                    ("wavefield.gate", &wf.gate_proj),
+                    ("wavefield.out", &wf.out_proj),
+                ] {
+                    export_ternary_layer(writer, &format!("{}.{}.weight", prefix, name), layer)?;
+                }
+                // Physics params (FP32)
+                let omega_data = wf.omega.flatten_all()?.to_vec1::<f32>()?;
+                writer.add_f32_tensor(
+                    &format!("{}.wavefield.omega", prefix),
+                    &[wf.n_heads as u64],
+                    &omega_data,
+                );
+                let alpha_data = wf.alpha_raw.flatten_all()?.to_vec1::<f32>()?;
+                writer.add_f32_tensor(
+                    &format!("{}.wavefield.alpha_raw", prefix),
+                    &[wf.n_heads as u64],
+                    &alpha_data,
+                );
+                let phi_data = wf.phi.flatten_all()?.to_vec1::<f32>()?;
+                writer.add_f32_tensor(
+                    &format!("{}.wavefield.phi", prefix),
+                    &[wf.n_heads as u64],
+                    &phi_data,
+                );
+                // Coupling logits (FP32, optional)
+                if let Some(ref logits) = wf.coupling_logits {
+                    let logits_data = logits.flatten_all()?.to_vec1::<f32>()?;
+                    writer.add_f32_tensor(
+                        &format!("{}.wavefield.coupling_logits", prefix),
+                        &[wf.n_heads as u64, wf.n_heads as u64],
+                        &logits_data,
+                    );
+                }
+            }
         }
 
         // FFN ternary weights
@@ -156,14 +204,7 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
             ("ffn.w_up", &block.ffn.w_up),
             ("ffn.w_down", &block.ffn.w_down),
         ] {
-            let (w_ternary, scales) = layer.get_ternary_weights()?;
-            let w_deq = dequantize_ternary(&w_ternary, &scales, layer.group_size)?;
-            let w_flat = w_deq.flatten_all()?.to_vec1::<f32>()?;
-            let rows = layer.out_features;
-            let cols = layer.in_features;
-
-            let pw = PlanarWeights::from_row_major(&w_flat, rows, cols, config.group_size);
-            writer.add_ternary_tensor(&format!("{}.{}.weight", prefix, name), &pw);
+            export_ternary_layer(writer, &format!("{}.{}.weight", prefix, name), layer)?;
         }
 
         // Norm weights (FP32)

@@ -301,7 +301,7 @@ impl TrainConfig {
             ));
         }
 
-        // Wave field validation
+        // Wave field validation (uses is_wavefield_layer below)
         if self.use_wave_field {
             if self.wavefield_field_size == 0 {
                 errors.push("wavefield_field_size must be > 0".to_string());
@@ -331,6 +331,41 @@ impl TrainConfig {
         } else {
             Err(errors)
         }
+    }
+
+    /// Determine whether a layer should use wave field attention.
+    ///
+    /// Uses the same interleaving logic as inference: wavefield_ratio controls
+    /// the fraction of layers that become wave field, evenly distributed.
+    pub fn is_wavefield_layer(&self, layer_idx: usize) -> bool {
+        if !self.use_wave_field {
+            return false;
+        }
+        let r = self.wavefield_ratio;
+        if r <= 0.0 {
+            return false;
+        }
+        if r >= 1.0 {
+            return true;
+        }
+        if self.n_layers == 0 {
+            return false;
+        }
+        let n_wavefield = ((self.n_layers as f32) * r).round() as usize;
+        if n_wavefield == 0 {
+            return false;
+        }
+        // Integer-safe interleaving: place wave field layers near bin centers
+        for k in 0..n_wavefield {
+            let num = (2u128 * k as u128 + 1) * self.n_layers as u128;
+            let den = 2u128 * n_wavefield as u128;
+            let wf_idx = usize::try_from(num / den).unwrap_or(usize::MAX);
+            let wf_idx = wf_idx.min(self.n_layers - 1);
+            if wf_idx == layer_idx {
+                return true;
+            }
+        }
+        false
     }
 
     /// Compute FFN hidden dimension from dim and ffn_mult, aligned to group_size.

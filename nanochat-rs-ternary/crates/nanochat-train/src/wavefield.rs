@@ -41,28 +41,51 @@ impl WaveFieldAttentionTrain {
         let gate_proj = BitLinearSTE::new(dim, n_heads, group_size, vb.pp("gate"))?;
         let out_proj = BitLinearSTE::new(total_proj, dim, group_size, vb.pp("out"))?;
 
-        // Physics params initialized via VarBuilder so they're tracked as Vars.
-        // We use Const(mean_value) init — the optimizer will learn the spread.
-        // omega: mean frequency ~2.0 (range [0.3, 4.0])
-        let omega = vb.get_with_hints(
-            n_heads,
-            "omega",
-            candle_nn::Init::Const(2.0),
-        )?;
+        // Physics params initialized via linspace for symmetry breaking across heads.
+        // Each head gets a distinct frequency/damping/phase for diversity from init.
+        //
+        // We use Var::from_vec (not VarBuilder) because VarBuilder::get_with_hints
+        // only supports scalar Init values, not custom per-element vectors.
+        // These Vars are tracked for autograd; the optimizer receives them via
+        // physics_params(). Checkpoint save/restore handles them through export.
 
-        // alpha_raw: mean ~-1.0, softplus(-1.0) ≈ 0.31 (moderate damping)
-        let alpha_raw = vb.get_with_hints(
-            n_heads,
-            "alpha_raw",
-            candle_nn::Init::Const(-1.0),
-        )?;
+        let device = vb.device();
 
-        // phi: mean phase ~pi/2
-        let phi = vb.get_with_hints(
-            n_heads,
-            "phi",
-            candle_nn::Init::Const(std::f32::consts::FRAC_PI_2 as f64),
-        )?;
+        // omega: linspace(0.3, 4.0) — frequency spread across heads
+        let omega_data: Vec<f32> = (0..n_heads)
+            .map(|i| {
+                if n_heads > 1 {
+                    0.3 + (4.0 - 0.3) * (i as f32) / (n_heads as f32 - 1.0)
+                } else {
+                    2.0
+                }
+            })
+            .collect();
+        let omega = candle_core::Var::from_vec(omega_data, n_heads, &device)?;
+
+        // alpha_raw: linspace(-3.0, 0.5) — softplus gives [0.04, 1.0] damping range
+        let alpha_data: Vec<f32> = (0..n_heads)
+            .map(|i| {
+                if n_heads > 1 {
+                    -3.0 + (0.5 - (-3.0)) * (i as f32) / (n_heads as f32 - 1.0)
+                } else {
+                    -1.0
+                }
+            })
+            .collect();
+        let alpha_raw = candle_core::Var::from_vec(alpha_data, n_heads, &device)?;
+
+        // phi: linspace(0, pi) — phase diversity across heads
+        let phi_data: Vec<f32> = (0..n_heads)
+            .map(|i| {
+                if n_heads > 1 {
+                    std::f32::consts::PI * (i as f32) / (n_heads as f32 - 1.0)
+                } else {
+                    std::f32::consts::FRAC_PI_2
+                }
+            })
+            .collect();
+        let phi = candle_core::Var::from_vec(phi_data, n_heads, &device)?;
 
         let coupling_logits = if use_head_coupling {
             // Initialize as zeros — softmax of zeros = uniform coupling.
@@ -81,9 +104,9 @@ impl WaveFieldAttentionTrain {
             scatter_proj,
             gate_proj,
             out_proj,
-            omega,
-            alpha_raw,
-            phi,
+            omega: omega.as_tensor().clone(),
+            alpha_raw: alpha_raw.as_tensor().clone(),
+            phi: phi.as_tensor().clone(),
             coupling_logits,
             n_heads,
             head_dim,
@@ -121,14 +144,16 @@ impl WaveFieldAttentionTrain {
         };
 
         // Build scatter matrix: [seq_len, field_size]
+        // Clamp positions to [0, field_size - 1] to prevent OOB when seq_len > max_seq_len
+        let max_pos = (field_size - 1) as f32;
         let positions: Vec<f32> = (0..seq_len)
-            .map(|t| t as f32 * stride)
+            .map(|t| (t as f32 * stride).clamp(0.0, max_pos))
             .collect();
 
         let mut scatter_weights = vec![0.0f32; seq_len * field_size];
         for t in 0..seq_len {
             let pos = positions[t];
-            let idx_lo = pos.floor() as usize;
+            let idx_lo = (pos.floor() as usize).min(field_size - 1);
             let idx_hi = (idx_lo + 1).min(field_size - 1);
             let frac = pos - idx_lo as f32;
             scatter_weights[t * field_size + idx_lo] += 1.0 - frac;
@@ -185,14 +210,16 @@ impl WaveFieldAttentionTrain {
         let mut convolved_heads = Vec::with_capacity(n_heads);
         for h in 0..n_heads {
             let field_h = fields.narrow(1, h, 1)?.squeeze(1)?; // [batch, field_size, head_dim]
-            let kernel_h = kernel.narrow(0, h, 1)?.squeeze(0)?; // [field_size]
+            let kernel_h = kernel.narrow(0, h, 1)?.squeeze(0)?.contiguous()?; // [field_size]
 
             let mut conv_channels = Vec::with_capacity(head_dim);
             for d in 0..head_dim {
-                let signal = field_h.narrow(2, d, 1)?.squeeze(2)?; // [batch, field_size]
+                // .contiguous() required: narrow().squeeze() creates strided views,
+                // but FFT CustomOp accesses raw CpuStorage with linear offsets.
+                let signal = field_h.narrow(2, d, 1)?.squeeze(2)?.contiguous()?; // [batch, field_size]
                 let mut batch_results = Vec::with_capacity(batch);
                 for b in 0..batch {
-                    let sig_b = signal.narrow(0, b, 1)?.squeeze(0)?; // [field_size]
+                    let sig_b = signal.narrow(0, b, 1)?.squeeze(0)?.contiguous()?; // [field_size]
                     let conv = wave_fft::candle_fft::fft_convolve_with_grad(
                         &sig_b,
                         &kernel_h,
@@ -429,8 +456,14 @@ mod tests {
 
         let _grads = loss.backward()?;
 
+        // VarMap has: 3 projection weights + 1 coupling_logits = 4
+        // Physics params (omega, alpha_raw, phi) are standalone Vars, not in VarMap
         let vars = varmap.all_vars();
-        assert!(vars.len() >= 6, "should have at least 6 vars (3 projections + 3 physics), got {}", vars.len());
+        assert!(vars.len() >= 4, "should have at least 4 vars (3 projections + coupling), got {}", vars.len());
+
+        // Physics params should exist and have gradients
+        let physics = wf.physics_params();
+        assert!(physics.len() >= 3, "should have at least 3 physics params, got {}", physics.len());
 
         Ok(())
     }

@@ -68,8 +68,15 @@ impl NanochatTrainModel {
                 (Vec::new(), before, Some(shared), after)
             } else {
                 // Standard architecture: n_layers blocks
+                // Check each layer for wave field vs standard attention
                 let blocks = (0..config.n_layers)
-                    .map(|i| TransformerBlockTrain::new(config, vb.pp(format!("blocks.{i}"))))
+                    .map(|i| {
+                        if config.is_wavefield_layer(i) {
+                            TransformerBlockTrain::new_wavefield(config, vb.pp(format!("blocks.{i}")))
+                        } else {
+                            TransformerBlockTrain::new(config, vb.pp(format!("blocks.{i}")))
+                        }
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
                 (blocks, Vec::new(), None, Vec::new())
