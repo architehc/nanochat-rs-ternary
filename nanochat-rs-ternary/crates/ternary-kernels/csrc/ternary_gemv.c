@@ -723,6 +723,24 @@ static KernelType selected_kernel = KERN_SCALAR;
 static volatile int gemv_initialized = 0;
 
 static void select_kernel(void) {
+    // TERNARY_FORCE_KERNEL env var overrides auto-detection.
+    // Valid values: vpermw, vpermb, avx2, ssse3, neon, lut, scalar
+    const char *force = getenv("TERNARY_FORCE_KERNEL");
+    if (force) {
+#if ARCH_X86_64
+        if (strcmp(force, "vpermw") == 0 && cpu_has_avx512bw)  { selected_kernel = KERN_VPERMW; return; }
+        if (strcmp(force, "vpermb") == 0 && cpu_has_avx512vbmi) { selected_kernel = KERN_VPERMB; return; }
+        if (strcmp(force, "avx2")   == 0 && cpu_has_avx2)       { selected_kernel = KERN_AVX2;   return; }
+        if (strcmp(force, "ssse3")  == 0 && cpu_has_ssse3)      { selected_kernel = KERN_SSSE3;  return; }
+#endif
+#if ARCH_ARM64
+        if (strcmp(force, "neon")   == 0 && cpu_has_neon)        { selected_kernel = KERN_NEON;   return; }
+#endif
+        if (strcmp(force, "lut")    == 0) { selected_kernel = KERN_LUT;    return; }
+        if (strcmp(force, "scalar") == 0) { selected_kernel = KERN_SCALAR; return; }
+        fprintf(stderr, "WARN: TERNARY_FORCE_KERNEL='%s' not available, using auto-detect\n", force);
+    }
+
 #if ARCH_X86_64
     if (cpu_has_avx512bw)   { selected_kernel = KERN_VPERMW; return; }
     if (cpu_has_avx512vbmi) { selected_kernel = KERN_VPERMB; return; }
