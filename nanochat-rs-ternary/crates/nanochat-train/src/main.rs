@@ -25,6 +25,12 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-125m-wave" | "nano_125m_wave" | "nano-125m-wavefield" | "nano_125m_wavefield" => {
             Some(TrainConfig::nano_125m_wavefield())
         }
+        "d20-wave-fwht" | "d20_wave_fwht" | "d20-wavefield-fwht" | "d20_wavefield_fwht" => {
+            Some(TrainConfig::d20_wavefield_fwht())
+        }
+        "nano-125m-wave-fwht" | "nano_125m_wave_fwht" => {
+            Some(TrainConfig::nano_125m_wavefield_fwht())
+        }
         "nano-125m-hybrid" | "nano_125m_hybrid" => Some(TrainConfig::nano_125m_hybrid()),
         _ => None,
     }

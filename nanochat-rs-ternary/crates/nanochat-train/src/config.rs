@@ -986,6 +986,20 @@ impl TrainConfig {
         cfg
     }
 
+    /// d20 with wave field attention using FWHT (integer-only) convolution.
+    pub fn d20_wavefield_fwht() -> Self {
+        let mut cfg = Self::d20_wavefield();
+        cfg.wavefield_convolve_mode = Some("fwht".to_string());
+        cfg
+    }
+
+    /// 125M with wave field attention using FWHT (integer-only) convolution.
+    pub fn nano_125m_wavefield_fwht() -> Self {
+        let mut cfg = Self::nano_125m_wavefield();
+        cfg.wavefield_convolve_mode = Some("fwht".to_string());
+        cfg
+    }
+
     /// 125M hybrid: 50% standard attention + 50% wave field (interleaved).
     pub fn nano_125m_hybrid() -> Self {
         let mut cfg = Self::nano_125m();

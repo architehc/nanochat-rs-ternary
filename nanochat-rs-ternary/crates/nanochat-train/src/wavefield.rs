@@ -212,26 +212,32 @@ impl WaveFieldAttentionTrain {
             let field_t = field_h.transpose(1, 2)?.contiguous()?; // [batch, head_dim, field_size]
             let field_flat = field_t.reshape((batch * head_dim, field_size))?;
 
-            // Dispatch convolution based on mode
-            let conv_flat = match self.convolve_mode {
+            // Dispatch convolution based on mode.
+            // CustomOp2 only has cpu_fwd, so move to CPU if on GPU and back after.
+            let orig_device = field_flat.device().clone();
+            let field_cpu = field_flat.to_device(&candle_core::Device::Cpu)?;
+            let kernel_cpu = kernel_h.to_device(&candle_core::Device::Cpu)?;
+
+            let conv_cpu = match self.convolve_mode {
                 ConvolveMode::Fft => {
                     wave_fft::candle_fft::fft_convolve_with_grad(
-                        &field_flat, &kernel_h, field_size,
+                        &field_cpu, &kernel_cpu, field_size,
                     )?
                 }
                 ConvolveMode::Fwht => {
                     wave_fft::candle_fwht::fwht_convolve_with_grad(
-                        &field_flat, &kernel_h, field_size,
+                        &field_cpu, &kernel_cpu, field_size,
                     )?
                 }
                 ConvolveMode::Haar => {
                     let levels = self.haar_levels
                         .unwrap_or_else(|| (field_size as f64).log2() as usize);
                     wave_fft::candle_haar::haar_convolve_with_grad(
-                        &field_flat, &kernel_h, field_size, levels,
+                        &field_cpu, &kernel_cpu, field_size, levels,
                     )?
                 }
-            }; // [batch*head_dim, field_size]
+            };
+            let conv_flat = conv_cpu.to_device(&orig_device)?; // [batch*head_dim, field_size]
 
             // Reshape back: [batch, head_dim, field_size] -> transpose -> [batch, field_size, head_dim]
             let conv_h = conv_flat
@@ -244,7 +250,12 @@ impl WaveFieldAttentionTrain {
 
         // 6. Optional head coupling
         let convolved = if let Some(ref logits) = self.coupling_logits {
-            let weights = candle_nn::ops::softmax(logits, D::Minus1)?;
+            // Manual softmax: avoids candle_nn CustomOp which may lack CUDA
+            let max_logits = logits.max(D::Minus1)?.unsqueeze(D::Minus1)?;
+            let shifted = logits.broadcast_sub(&max_logits)?;
+            let exp_shifted = shifted.exp()?;
+            let sum_exp = exp_shifted.sum(D::Minus1)?.unsqueeze(D::Minus1)?;
+            let weights = exp_shifted.broadcast_div(&sum_exp)?;
             let c_flat = convolved.reshape((batch, n_heads, field_size * head_dim))?;
             let weights_exp = weights
                 .unsqueeze(0)?
@@ -269,7 +280,8 @@ impl WaveFieldAttentionTrain {
 
         // 8. Content gate: sigmoid(gate_proj(x)) * gathered
         let gate = self.gate_proj.forward(x)?; // [batch, seq_len, n_heads]
-        let gate = candle_nn::ops::sigmoid(&gate)?;
+        // Manual sigmoid: 1 / (1 + exp(-x)) — avoids candle_nn CustomOp which lacks CUDA
+        let gate = gate.neg()?.exp()?.affine(1.0, 1.0)?.recip()?;
         let gate = gate
             .unsqueeze(3)?
             .broadcast_as((batch, seq_len, n_heads, head_dim))?
