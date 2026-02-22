@@ -41,51 +41,26 @@ impl WaveFieldAttentionTrain {
         let gate_proj = BitLinearSTE::new(dim, n_heads, group_size, vb.pp("gate"))?;
         let out_proj = BitLinearSTE::new(total_proj, dim, group_size, vb.pp("out"))?;
 
-        // Physics params initialized via linspace for symmetry breaking across heads.
-        // Each head gets a distinct frequency/damping/phase for diversity from init.
-        //
-        // We use Var::from_vec (not VarBuilder) because VarBuilder::get_with_hints
-        // only supports scalar Init values, not custom per-element vectors.
-        // These Vars are tracked for autograd; the optimizer receives them via
-        // physics_params(). Checkpoint save/restore handles them through export.
+        // Physics params created via VarBuilder so they're tracked in VarMap
+        // (required for optimizer management and checkpoint save/restore).
+        // Uniform init provides symmetry breaking across heads.
+        let omega = vb.get_with_hints(
+            n_heads,
+            "omega",
+            candle_nn::Init::Uniform { lo: 0.3, up: 4.0 },
+        )?;
 
-        let device = vb.device();
+        let alpha_raw = vb.get_with_hints(
+            n_heads,
+            "alpha_raw",
+            candle_nn::Init::Uniform { lo: -3.0, up: 0.5 },
+        )?;
 
-        // omega: linspace(0.3, 4.0) — frequency spread across heads
-        let omega_data: Vec<f32> = (0..n_heads)
-            .map(|i| {
-                if n_heads > 1 {
-                    0.3 + (4.0 - 0.3) * (i as f32) / (n_heads as f32 - 1.0)
-                } else {
-                    2.0
-                }
-            })
-            .collect();
-        let omega = candle_core::Var::from_vec(omega_data, n_heads, &device)?;
-
-        // alpha_raw: linspace(-3.0, 0.5) — softplus gives [0.04, 1.0] damping range
-        let alpha_data: Vec<f32> = (0..n_heads)
-            .map(|i| {
-                if n_heads > 1 {
-                    -3.0 + (0.5 - (-3.0)) * (i as f32) / (n_heads as f32 - 1.0)
-                } else {
-                    -1.0
-                }
-            })
-            .collect();
-        let alpha_raw = candle_core::Var::from_vec(alpha_data, n_heads, &device)?;
-
-        // phi: linspace(0, pi) — phase diversity across heads
-        let phi_data: Vec<f32> = (0..n_heads)
-            .map(|i| {
-                if n_heads > 1 {
-                    std::f32::consts::PI * (i as f32) / (n_heads as f32 - 1.0)
-                } else {
-                    std::f32::consts::FRAC_PI_2
-                }
-            })
-            .collect();
-        let phi = candle_core::Var::from_vec(phi_data, n_heads, &device)?;
+        let phi = vb.get_with_hints(
+            n_heads,
+            "phi",
+            candle_nn::Init::Uniform { lo: 0.0, up: std::f64::consts::PI },
+        )?;
 
         let coupling_logits = if use_head_coupling {
             // Initialize as zeros — softmax of zeros = uniform coupling.
@@ -104,9 +79,9 @@ impl WaveFieldAttentionTrain {
             scatter_proj,
             gate_proj,
             out_proj,
-            omega: omega.as_tensor().clone(),
-            alpha_raw: alpha_raw.as_tensor().clone(),
-            phi: phi.as_tensor().clone(),
+            omega,
+            alpha_raw,
+            phi,
             coupling_logits,
             n_heads,
             head_dim,
@@ -206,31 +181,29 @@ impl WaveFieldAttentionTrain {
         // 5. FFT convolution per head
         let fields = fields.reshape((batch, n_heads, field_size, head_dim))?;
 
-        // For FFT convolution with autograd, process per-head per-channel per-batch
+        // FFT convolution: batch all channels per head into one op.
+        // The CustomOp supports [N, field_size] signals with broadcast [field_size] kernel.
         let mut convolved_heads = Vec::with_capacity(n_heads);
         for h in 0..n_heads {
             let field_h = fields.narrow(1, h, 1)?.squeeze(1)?; // [batch, field_size, head_dim]
             let kernel_h = kernel.narrow(0, h, 1)?.squeeze(0)?.contiguous()?; // [field_size]
 
-            let mut conv_channels = Vec::with_capacity(head_dim);
-            for d in 0..head_dim {
-                // .contiguous() required: narrow().squeeze() creates strided views,
-                // but FFT CustomOp accesses raw CpuStorage with linear offsets.
-                let signal = field_h.narrow(2, d, 1)?.squeeze(2)?.contiguous()?; // [batch, field_size]
-                let mut batch_results = Vec::with_capacity(batch);
-                for b in 0..batch {
-                    let sig_b = signal.narrow(0, b, 1)?.squeeze(0)?.contiguous()?; // [field_size]
-                    let conv = wave_fft::candle_fft::fft_convolve_with_grad(
-                        &sig_b,
-                        &kernel_h,
-                        field_size,
-                    )?;
-                    batch_results.push(conv.unsqueeze(0)?);
-                }
-                let batched = Tensor::cat(&batch_results, 0)?; // [batch, field_size]
-                conv_channels.push(batched.unsqueeze(2)?); // [batch, field_size, 1]
-            }
-            let conv_h = Tensor::cat(&conv_channels, 2)?; // [batch, field_size, head_dim]
+            // Transpose to [batch, head_dim, field_size], flatten to [batch*head_dim, field_size]
+            let field_t = field_h.transpose(1, 2)?.contiguous()?; // [batch, head_dim, field_size]
+            let field_flat = field_t.reshape((batch * head_dim, field_size))?;
+
+            // Single batched FFT call (kernel broadcast to all batch*head_dim signals)
+            let conv_flat = wave_fft::candle_fft::fft_convolve_with_grad(
+                &field_flat,
+                &kernel_h,
+                field_size,
+            )?; // [batch*head_dim, field_size]
+
+            // Reshape back: [batch, head_dim, field_size] -> transpose -> [batch, field_size, head_dim]
+            let conv_h = conv_flat
+                .reshape((batch, head_dim, field_size))?
+                .transpose(1, 2)?
+                .contiguous()?; // [batch, field_size, head_dim]
             convolved_heads.push(conv_h.unsqueeze(1)?); // [batch, 1, field_size, head_dim]
         }
         let convolved = Tensor::cat(&convolved_heads, 1)?; // [batch, n_heads, field_size, head_dim]
@@ -293,14 +266,25 @@ impl WaveFieldAttentionTrain {
     }
 }
 
-/// Softplus activation: log(1 + exp(x)), ensuring positive output.
+/// Numerically stable softplus: log(1 + exp(x)).
+///
+/// For large x (>20), exp(x) overflows f32. But softplus(x) ≈ x when x >> 0,
+/// so we use a piecewise approach: softplus(x) = x + log(1 + exp(-|x|)).
+/// This avoids overflow since exp(-|x|) ≤ 1 for all x.
 fn softplus(x: &Tensor) -> Result<Tensor> {
-    // softplus(x) = log(1 + exp(x))
-    // Implemented as log(1 + exp(x)) = log(exp(0) + exp(x)) via logsumexp-like approach
+    // softplus(x) = x + log(1 + exp(-|x|))  [numerically stable for all x]
+    //
+    // Derivation: log(1 + exp(x)) = log(exp(x)(exp(-x) + 1))
+    //           = x + log(1 + exp(-x))
+    // For x < 0: use original formula log(1 + exp(x)) since exp(x) < 1
+    // Combined: max(x, 0) + log(1 + exp(-|x|))
+    let abs_x = x.abs()?;
+    let neg_abs = abs_x.neg()?;
+    let exp_neg = neg_abs.exp()?;
     let ones = x.ones_like()?;
-    let exp_x = x.exp()?;
-    let sum = (ones + exp_x)?;
-    sum.log()
+    let log_term = (ones + exp_neg)?.log()?;
+    let relu_x = x.relu()?;
+    relu_x + log_term
 }
 
 #[cfg(test)]
@@ -456,14 +440,9 @@ mod tests {
 
         let _grads = loss.backward()?;
 
-        // VarMap has: 3 projection weights + 1 coupling_logits = 4
-        // Physics params (omega, alpha_raw, phi) are standalone Vars, not in VarMap
+        // VarMap has: 3 projection weights + 1 coupling_logits + 3 physics (omega, alpha_raw, phi) = 7
         let vars = varmap.all_vars();
-        assert!(vars.len() >= 4, "should have at least 4 vars (3 projections + coupling), got {}", vars.len());
-
-        // Physics params should exist and have gradients
-        let physics = wf.physics_params();
-        assert!(physics.len() >= 3, "should have at least 3 physics params, got {}", physics.len());
+        assert_eq!(vars.len(), 7, "should have 7 vars (3 projections + coupling + 3 physics), got {}", vars.len());
 
         Ok(())
     }

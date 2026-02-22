@@ -55,14 +55,28 @@ impl NanochatTrainModel {
         let (blocks, local_blocks_before, shared_loop_block, local_blocks_after) =
             if let Some(loop_cfg) = &config.loop_config {
                 // LoopLM architecture: local_before + shared_loop + local_after
+                // Respect wavefield config for local layers (shared loop block stays standard)
                 let before: Vec<_> = (0..loop_cfg.local_before)
-                    .map(|i| TransformerBlockTrain::new(config, vb.pp(format!("local_before.{i}"))))
+                    .map(|i| {
+                        if config.is_wavefield_layer(i) {
+                            TransformerBlockTrain::new_wavefield(config, vb.pp(format!("local_before.{i}")))
+                        } else {
+                            TransformerBlockTrain::new(config, vb.pp(format!("local_before.{i}")))
+                        }
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
                 let shared = SharedLoopBlock::new(config, vb.pp("shared_loop"))?;
 
+                let after_offset = loop_cfg.local_before + 1; // +1 for shared block
                 let after: Vec<_> = (0..loop_cfg.local_after)
-                    .map(|i| TransformerBlockTrain::new(config, vb.pp(format!("local_after.{i}"))))
+                    .map(|i| {
+                        if config.is_wavefield_layer(after_offset + i) {
+                            TransformerBlockTrain::new_wavefield(config, vb.pp(format!("local_after.{i}")))
+                        } else {
+                            TransformerBlockTrain::new(config, vb.pp(format!("local_after.{i}")))
+                        }
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
                 (Vec::new(), before, Some(shared), after)

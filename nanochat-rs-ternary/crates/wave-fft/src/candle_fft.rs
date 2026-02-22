@@ -181,11 +181,20 @@ impl candle_core::CustomOp2 for FftConvolveOp {
 
         // d/d_signal = IFFT(conj(FFT(kernel)) * FFT(grad_output))[:n]
         // = correlate(kernel, grad_output)
-        let grad_signal = fft_correlate_tensor(arg2, grad_res, n)?;
+        let mut grad_signal = fft_correlate_tensor(arg2, grad_res, n)?;
 
         // d/d_kernel = IFFT(conj(FFT(signal)) * FFT(grad_output))[:n]
         // = correlate(signal, grad_output)
-        let grad_kernel = fft_correlate_tensor(arg1, grad_res, n)?;
+        let mut grad_kernel = fft_correlate_tensor(arg1, grad_res, n)?;
+
+        // When inputs were broadcast (e.g., kernel [n] with signal [batch, n]),
+        // the gradient must be summed over broadcast dimensions to match input shape.
+        while grad_signal.dims().len() > arg1.dims().len() {
+            grad_signal = grad_signal.sum(0)?;
+        }
+        while grad_kernel.dims().len() > arg2.dims().len() {
+            grad_kernel = grad_kernel.sum(0)?;
+        }
 
         Ok((Some(grad_signal), Some(grad_kernel)))
     }

@@ -253,8 +253,11 @@ impl NanochatModel {
                 let alpha_raw = Self::load_f32_vec(&gguf, &format!("{prefix}.wavefield.alpha_raw"))?;
                 let phi = Self::load_f32_vec(&gguf, &format!("{prefix}.wavefield.phi"))?;
 
-                // Convert alpha_raw through softplus to get positive damping
-                let alpha: Vec<f32> = alpha_raw.iter().map(|&a| (1.0 + a.exp()).ln()).collect();
+                // Convert alpha_raw through softplus to get positive damping.
+                // Numerically stable: softplus(x) = max(x,0) + log(1 + exp(-|x|))
+                let alpha: Vec<f32> = alpha_raw.iter().map(|&a| {
+                    a.max(0.0) + (1.0 + (-a.abs()).exp()).ln()
+                }).collect();
 
                 let physics = WavePhysicsParams { omega, alpha, phi };
                 let kernel_cache = WaveKernelCache::from_physics(&physics, field_size);
@@ -883,13 +886,32 @@ impl NanochatModel {
     }
 
     fn expected_tensor_names(config: &ModelConfig) -> HashSet<String> {
-        fn add_dense_block(names: &mut HashSet<String>, prefix: &str, is_deltanet: bool) {
-            names.insert(format!("{prefix}.attention.wq.weight"));
-            names.insert(format!("{prefix}.attention.wk.weight"));
-            names.insert(format!("{prefix}.attention.wv.weight"));
-            names.insert(format!("{prefix}.attention.wo.weight"));
-            if is_deltanet {
-                names.insert(format!("{prefix}.attention.w_beta.weight"));
+        fn add_dense_block(
+            names: &mut HashSet<String>,
+            prefix: &str,
+            is_deltanet: bool,
+            is_wavefield: bool,
+            wavefield_has_coupling: bool,
+        ) {
+            if is_wavefield {
+                // Wave field attention: ternary projections + physics params
+                names.insert(format!("{prefix}.wavefield.scatter.weight"));
+                names.insert(format!("{prefix}.wavefield.gate.weight"));
+                names.insert(format!("{prefix}.wavefield.out.weight"));
+                names.insert(format!("{prefix}.wavefield.omega"));
+                names.insert(format!("{prefix}.wavefield.alpha_raw"));
+                names.insert(format!("{prefix}.wavefield.phi"));
+                if wavefield_has_coupling {
+                    names.insert(format!("{prefix}.wavefield.coupling_logits"));
+                }
+            } else {
+                names.insert(format!("{prefix}.attention.wq.weight"));
+                names.insert(format!("{prefix}.attention.wk.weight"));
+                names.insert(format!("{prefix}.attention.wv.weight"));
+                names.insert(format!("{prefix}.attention.wo.weight"));
+                if is_deltanet {
+                    names.insert(format!("{prefix}.attention.w_beta.weight"));
+                }
             }
             names.insert(format!("{prefix}.norm_attn.weight"));
             names.insert(format!("{prefix}.norm_ffn.weight"));
@@ -922,11 +944,18 @@ impl NanochatModel {
             names.insert("lm_head.weight".to_string());
         }
 
+        let wf_coupling = config.wavefield_config.as_ref().map_or(false, |c| c.use_head_coupling);
+
         if let Some(loop_cfg) = &config.loop_config {
             for i in 0..loop_cfg.local_before {
                 let layer_idx = i;
                 let prefix = format!("local_before.{i}");
-                add_dense_block(&mut names, &prefix, config.is_deltanet_layer(layer_idx));
+                add_dense_block(
+                    &mut names, &prefix,
+                    config.is_deltanet_layer(layer_idx),
+                    config.is_wavefield_layer(layer_idx),
+                    wf_coupling,
+                );
                 add_ffn_tensors(&mut names, &prefix, config);
             }
 
@@ -946,13 +975,23 @@ impl NanochatModel {
             for i in 0..loop_cfg.local_after {
                 let layer_idx = loop_cfg.local_before + 1 + i;
                 let prefix = format!("local_after.{i}");
-                add_dense_block(&mut names, &prefix, config.is_deltanet_layer(layer_idx));
+                add_dense_block(
+                    &mut names, &prefix,
+                    config.is_deltanet_layer(layer_idx),
+                    config.is_wavefield_layer(layer_idx),
+                    wf_coupling,
+                );
                 add_ffn_tensors(&mut names, &prefix, config);
             }
         } else {
             for i in 0..config.n_layers {
                 let prefix = format!("blocks.{i}");
-                add_dense_block(&mut names, &prefix, config.is_deltanet_layer(i));
+                add_dense_block(
+                    &mut names, &prefix,
+                    config.is_deltanet_layer(i),
+                    config.is_wavefield_layer(i),
+                    wf_coupling,
+                );
                 add_ffn_tensors(&mut names, &prefix, config);
             }
         }
@@ -1016,7 +1055,10 @@ impl NanochatModel {
     }
 
     /// Load a raw f32 vector from GGUF tensor data.
+    ///
+    /// Validates that the tensor dtype is F32 (0) and data length is a multiple of 4.
     fn load_f32_vec(gguf: &GgufFile, name: &str) -> io::Result<Vec<f32>> {
+        use ternary_core::gguf::GgufType;
         let tensor = gguf
             .tensors
             .iter()
@@ -1027,7 +1069,19 @@ impl NanochatModel {
                     format!("tensor '{name}' not found"),
                 )
             })?;
+        if tensor.dtype != GgufType::F32.to_u32() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("tensor '{name}' has dtype {} (expected F32 = {})", tensor.dtype, GgufType::F32.to_u32()),
+            ));
+        }
         let data = gguf.tensor_data(tensor)?;
+        if data.len() % 4 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("tensor '{name}' data length {} is not a multiple of 4", data.len()),
+            ));
+        }
         Ok(data
             .chunks_exact(4)
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
