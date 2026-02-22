@@ -1,7 +1,13 @@
-//! FWHT-based convolution for wave field attention (inference path).
+//! FWHT-domain filtering for wave field attention (inference path).
 //!
-//! Uses only additions and subtractions — integer-only compatible.
-//! FWHT is self-inverse (up to 1/N scaling), so backward = forward.
+//! **NOT equivalent to FFT circular convolution.** This computes pointwise
+//! multiplication in the Walsh-Hadamard domain: IFWHT(FWHT(signal) * FWHT(kernel)) / N.
+//! This is a different linear mixing operation than FFT convolution — it applies
+//! the Walsh-Hadamard basis functions (±1 patterns) rather than sinusoidal ones.
+//! The model learns to use whichever domain filtering produces useful features.
+//!
+//! Uses only additions and subtractions in transform stages — integer-only compatible.
+//! FWHT is self-inverse (up to 1/N scaling).
 
 use ternary_kernels::fwht;
 

@@ -1,5 +1,9 @@
 //! Safe Rust wrappers for FWHT (Fast Walsh-Hadamard Transform) C kernels.
 //!
+//! **NOT circular convolution.** FWHT "convolution" is pointwise multiplication
+//! in the Walsh-Hadamard domain: IFWHT(FWHT(signal) * FWHT(kernel)) / N.
+//! This is a different linear mixing operation than FFT convolution.
+//!
 //! FWHT uses only additions and subtractions — integer-only compatible.
 //! Self-inverse (up to 1/N scaling).
 
@@ -8,6 +12,11 @@ extern "C" {
     fn fwht_f32(data: *mut f32, len: i32);
     fn fwht_convolve_i32(signal: *const i32, kernel: *const i32, output: *mut i32, len: i32);
     fn fwht_convolve_f32(signal: *const f32, kernel: *const f32, output: *mut f32, len: i32);
+    #[link_name = "fwht_convolve_f32_buf"]
+    fn fwht_convolve_f32_buf_ffi(
+        signal: *const f32, kernel: *const f32, output: *mut f32, len: i32,
+        scratch1: *mut f32, scratch2: *mut f32,
+    );
 }
 
 /// In-place FWHT on i32 data. Length must be a power of 2.
@@ -40,14 +49,38 @@ pub fn fwht_convolve_i32_buf(signal: &[i32], kernel: &[i32], output: &mut [i32])
     unsafe { fwht_convolve_i32(signal.as_ptr(), kernel.as_ptr(), output.as_mut_ptr(), len as i32) }
 }
 
-/// FWHT convolution of two f32 signals. All slices must have the same power-of-2 length.
+/// FWHT domain filtering of two f32 signals. All slices must have the same power-of-2 length.
 /// Result: IFWHT(FWHT(signal) * FWHT(kernel)) / N
+///
+/// Note: allocates two internal scratch buffers per call. For hot paths, use
+/// `fwht_convolve_f32_with_scratch` to avoid repeated allocation.
 pub fn fwht_convolve_f32_buf(signal: &[f32], kernel: &[f32], output: &mut [f32]) {
     let len = signal.len();
     assert!(len.is_power_of_two(), "FWHT requires power-of-2 length, got {}", len);
     assert_eq!(kernel.len(), len, "kernel length mismatch");
     assert_eq!(output.len(), len, "output length mismatch");
     unsafe { fwht_convolve_f32(signal.as_ptr(), kernel.as_ptr(), output.as_mut_ptr(), len as i32) }
+}
+
+/// FWHT domain filtering with caller-provided scratch buffers (no internal malloc).
+///
+/// `scratch1` and `scratch2` must each be at least `signal.len()` elements.
+pub fn fwht_convolve_f32_with_scratch(
+    signal: &[f32], kernel: &[f32], output: &mut [f32],
+    scratch1: &mut [f32], scratch2: &mut [f32],
+) {
+    let len = signal.len();
+    assert!(len.is_power_of_two(), "FWHT requires power-of-2 length, got {}", len);
+    assert_eq!(kernel.len(), len, "kernel length mismatch");
+    assert_eq!(output.len(), len, "output length mismatch");
+    assert!(scratch1.len() >= len, "scratch1 too small");
+    assert!(scratch2.len() >= len, "scratch2 too small");
+    unsafe {
+        fwht_convolve_f32_buf_ffi(
+            signal.as_ptr(), kernel.as_ptr(), output.as_mut_ptr(), len as i32,
+            scratch1.as_mut_ptr(), scratch2.as_mut_ptr(),
+        )
+    }
 }
 
 #[cfg(test)]

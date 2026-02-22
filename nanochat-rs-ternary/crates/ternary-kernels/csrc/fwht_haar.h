@@ -40,3 +40,18 @@ void haar_convolve_i32(const int32_t *signal, const int32_t *kernel,
                        int32_t *output, int len, int levels);
 void haar_convolve_f32(const float *signal, const float *kernel,
                        float *output, int len, int levels);
+
+/* === Buffer-reuse variants (no internal malloc) === */
+
+/* FWHT convolution with caller-provided scratch buffers.
+ * scratch1 and scratch2 must each be at least len elements.
+ * output may NOT alias scratch1 or scratch2. */
+void fwht_convolve_f32_buf(const float *signal, const float *kernel,
+                           float *output, int len,
+                           float *scratch1, float *scratch2);
+
+/* Haar convolution with caller-provided scratch buffer.
+ * scratch must be at least len elements (used by forward/inverse levels). */
+void haar_convolve_f32_buf(const float *signal, const float *kernel,
+                           float *output, int len, int levels,
+                           float *scratch);

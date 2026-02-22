@@ -80,7 +80,14 @@ impl TransformerBlockTrain {
                 match config.wavefield_convolve_mode.as_deref() {
                     Some("fwht") => crate::wavefield::ConvolveMode::Fwht,
                     Some("haar") => crate::wavefield::ConvolveMode::Haar,
-                    _ => crate::wavefield::ConvolveMode::Fft,
+                    Some("fft") | None => crate::wavefield::ConvolveMode::Fft,
+                    Some(other) => {
+                        eprintln!(
+                            "WARNING: unknown wavefield_convolve_mode '{}', falling back to FFT",
+                            other
+                        );
+                        crate::wavefield::ConvolveMode::Fft
+                    }
                 },
                 config.wavefield_haar_levels,
                 vb.pp("wavefield"),

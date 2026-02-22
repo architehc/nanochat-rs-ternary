@@ -1,5 +1,9 @@
 //! Safe Rust wrappers for Haar DWT (Discrete Wavelet Transform) C kernels.
 //!
+//! **NOT circular convolution.** Haar "convolution" is pointwise multiplication
+//! in the Haar wavelet domain: IHaar(Haar(signal) * Haar(kernel)).
+//! This is a different linear mixing operation than FFT convolution.
+//!
 //! Haar DWT uses only additions and subtractions — integer-only compatible.
 //! Multi-level decomposition gives both local and global context.
 
@@ -21,6 +25,15 @@ extern "C" {
         output: *mut f32,
         len: i32,
         levels: i32,
+    );
+    #[link_name = "haar_convolve_f32_buf"]
+    fn haar_convolve_f32_buf_ffi(
+        signal: *const f32,
+        kernel: *const f32,
+        output: *mut f32,
+        len: i32,
+        levels: i32,
+        scratch: *mut f32,
     );
 }
 
@@ -87,6 +100,9 @@ pub fn haar_convolve_i32_buf(
 }
 
 /// Haar convolution of two f32 signals. All slices must have the same power-of-2 length.
+///
+/// Note: allocates an internal scratch buffer per call. For hot paths, use
+/// `haar_convolve_f32_with_scratch` to avoid repeated allocation.
 pub fn haar_convolve_f32_buf(
     signal: &[f32],
     kernel: &[f32],
@@ -104,6 +120,33 @@ pub fn haar_convolve_f32_buf(
             output.as_mut_ptr(),
             len as i32,
             levels as i32,
+        )
+    }
+}
+
+/// Haar convolution with caller-provided scratch buffer (no internal malloc).
+///
+/// `scratch` must be at least `signal.len()` elements.
+pub fn haar_convolve_f32_with_scratch(
+    signal: &[f32],
+    kernel: &[f32],
+    output: &mut [f32],
+    levels: usize,
+    scratch: &mut [f32],
+) {
+    let len = signal.len();
+    assert!(len.is_power_of_two(), "Haar requires power-of-2 length, got {}", len);
+    assert_eq!(kernel.len(), len, "kernel length mismatch");
+    assert_eq!(output.len(), len, "output length mismatch");
+    assert!(scratch.len() >= len, "scratch too small");
+    unsafe {
+        haar_convolve_f32_buf_ffi(
+            signal.as_ptr(),
+            kernel.as_ptr(),
+            output.as_mut_ptr(),
+            len as i32,
+            levels as i32,
+            scratch.as_mut_ptr(),
         )
     }
 }

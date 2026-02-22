@@ -325,6 +325,36 @@ impl TrainConfig {
                     self.dim, wf_heads
                 ));
             }
+            // FWHT and Haar require power-of-2 field_size
+            if let Some(ref mode) = self.wavefield_convolve_mode {
+                match mode.as_str() {
+                    "fwht" | "haar" => {
+                        if !self.wavefield_field_size.is_power_of_two() {
+                            errors.push(format!(
+                                "wavefield_field_size ({}) must be power of 2 for {} mode",
+                                self.wavefield_field_size, mode
+                            ));
+                        }
+                    }
+                    "fft" => {} // FFT pads to next power of 2 internally
+                    other => {
+                        errors.push(format!(
+                            "unknown wavefield_convolve_mode '{}'; expected 'fft', 'fwht', or 'haar'",
+                            other
+                        ));
+                    }
+                }
+            }
+            // Validate haar_levels if specified
+            if let Some(levels) = self.wavefield_haar_levels {
+                let max_levels = (self.wavefield_field_size as f64).log2() as usize;
+                if levels == 0 || levels > max_levels {
+                    errors.push(format!(
+                        "wavefield_haar_levels ({}) must be in [1, {}] for field_size {}",
+                        levels, max_levels, self.wavefield_field_size
+                    ));
+                }
+            }
         }
 
         // Log warnings

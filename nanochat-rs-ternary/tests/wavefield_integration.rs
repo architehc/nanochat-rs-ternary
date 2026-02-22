@@ -72,6 +72,92 @@ fn wavefield_causality_future_tokens_dont_affect_past() {
     }
 }
 
+/// Stronger causality test: process [1, 2, 3] vs [1, 99, 99] sequentially.
+/// Position 0 logits must be identical (no future token leakage in autoregressive mode).
+/// Position 1 logits must differ (different input token).
+#[test]
+fn wavefield_causality_multi_token_divergent_futures() {
+    let config = make_wavefield_config();
+
+    // Sequence A: [1, 2, 3]
+    let mut model_a = NanochatModel::new_random(config.clone());
+    let logits_a_0 = model_a.forward_token(1, 0);
+    let logits_a_1 = model_a.forward_token(2, 1);
+    let _logits_a_2 = model_a.forward_token(3, 2);
+
+    // Sequence B: [1, 99, 99]
+    let mut model_b = NanochatModel::new_random(config.clone());
+    let logits_b_0 = model_b.forward_token(1, 0);
+    let logits_b_1 = model_b.forward_token(99, 1);
+    let _logits_b_2 = model_b.forward_token(99, 2);
+
+    // Position 0: same token, no future info yet → must match exactly
+    for i in 0..logits_a_0.len() {
+        assert!(
+            (logits_a_0[i] - logits_b_0[i]).abs() < 1e-5,
+            "causality violation at pos=0, logit[{}]: {} vs {}",
+            i, logits_a_0[i], logits_b_0[i]
+        );
+    }
+
+    // Position 1: different tokens (2 vs 99) → logits should differ
+    let diff_norm: f32 = logits_a_1
+        .iter()
+        .zip(logits_b_1.iter())
+        .map(|(a, b)| (a - b).powi(2))
+        .sum::<f32>()
+        .sqrt();
+    assert!(
+        diff_norm > 1e-3,
+        "different tokens at pos=1 should produce different logits, diff_norm={}",
+        diff_norm
+    );
+}
+
+/// Causality test for FWHT mode with divergent future tokens.
+#[test]
+fn wavefield_fwht_causality_divergent_futures() {
+    let config = make_wavefield_config_mode(ConvolveMode::Fwht);
+
+    let mut model_a = NanochatModel::new_random(config.clone());
+    let logits_a_0 = model_a.forward_token(10, 0);
+    let _logits_a_1 = model_a.forward_token(20, 1);
+
+    let mut model_b = NanochatModel::new_random(config.clone());
+    let logits_b_0 = model_b.forward_token(10, 0);
+    let _logits_b_1 = model_b.forward_token(200, 1);
+
+    for i in 0..logits_a_0.len() {
+        assert!(
+            (logits_a_0[i] - logits_b_0[i]).abs() < 1e-5,
+            "FWHT causality violation at pos=0, logit[{}]: {} vs {}",
+            i, logits_a_0[i], logits_b_0[i]
+        );
+    }
+}
+
+/// Causality test for Haar mode with divergent future tokens.
+#[test]
+fn wavefield_haar_causality_divergent_futures() {
+    let config = make_wavefield_config_mode(ConvolveMode::Haar);
+
+    let mut model_a = NanochatModel::new_random(config.clone());
+    let logits_a_0 = model_a.forward_token(10, 0);
+    let _logits_a_1 = model_a.forward_token(20, 1);
+
+    let mut model_b = NanochatModel::new_random(config.clone());
+    let logits_b_0 = model_b.forward_token(10, 0);
+    let _logits_b_1 = model_b.forward_token(200, 1);
+
+    for i in 0..logits_a_0.len() {
+        assert!(
+            (logits_a_0[i] - logits_b_0[i]).abs() < 1e-5,
+            "Haar causality violation at pos=0, logit[{}]: {} vs {}",
+            i, logits_a_0[i], logits_b_0[i]
+        );
+    }
+}
+
 // ───────────────── Energy Monitoring ─────────────────
 
 #[test]

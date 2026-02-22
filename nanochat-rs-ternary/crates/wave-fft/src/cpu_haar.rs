@@ -1,7 +1,12 @@
-//! Haar DWT-based convolution for wave field attention (inference path).
+//! Haar-domain filtering for wave field attention (inference path).
 //!
-//! Multi-scale, naturally causal, localized. Uses only additions and subtractions.
-//! Better fit for WaveField physics (damped oscillations are localized).
+//! **NOT equivalent to FFT circular convolution.** This computes pointwise
+//! multiplication in the Haar wavelet domain: IHaar(Haar(signal) * Haar(kernel)).
+//! This is a different linear mixing operation than FFT convolution — it applies
+//! multi-scale wavelet coefficients rather than frequency-domain filtering.
+//! The model learns to use whichever domain filtering produces useful features.
+//!
+//! Multi-scale, localized. Uses only additions and subtractions in transform stages.
 
 use ternary_kernels::haar;
 

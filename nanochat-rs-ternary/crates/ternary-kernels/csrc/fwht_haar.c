@@ -245,18 +245,17 @@ void fwht_convolve_i32(const int32_t *signal, const int32_t *kernel,
     free(ker_t);
 }
 
-void fwht_convolve_f32(const float *signal, const float *kernel,
-                       float *output, int len) {
-    float *sig_t = (float *)malloc(len * sizeof(float));
-    float *ker_t = (float *)malloc(len * sizeof(float));
-    memcpy(sig_t, signal, len * sizeof(float));
-    memcpy(ker_t, kernel, len * sizeof(float));
+void fwht_convolve_f32_buf(const float *signal, const float *kernel,
+                           float *output, int len,
+                           float *scratch1, float *scratch2) {
+    memcpy(scratch1, signal, len * sizeof(float));
+    memcpy(scratch2, kernel, len * sizeof(float));
 
-    fwht_f32(sig_t, len);
-    fwht_f32(ker_t, len);
+    fwht_f32(scratch1, len);
+    fwht_f32(scratch2, len);
 
     for (int i = 0; i < len; i++) {
-        output[i] = sig_t[i] * ker_t[i];
+        output[i] = scratch1[i] * scratch2[i];
     }
 
     fwht_f32(output, len);
@@ -265,6 +264,14 @@ void fwht_convolve_f32(const float *signal, const float *kernel,
     for (int i = 0; i < len; i++) {
         output[i] *= inv_n;
     }
+}
+
+void fwht_convolve_f32(const float *signal, const float *kernel,
+                       float *output, int len) {
+    float *sig_t = (float *)malloc(len * sizeof(float));
+    float *ker_t = (float *)malloc(len * sizeof(float));
+
+    fwht_convolve_f32_buf(signal, kernel, output, len, sig_t, ker_t);
 
     free(sig_t);
     free(ker_t);
@@ -274,53 +281,69 @@ void fwht_convolve_f32(const float *signal, const float *kernel,
  *  Haar DWT — Discrete Haar Wavelet Transform
  * ============================================================ */
 
-/* Scalar forward Haar DWT (one level): pairs [a, b] -> [a+b, a-b] */
-static void haar_forward_one_level_i32(int32_t *data, int n) {
-    int32_t *tmp = (int32_t *)malloc(n * sizeof(int32_t));
+/* Scalar forward Haar DWT (one level): pairs [a, b] -> [a+b, a-b]
+ * tmp must be at least n elements. */
+static void haar_forward_one_level_i32_scratch(int32_t *data, int n, int32_t *tmp) {
     int half = n / 2;
     for (int i = 0; i < half; i++) {
         tmp[i]        = data[2 * i] + data[2 * i + 1]; /* low (approximation) */
         tmp[half + i] = data[2 * i] - data[2 * i + 1]; /* high (detail) */
     }
     memcpy(data, tmp, n * sizeof(int32_t));
+}
+
+static void haar_forward_one_level_i32(int32_t *data, int n) {
+    int32_t *tmp = (int32_t *)malloc(n * sizeof(int32_t));
+    haar_forward_one_level_i32_scratch(data, n, tmp);
     free(tmp);
 }
 
-static void haar_forward_one_level_f32(float *data, int n) {
-    float *tmp = (float *)malloc(n * sizeof(float));
+/* tmp must be at least n elements. */
+static void haar_forward_one_level_f32_scratch(float *data, int n, float *tmp) {
     int half = n / 2;
     for (int i = 0; i < half; i++) {
         tmp[i]        = data[2 * i] + data[2 * i + 1];
         tmp[half + i] = data[2 * i] - data[2 * i + 1];
     }
     memcpy(data, tmp, n * sizeof(float));
+}
+
+static void haar_forward_one_level_f32(float *data, int n) {
+    float *tmp = (float *)malloc(n * sizeof(float));
+    haar_forward_one_level_f32_scratch(data, n, tmp);
     free(tmp);
 }
 
-/* Scalar inverse Haar DWT (one level): [low, high] -> interleaved pairs */
-static void haar_inverse_one_level_i32(int32_t *data, int n) {
-    int32_t *tmp = (int32_t *)malloc(n * sizeof(int32_t));
+/* Scalar inverse Haar DWT (one level): [low, high] -> interleaved pairs
+ * tmp must be at least n elements. */
+static void haar_inverse_one_level_i32_scratch(int32_t *data, int n, int32_t *tmp) {
     int half = n / 2;
     for (int i = 0; i < half; i++) {
-        /* low = data[i], high = data[half + i]
-         * Reconstruct: a = (low + high) / 2, b = (low - high) / 2
-         * But we didn't normalize forward, so:
-         * a = (low + high) / 2, b = (low - high) / 2 */
         tmp[2 * i]     = (data[i] + data[half + i]) / 2;
         tmp[2 * i + 1] = (data[i] - data[half + i]) / 2;
     }
     memcpy(data, tmp, n * sizeof(int32_t));
+}
+
+static void haar_inverse_one_level_i32(int32_t *data, int n) {
+    int32_t *tmp = (int32_t *)malloc(n * sizeof(int32_t));
+    haar_inverse_one_level_i32_scratch(data, n, tmp);
     free(tmp);
 }
 
-static void haar_inverse_one_level_f32(float *data, int n) {
-    float *tmp = (float *)malloc(n * sizeof(float));
+/* tmp must be at least n elements. */
+static void haar_inverse_one_level_f32_scratch(float *data, int n, float *tmp) {
     int half = n / 2;
     for (int i = 0; i < half; i++) {
         tmp[2 * i]     = (data[i] + data[half + i]) * 0.5f;
         tmp[2 * i + 1] = (data[i] - data[half + i]) * 0.5f;
     }
     memcpy(data, tmp, n * sizeof(float));
+}
+
+static void haar_inverse_one_level_f32(float *data, int n) {
+    float *tmp = (float *)malloc(n * sizeof(float));
+    haar_inverse_one_level_f32_scratch(data, n, tmp);
     free(tmp);
 }
 
@@ -530,6 +553,54 @@ void haar_convolve_i32(const int32_t *signal, const int32_t *kernel,
 
     free(sig_t);
     free(ker_t);
+}
+
+/* Internal scratch-based forward/inverse for haar_convolve_f32_buf.
+ * scratch must be at least len elements (reused across levels). */
+static void haar_forward_f32_with_scratch(float *data, int len, int levels, float *scratch) {
+    int n = len;
+    for (int l = 0; l < levels && n >= 2; l++) {
+        haar_forward_one_level_f32_scratch(data, n, scratch);
+        n /= 2;
+    }
+}
+
+static void haar_inverse_f32_with_scratch(float *data, int len, int levels, float *scratch) {
+    int n = len;
+    for (int l = 0; l < levels - 1 && n >= 2; l++) {
+        n /= 2;
+    }
+    for (int l = 0; l < levels && n <= len; l++) {
+        haar_inverse_one_level_f32_scratch(data, n, scratch);
+        n *= 2;
+    }
+}
+
+void haar_convolve_f32_buf(const float *signal, const float *kernel,
+                           float *output, int len, int levels,
+                           float *scratch) {
+    /* Use scratch as temp for signal transform, output as temp for kernel */
+    float *sig_t = scratch;         /* borrow first len of scratch */
+    /* We need a second buffer for kernel; use output temporarily */
+    memcpy(sig_t, signal, len * sizeof(float));
+    memcpy(output, kernel, len * sizeof(float));
+
+    /* For the one-level scratch, we need another len buffer.
+     * Allocate one on the stack for small sizes, otherwise malloc. */
+    float stack_buf[512];
+    float *level_scratch = (len <= 512) ? stack_buf : (float *)malloc(len * sizeof(float));
+
+    haar_forward_f32_with_scratch(sig_t, len, levels, level_scratch);
+    haar_forward_f32_with_scratch(output, len, levels, level_scratch);
+
+    /* Pointwise multiply: result into output */
+    for (int i = 0; i < len; i++) {
+        output[i] = sig_t[i] * output[i];
+    }
+
+    haar_inverse_f32_with_scratch(output, len, levels, level_scratch);
+
+    if (len > 512) free(level_scratch);
 }
 
 void haar_convolve_f32(const float *signal, const float *kernel,
