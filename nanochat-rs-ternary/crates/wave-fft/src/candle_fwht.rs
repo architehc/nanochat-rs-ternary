@@ -1,7 +1,13 @@
-//! Candle-compatible FWHT convolution with autograd support.
+//! Candle-compatible XOR convolution (FWHT) with autograd support — **training path**.
 //!
-//! FWHT is self-adjoint (H^T = H), so the backward pass uses the same
-//! FWHT transform as the forward pass. No complex numbers needed.
+//! XOR convolution: `c[k] = (1/N) Σ_i a[i] · b[i ⊕ k]`. FWHT is
+//! self-adjoint (H^T = H), so the backward pass uses the same FWHT
+//! transform as the forward pass. No complex numbers needed.
+//!
+//! **Training perf:** Implemented as Candle `CustomOp2` with `cpu_fwd` only —
+//! no `cuda_fwd`. When training on GPU, the caller must move tensors to CPU
+//! before this op and back after (done in `nanochat-train/src/wavefield.rs`).
+//! This costs 2 device transfers per forward pass (batched across all heads).
 
 use candle_core::{CpuStorage, Layout, Result, Shape, Tensor};
 use ternary_kernels::fwht;

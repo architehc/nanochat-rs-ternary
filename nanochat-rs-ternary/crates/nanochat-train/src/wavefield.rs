@@ -1,9 +1,16 @@
 //! Differentiable Wave Field Attention for training with Candle autograd.
 //!
-//! Supports three convolution modes for gradient flow:
-//! - FFT: Complex<f32> via wave_fft::candle_fft (original)
-//! - FWHT: Integer add/sub only via wave_fft::candle_fwht
-//! - Haar DWT: Integer add/sub only via wave_fft::candle_haar
+//! Supports three transform-domain mixing modes for gradient flow:
+//! - **FFT:** Circular (shift) convolution via `wave_fft::candle_fft`. Uses `Complex<f32>`.
+//! - **FWHT:** XOR convolution `c[k] = (1/N) Σ a[i]·b[i⊕k]` via `wave_fft::candle_fwht`.
+//!   Integer add/sub only. Pair-swap mixing at power-of-2 distances, not cyclic shifts.
+//! - **Haar:** Diagonal wavelet-basis scaling `IHaar(Haar(s) ⊙ Haar(k))` via
+//!   `wave_fft::candle_haar`. Integer add/sub only. Scale-selective filtering,
+//!   NOT shift-invariant.
+//!
+//! **Training-specific:** All three modes use Candle `CustomOp2` with `cpu_fwd` only.
+//! On GPU, tensors are moved to CPU before the transform op and back after — 2 device
+//! transfers per forward pass (batched across all heads, not per-head).
 
 use candle_core::{Result, Tensor, D};
 use candle_nn::VarBuilder;

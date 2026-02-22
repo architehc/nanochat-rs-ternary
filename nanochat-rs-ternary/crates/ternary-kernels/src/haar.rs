@@ -1,10 +1,12 @@
 //! Safe Rust wrappers for Haar DWT (Discrete Wavelet Transform) C kernels.
 //!
-//! **NOT circular convolution.** Haar "convolution" is pointwise multiplication
-//! in the Haar wavelet domain: IHaar(Haar(signal) * Haar(kernel)).
-//! This is a different linear mixing operation than FFT convolution.
+//! **Diagonal operator in the Haar wavelet basis**, NOT convolution.
+//! Pointwise multiply in wavelet domain scales each Haar coefficient
+//! independently: `IHaar(Haar(signal) ⊙ Haar(kernel))`. This is
+//! scale-selective filtering — different frequency bands are attenuated
+//! independently — but is NOT shift-invariant or XOR-equivariant.
 //!
-//! Haar DWT uses only additions and subtractions — integer-only compatible.
+//! Uses only additions and subtractions — integer-only compatible.
 //! Multi-level decomposition gives both local and global context.
 
 extern "C" {

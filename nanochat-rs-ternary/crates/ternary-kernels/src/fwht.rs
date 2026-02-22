@@ -1,10 +1,12 @@
 //! Safe Rust wrappers for FWHT (Fast Walsh-Hadamard Transform) C kernels.
 //!
-//! **NOT circular convolution.** FWHT "convolution" is pointwise multiplication
-//! in the Walsh-Hadamard domain: IFWHT(FWHT(signal) * FWHT(kernel)) / N.
-//! This is a different linear mixing operation than FFT convolution.
+//! **XOR convolution (dyadic convolution)**, NOT circular convolution.
+//! Computes `c[k] = (1/N) Σ_i a[i] · b[i ⊕ k]` where `⊕` is bitwise XOR.
+//! WHT diagonalizes XOR convolution the same way DFT diagonalizes circular
+//! (shift) convolution. The mixing pattern is pair-swaps at power-of-2
+//! distances, not cyclic shifts.
 //!
-//! FWHT uses only additions and subtractions — integer-only compatible.
+//! Uses only additions and subtractions — integer-only compatible.
 //! Self-inverse (up to 1/N scaling).
 
 extern "C" {

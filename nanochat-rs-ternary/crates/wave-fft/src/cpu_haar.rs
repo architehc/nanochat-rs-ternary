@@ -1,10 +1,13 @@
-//! Haar-domain filtering for wave field attention (inference path).
+//! Haar wavelet-basis scaling for wave field attention — **inference path**.
 //!
-//! **NOT equivalent to FFT circular convolution.** This computes pointwise
-//! multiplication in the Haar wavelet domain: IHaar(Haar(signal) * Haar(kernel)).
-//! This is a different linear mixing operation than FFT convolution — it applies
-//! multi-scale wavelet coefficients rather than frequency-domain filtering.
-//! The model learns to use whichever domain filtering produces useful features.
+//! Diagonal operator in the Haar basis: each wavelet coefficient is scaled
+//! independently via `IHaar(Haar(signal) ⊙ Haar(kernel))`. This is
+//! scale-selective filtering (different frequency bands attenuated
+//! independently), NOT shift-invariant convolution and NOT XOR convolution.
+//!
+//! **Inference:** Kernel transforms are precomputed at model load (`precompute_kernel_haar`).
+//! Per-token cost is O(N log N) for forward + inverse Haar + O(N) pointwise multiply.
+//! No heap allocation in the precomputed path beyond the output `Vec`.
 //!
 //! Multi-scale, localized. Uses only additions and subtractions in transform stages.
 

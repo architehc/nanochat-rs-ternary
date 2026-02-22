@@ -1,7 +1,13 @@
-//! Candle-compatible Haar DWT convolution with autograd support.
+//! Candle-compatible Haar wavelet-basis scaling with autograd support — **training path**.
 //!
-//! Haar DWT is orthogonal: inverse = transpose (adjoint).
-//! The backward pass has the same structure as the forward pass.
+//! Diagonal operator in the Haar basis (scale-selective filtering, NOT
+//! shift-invariant convolution). Haar DWT is orthogonal: inverse = transpose
+//! (adjoint). The backward pass has the same structure as the forward pass.
+//!
+//! **Training perf:** Implemented as Candle `CustomOp2` with `cpu_fwd` only —
+//! no `cuda_fwd`. When training on GPU, the caller must move tensors to CPU
+//! before this op and back after (done in `nanochat-train/src/wavefield.rs`).
+//! This costs 2 device transfers per forward pass (batched across all heads).
 
 use candle_core::{CpuStorage, Layout, Result, Shape, Tensor};
 use ternary_kernels::haar;

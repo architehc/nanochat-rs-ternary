@@ -158,6 +158,76 @@ fn wavefield_haar_causality_divergent_futures() {
     }
 }
 
+// ───────────────── Prefix-Invariance Tests ─────────────────
+//
+// Stronger causality: two sequences sharing a k-token prefix but differing
+// in suffix must produce identical logits at ALL prefix positions.
+// This exercises multi-step state accumulation in the wave field.
+
+/// Helper: run autoregressive sequence, return logits at every position.
+fn run_sequence_collect_all(config: &ModelConfig, tokens: &[u32]) -> Vec<Vec<f32>> {
+    let mut model = NanochatModel::new_random(config.clone());
+    tokens
+        .iter()
+        .enumerate()
+        .map(|(pos, &tok)| model.forward_token(tok, pos))
+        .collect()
+}
+
+/// Prefix-invariance for a given convolve mode.
+/// Sequences [10, 20, 30, 40, 50] vs [10, 20, 30, 99, 99]:
+///   positions 0..3 must match (shared prefix), position 3 must differ.
+fn check_prefix_invariance(mode: ConvolveMode) {
+    let config = make_wavefield_config_mode(mode);
+
+    let seq_a: Vec<u32> = vec![10, 20, 30, 40, 50];
+    let seq_b: Vec<u32> = vec![10, 20, 30, 99, 99];
+    let prefix_len = 3; // first 3 tokens identical
+
+    let logits_a = run_sequence_collect_all(&config, &seq_a);
+    let logits_b = run_sequence_collect_all(&config, &seq_b);
+
+    // Prefix positions must match exactly
+    for pos in 0..prefix_len {
+        assert_eq!(logits_a[pos].len(), logits_b[pos].len());
+        for i in 0..logits_a[pos].len() {
+            assert!(
+                (logits_a[pos][i] - logits_b[pos][i]).abs() < 1e-5,
+                "{:?} prefix-invariance violation at pos={}, logit[{}]: {} vs {}",
+                mode, pos, i, logits_a[pos][i], logits_b[pos][i]
+            );
+        }
+    }
+
+    // Position 3: different tokens → logits must differ (test has power)
+    let diff_norm: f32 = logits_a[prefix_len]
+        .iter()
+        .zip(logits_b[prefix_len].iter())
+        .map(|(a, b)| (a - b).powi(2))
+        .sum::<f32>()
+        .sqrt();
+    assert!(
+        diff_norm > 1e-3,
+        "{:?} prefix-invariance: pos={} should differ (different token), diff_norm={}",
+        mode, prefix_len, diff_norm
+    );
+}
+
+#[test]
+fn wavefield_fft_prefix_invariance() {
+    check_prefix_invariance(ConvolveMode::Fft);
+}
+
+#[test]
+fn wavefield_fwht_prefix_invariance() {
+    check_prefix_invariance(ConvolveMode::Fwht);
+}
+
+#[test]
+fn wavefield_haar_prefix_invariance() {
+    check_prefix_invariance(ConvolveMode::Haar);
+}
+
 // ───────────────── Energy Monitoring ─────────────────
 
 #[test]

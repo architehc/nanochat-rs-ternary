@@ -1,13 +1,19 @@
-//! Wave Field Attention: O(n log n) physics-based attention via transform-domain convolution.
+//! Wave Field Attention: O(n log n) physics-based attention — **inference path**.
 //!
 //! Replaces standard KV-cache attention with a constant-size wave field state.
 //! Heavy projections (scatter, gate, output) are ternary BitLinear;
 //! physics engine (omega, alpha, phi + transform) stays FP32.
 //!
-//! Supports three convolution modes:
-//! - FFT: Complex<f32> (original, floating-point)
-//! - FWHT: Integer add/sub only, self-inverse
-//! - Haar DWT: Integer add/sub only, multi-scale localized
+//! Supports three transform-domain mixing modes:
+//! - **FFT:** Circular (shift) convolution via `Complex<f32>`.
+//! - **FWHT:** XOR convolution `c[k] = (1/N) Σ a[i]·b[i⊕k]`. Integer add/sub only.
+//!   Pair-swap mixing at power-of-2 distances, not cyclic shifts.
+//! - **Haar:** Diagonal wavelet-basis scaling `IHaar(Haar(s) ⊙ Haar(k))`. Integer
+//!   add/sub only. Scale-selective filtering, NOT shift-invariant.
+//!
+//! **Inference:** Kernel transforms are precomputed at model load (cached in
+//! `WaveKernelCache`). Per-token forward is autoregressive — future tokens
+//! haven't been scattered yet, so causality holds by construction.
 
 use crate::bitlinear::BitLinear;
 use crate::config::{ConvolveMode, WaveFieldConfig};
@@ -209,9 +215,17 @@ impl HeadCoupling {
 
     /// Apply coupling: mix head fields. fields: [n_heads * field_size * head_dim]
     pub fn apply(&self, fields: &mut [f32], field_size: usize, head_dim: usize) {
+        let mut tmp = vec![0.0f32; fields.len()];
+        self.apply_with_buf(fields, field_size, head_dim, &mut tmp);
+    }
+
+    /// Apply coupling using a caller-provided scratch buffer (no allocation).
+    /// `tmp` must be at least `fields.len()` elements.
+    pub fn apply_with_buf(&self, fields: &mut [f32], field_size: usize, head_dim: usize, tmp: &mut [f32]) {
         let n = self.n_heads;
         let stride = field_size * head_dim;
-        let mut tmp = vec![0.0f32; fields.len()];
+        let total = n * stride;
+        tmp[..total].fill(0.0);
 
         for h_out in 0..n {
             for h_in in 0..n {
@@ -227,7 +241,7 @@ impl HeadCoupling {
             }
         }
 
-        fields.copy_from_slice(&tmp);
+        fields[..total].copy_from_slice(&tmp[..total]);
     }
 }
 
@@ -269,6 +283,8 @@ struct WaveFieldWorkspace {
     gathered: Vec<f32>,
     proj_out: Vec<f32>,
     conv_buf: Vec<f32>,
+    col_buf: Vec<f32>,
+    coupling_tmp: Vec<f32>,
 }
 
 /// Wave Field Attention layer for inference.
@@ -462,7 +478,7 @@ impl WaveFieldAttention {
         // State accumulates raw scattered values; convolution is applied only for reading.
         let field_len = n_heads * field_size * head_dim;
         ws.conv_buf.resize(field_len, 0.0);
-        let mut col_buf = vec![0.0f32; field_size];
+        ws.col_buf.resize(field_size, 0.0);
         for h in 0..n_heads {
             let field_start = h * field_size * head_dim;
             let conv_start = h * field_size * head_dim;
@@ -470,11 +486,11 @@ impl WaveFieldAttention {
             for d in 0..head_dim {
                 // Extract column d of this head's field
                 for t in 0..field_size {
-                    col_buf[t] = state.fields[field_start + t * head_dim + d];
+                    ws.col_buf[t] = state.fields[field_start + t * head_dim + d];
                 }
 
                 // Convolve using cached kernel (dispatches to FFT/FWHT/Haar)
-                let convolved = self.kernel_cache.convolve_column(&col_buf, h);
+                let convolved = self.kernel_cache.convolve_column(&ws.col_buf, h);
 
                 // Write to temporary convolved buffer (NOT back to state)
                 for t in 0..field_size {
@@ -485,20 +501,20 @@ impl WaveFieldAttention {
 
         // 4. Optional head coupling (applied to convolved copy)
         if let Some(ref coupling) = self.coupling {
-            coupling.apply(&mut ws.conv_buf, field_size, head_dim);
+            ws.coupling_tmp.resize(field_len, 0.0);
+            let ws_ref = &mut *ws;
+            coupling.apply_with_buf(&mut ws_ref.conv_buf, field_size, head_dim, &mut ws_ref.coupling_tmp);
         }
 
-        // 5. Bilinear gather from convolved field into separate buffer
-        //    (can't borrow ws.conv_buf and ws.gathered simultaneously)
-        let conv_buf_ref = &ws.conv_buf;
-        let mut gathered_local = vec![0.0f32; total_proj];
+        // 5. Bilinear gather from convolved field
+        ws.gathered.resize(total_proj, 0.0);
+        // Reborrow through &mut *ws to enable partial field borrows
+        let ws_ref = &mut *ws;
         for h in 0..n_heads {
-            let conv_field = &conv_buf_ref[h * field_size * head_dim..(h + 1) * field_size * head_dim];
-            let gathered = &mut gathered_local[h * head_dim..(h + 1) * head_dim];
+            let conv_field = &ws_ref.conv_buf[h * field_size * head_dim..(h + 1) * field_size * head_dim];
+            let gathered = &mut ws_ref.gathered[h * head_dim..(h + 1) * head_dim];
             bilinear_gather(conv_field, field_pos, field_size, head_dim, gathered);
         }
-        ws.gathered.resize(total_proj, 0.0);
-        ws.gathered.copy_from_slice(&gathered_local);
 
         // 6. Content gate: sigmoid(gate_proj(x)) * gathered
         self.gate_proj.forward(x, &mut ws.gate_out);
@@ -534,17 +550,20 @@ impl WaveFieldAttention {
         let field_size = self.field_size;
         let total_proj = n_heads * head_dim;
 
+        // Acquire workspace for reusable buffers
+        let mut ws = self.workspace.lock().expect("workspace lock poisoned");
+
         // 1. Scatter all tokens onto fields
-        let mut scatter_buf = vec![0.0f32; total_proj];
+        ws.scattered.resize(total_proj, 0.0);
         for t in 0..seq_len {
             let x = &x_batch[t * dim..(t + 1) * dim];
-            self.scatter_proj.forward(x, &mut scatter_buf);
+            self.scatter_proj.forward(x, &mut ws.scattered);
 
             let pos = (start_pos + t) as f32 * self.stride;
             let pos = pos.min((field_size - 1) as f32).max(0.0);
 
             for h in 0..n_heads {
-                let values = &scatter_buf[h * head_dim..(h + 1) * head_dim];
+                let values = &ws.scattered[h * head_dim..(h + 1) * head_dim];
                 let field = &mut state.fields[h * field_size * head_dim..(h + 1) * field_size * head_dim];
                 bilinear_scatter(values, field, pos, field_size, head_dim);
             }
@@ -553,32 +572,34 @@ impl WaveFieldAttention {
         // 2. Single convolution per head into temporary buffer (O(n log n) total)
         // IMPORTANT: Don't modify state.fields — it accumulates raw scattered values.
         let field_len = n_heads * field_size * head_dim;
-        let mut conv_fields = vec![0.0f32; field_len];
-        let mut col_buf = vec![0.0f32; field_size];
+        ws.conv_buf.resize(field_len, 0.0);
+        ws.col_buf.resize(field_size, 0.0);
         for h in 0..n_heads {
             let field_start = h * field_size * head_dim;
 
             for d in 0..head_dim {
                 for t in 0..field_size {
-                    col_buf[t] = state.fields[field_start + t * head_dim + d];
+                    ws.col_buf[t] = state.fields[field_start + t * head_dim + d];
                 }
 
-                let convolved = self.kernel_cache.convolve_column(&col_buf, h);
+                let convolved = self.kernel_cache.convolve_column(&ws.col_buf, h);
 
                 for t in 0..field_size {
-                    conv_fields[field_start + t * head_dim + d] = convolved[t];
+                    ws.conv_buf[field_start + t * head_dim + d] = convolved[t];
                 }
             }
         }
 
         // 3. Optional coupling (applied to convolved copy)
         if let Some(ref coupling) = self.coupling {
-            coupling.apply(&mut conv_fields, field_size, head_dim);
+            ws.coupling_tmp.resize(field_len, 0.0);
+            let ws_ref = &mut *ws;
+            coupling.apply_with_buf(&mut ws_ref.conv_buf, field_size, head_dim, &mut ws_ref.coupling_tmp);
         }
 
         // 4. Gather per-token results from convolved buffer, apply gate, output projection
-        let mut gathered = vec![0.0f32; total_proj];
-        let mut gate_buf = vec![0.0f32; n_heads];
+        ws.gathered.resize(total_proj, 0.0);
+        ws.gate_out.resize(n_heads, 0.0);
         for t in 0..seq_len {
             let x = &x_batch[t * dim..(t + 1) * dim];
             let out = &mut out_batch[t * dim..(t + 1) * dim];
@@ -586,23 +607,25 @@ impl WaveFieldAttention {
             let pos = (start_pos + t) as f32 * self.stride;
             let pos = pos.min((field_size - 1) as f32).max(0.0);
 
+            // Reborrow for partial field access
+            let ws_ref = &mut *ws;
             for h in 0..n_heads {
-                let field = &conv_fields[h * field_size * head_dim..(h + 1) * field_size * head_dim];
-                let g = &mut gathered[h * head_dim..(h + 1) * head_dim];
+                let field = &ws_ref.conv_buf[h * field_size * head_dim..(h + 1) * field_size * head_dim];
+                let g = &mut ws_ref.gathered[h * head_dim..(h + 1) * head_dim];
                 bilinear_gather(field, pos, field_size, head_dim, g);
             }
 
             // Gate
-            self.gate_proj.forward(x, &mut gate_buf);
+            self.gate_proj.forward(x, &mut ws.gate_out);
             for h in 0..n_heads {
-                let g = sigmoid(gate_buf[h]);
+                let g = sigmoid(ws.gate_out[h]);
                 for d in 0..head_dim {
-                    gathered[h * head_dim + d] *= g;
+                    ws.gathered[h * head_dim + d] *= g;
                 }
             }
 
             // Output projection
-            self.out_proj.forward(&gathered, out);
+            self.out_proj.forward(&ws.gathered, out);
         }
     }
 }

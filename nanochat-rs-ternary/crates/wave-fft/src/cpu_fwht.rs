@@ -1,10 +1,13 @@
-//! FWHT-domain filtering for wave field attention (inference path).
+//! XOR convolution (dyadic convolution) for wave field attention — **inference path**.
 //!
-//! **NOT equivalent to FFT circular convolution.** This computes pointwise
-//! multiplication in the Walsh-Hadamard domain: IFWHT(FWHT(signal) * FWHT(kernel)) / N.
-//! This is a different linear mixing operation than FFT convolution — it applies
-//! the Walsh-Hadamard basis functions (±1 patterns) rather than sinusoidal ones.
-//! The model learns to use whichever domain filtering produces useful features.
+//! Computes `c[k] = (1/N) Σ_i a[i] · b[i ⊕ k]` where `⊕` is bitwise XOR.
+//! This is NOT circular (shift) convolution. WHT diagonalizes XOR convolution
+//! the same way DFT diagonalizes shift convolution — the mixing pattern is
+//! pair-swaps at power-of-2 distances, not cyclic shifts.
+//!
+//! **Inference:** Kernel transforms are precomputed at model load (`precompute_kernel_fwht`).
+//! Per-token cost is O(N log N) for the signal transform + O(N) pointwise multiply.
+//! No heap allocation in the precomputed path beyond the output `Vec`.
 //!
 //! Uses only additions and subtractions in transform stages — integer-only compatible.
 //! FWHT is self-inverse (up to 1/N scaling).
