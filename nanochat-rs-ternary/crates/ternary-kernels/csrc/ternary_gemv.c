@@ -1,4 +1,9 @@
-// ternary_final.c — Production ternary selection kernels v3.4.0
+// ternary_final.c — Production ternary selection kernels v3.5.0
+//
+// V3.5.0 CHANGES (Multi-Architecture):
+//   1) ARM NEON kernel: vtbl1q_u8 nibble-split LUT with 64-row blocking.
+//   2) x86 SSSE3 kernel: PSIGNB-based ternary multiply for pre-AVX2 CPUs.
+//   3) Updated dispatch priority: VPERMW > VPERMB > AVX2 > SSSE3 > NEON > LUT > Scalar.
 //
 // V3.4.0 CHANGES (The AVX2 Rebirth):
 //   1) Restored highly-optimized AVX2 Kernel ("Nibble-Split" LUT).
@@ -6,8 +11,9 @@
 //   3) Fixed XGETBV trap that locked out AVX2 if OS lacked AVX512 state.
 //   4) Unconditionalized inner loops (zero-padded buffers safely allow tail vectorization).
 //
-// Compile: gcc -O3 -o ternary_final ternary_final.c -lm -mavx2 -mfma
-//   (No -mavx512* flags needed — runtime dispatch handles it natively)
+// Compile (x86): gcc -O3 -o ternary_final ternary_final.c -lm -mavx2 -mfma
+// Compile (ARM): gcc -O3 -o ternary_final ternary_final.c -lm
+//   (Runtime dispatch handles SIMD kernel selection)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,20 +33,37 @@
 #define ARCH_X86_64 0
 #endif
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+#include <arm_neon.h>
+#define ARCH_ARM64 1
+#else
+#define ARCH_ARM64 0
+#endif
+
+static int cpu_has_ssse3      = 0;
 static int cpu_has_avx2       = 0;
 static int cpu_has_avx512bw   = 0;
 static int cpu_has_avx512vbmi = 0;
+static int cpu_has_neon       = 0;
 
 static void detect_cpu_features(void) {
 #if ARCH_X86_64
     unsigned int eax, ebx, ecx, edx;
 
     __cpuid(0, eax, ebx, ecx, edx);
-    if (eax < 7) return;
+    if (eax < 7) {
+        // Still check for SSSE3 via CPUID leaf 1
+        if (eax >= 1) {
+            __cpuid(1, eax, ebx, ecx, edx);
+            cpu_has_ssse3 = (ecx >> 9) & 1;
+        }
+        return;
+    }
 
     __cpuid(1, eax, ebx, ecx, edx);
     int has_osxsave = (ecx >> 27) & 1;
     int has_fma     = (ecx >> 12) & 1; // Require FMA for fused scaling
+    cpu_has_ssse3   = (ecx >> 9) & 1;  // CPUID.1:ECX.SSSE3[bit 9]
     if (!has_osxsave) return;
 
     unsigned int xcr0_lo, xcr0_hi;
@@ -51,17 +74,20 @@ static void detect_cpu_features(void) {
     int os_avx512_support = ((xcr0_lo & 0xE6) == 0xE6);
 
     __cpuid_count(7, 0, eax, ebx, ecx, edx);
-    
+
     // Fix: AVX2 activates correctly even if AVX512 isn't supported by Hypervisor/CPU
     if (os_avx_support) {
         cpu_has_avx2 = ((ebx >> 5) & 1) && has_fma;
     }
-    
+
     if (os_avx512_support) {
         cpu_has_avx512bw   = (ebx >> 30) & 1;
         cpu_has_avx512vbmi = (ecx >> 1) & 1;
         if (!cpu_has_avx512bw) cpu_has_avx512vbmi = 0;
     }
+#endif
+#if ARCH_ARM64
+    cpu_has_neon = 1;  // NEON is mandatory on AArch64
 #endif
 }
 
@@ -71,10 +97,13 @@ static void detect_cpu_features(void) {
 
 #if ARCH_X86_64
 #include <immintrin.h>
+#include <tmmintrin.h>  // SSSE3: _mm_shuffle_epi8, _mm_sign_epi8, _mm_maddubs_epi16, _mm_abs_epi8
+#define SSSE3_TARGET  __attribute__((target("ssse3")))
 #define AVX2_TARGET   __attribute__((target("avx2,fma")))
 #define AVX512_TARGET __attribute__((target("avx512f,avx512bw")))
 #define VBMI_TARGET   __attribute__((target("avx512f,avx512bw,avx512vbmi")))
 #else
+#define SSSE3_TARGET
 #define AVX2_TARGET
 #define AVX512_TARGET
 #define VBMI_TARGET
@@ -440,13 +469,255 @@ void gemv_dual_vpermb(const uint8_t * restrict Wt, const float * restrict scales
         }
     }
 }
+
+// ── KERNEL 4: SSSE3 PSIGNB ────────────
+// Uses _mm_sign_epi8 for zero-cost ternary multiply: sign(x, w) gives
+// x*w for w in {-1, 0, +1}. Works on pre-AVX2 x86 CPUs (Core 2 Duo era, ~2006+).
+// Processes 16 rows per block (128-bit registers).
+SSSE3_TARGET
+void gemv_ssse3_psignb(const uint8_t * restrict Wt, const float * restrict scales_gm,
+                       const int8_t  * restrict x,  float act_scale,
+                       float * restrict y, int M, int K, int gs, int rows_padded) {
+    int gprow = K / gs, gpp = gs / 4;
+    for (int r = 0; r < M; r++) y[r] = 0;
+
+    // Process groups (K dimension) one at a time
+    for (int g = 0; g < gprow; g++) {
+        const float *sc_base = &scales_gm[(size_t)g * rows_padded];
+
+        for (int rblk = 0; rblk < M; rblk += 16) {
+            int rc = (rblk + 16 <= M) ? 16 : M - rblk;
+
+            // int32 accumulators for 16 rows
+            __m128i acc0 = _mm_setzero_si128();  // rows 0-3
+            __m128i acc1 = _mm_setzero_si128();  // rows 4-7
+            __m128i acc2 = _mm_setzero_si128();  // rows 8-11
+            __m128i acc3 = _mm_setzero_si128();  // rows 12-15
+
+            for (int j = 0; j < gpp; j++) {
+                // Load 16 bytes of column-major packed data = 16 rows × 1 packed byte each
+                // Each byte encodes 4 trits for this row at columns [j*4 .. j*4+3]
+                __m128i pk = _mm_loadu_si128((__m128i *)&Wt[(size_t)(g * gpp + j) * rows_padded + rblk]);
+
+                // Load the 4 activations for this packed column group
+                int b = (g * gpp + j) * 4;
+                int8_t a0 = x[b], a1 = x[b+1], a2 = x[b+2], a3 = x[b+3];
+
+                // Decode each of 4 trits per byte via bit extraction:
+                // trit encoding: 00=0, 01=+1, 11=-1 (10=invalid→0)
+                // decode: nz = bit0, sgn = bit1; value = nz - 2*(nz & sgn)
+                __m128i mask_01 = _mm_set1_epi8(0x01);
+
+                // Extract trit0 (bits 0-1): nz = bit0, sgn = bit1
+                __m128i nz0 = _mm_and_si128(pk, mask_01);
+                __m128i sg0 = _mm_and_si128(_mm_srli_epi16(pk, 1), mask_01);
+                // decode: nz - 2*(nz & sg) = nz*(1-2*sg) → gives -1/0/+1
+                __m128i w0 = _mm_sub_epi8(nz0, _mm_slli_epi16(_mm_and_si128(nz0, sg0), 1));
+
+                // Extract trit1 (bits 2-3)
+                __m128i nz1 = _mm_and_si128(_mm_srli_epi16(pk, 2), mask_01);
+                __m128i sg1 = _mm_and_si128(_mm_srli_epi16(pk, 3), mask_01);
+                __m128i w1 = _mm_sub_epi8(nz1, _mm_slli_epi16(_mm_and_si128(nz1, sg1), 1));
+
+                // Extract trit2 (bits 4-5)
+                __m128i nz2 = _mm_and_si128(_mm_srli_epi16(pk, 4), mask_01);
+                __m128i sg2 = _mm_and_si128(_mm_srli_epi16(pk, 5), mask_01);
+                __m128i w2 = _mm_sub_epi8(nz2, _mm_slli_epi16(_mm_and_si128(nz2, sg2), 1));
+
+                // Extract trit3 (bits 6-7)
+                __m128i nz3 = _mm_and_si128(_mm_srli_epi16(pk, 6), mask_01);
+                __m128i sg3 = _mm_and_si128(_mm_srli_epi16(pk, 7), mask_01);
+                __m128i w3 = _mm_sub_epi8(nz3, _mm_slli_epi16(_mm_and_si128(nz3, sg3), 1));
+
+                // PSIGNB-based multiply: sign_epi8(act_broadcast, weight) = act * weight
+                // for weight in {-1, 0, +1}
+                __m128i va0 = _mm_set1_epi8(a0);
+                __m128i va1 = _mm_set1_epi8(a1);
+                __m128i va2 = _mm_set1_epi8(a2);
+                __m128i va3 = _mm_set1_epi8(a3);
+
+                __m128i p0 = _mm_sign_epi8(va0, w0);  // a0 * w0 for all 16 rows
+                __m128i p1 = _mm_sign_epi8(va1, w1);  // a1 * w1
+                __m128i p2 = _mm_sign_epi8(va2, w2);  // a2 * w2
+                __m128i p3 = _mm_sign_epi8(va3, w3);  // a3 * w3
+
+                // Widen each product to int16 to avoid int8 overflow (max sum = 4*127 = 508).
+                // SSSE3 doesn't have _mm_cvtepi8_epi16 (SSE4.1), so use unpack with sign.
+                __m128i zero = _mm_setzero_si128();
+                __m128i s_lo, s_hi;
+                __m128i p0_lo = _mm_unpacklo_epi8(p0, _mm_cmpgt_epi8(zero, p0));
+                __m128i p0_hi = _mm_unpackhi_epi8(p0, _mm_cmpgt_epi8(zero, p0));
+                __m128i p1_lo = _mm_unpacklo_epi8(p1, _mm_cmpgt_epi8(zero, p1));
+                __m128i p1_hi = _mm_unpackhi_epi8(p1, _mm_cmpgt_epi8(zero, p1));
+                __m128i p2_lo = _mm_unpacklo_epi8(p2, _mm_cmpgt_epi8(zero, p2));
+                __m128i p2_hi = _mm_unpackhi_epi8(p2, _mm_cmpgt_epi8(zero, p2));
+                __m128i p3_lo = _mm_unpacklo_epi8(p3, _mm_cmpgt_epi8(zero, p3));
+                __m128i p3_hi = _mm_unpackhi_epi8(p3, _mm_cmpgt_epi8(zero, p3));
+
+                s_lo = _mm_add_epi16(_mm_add_epi16(p0_lo, p1_lo), _mm_add_epi16(p2_lo, p3_lo));
+                s_hi = _mm_add_epi16(_mm_add_epi16(p0_hi, p1_hi), _mm_add_epi16(p2_hi, p3_hi));
+
+                // Widen int16 to int32 and accumulate
+                // Low 4 of s_lo → int32
+                __m128i s_lo_sign = _mm_cmpgt_epi16(zero, s_lo);
+                __m128i s_hi_sign = _mm_cmpgt_epi16(zero, s_hi);
+                acc0 = _mm_add_epi32(acc0, _mm_unpacklo_epi16(s_lo, s_lo_sign));  // rows 0-3
+                acc1 = _mm_add_epi32(acc1, _mm_unpackhi_epi16(s_lo, s_lo_sign));  // rows 4-7
+                acc2 = _mm_add_epi32(acc2, _mm_unpacklo_epi16(s_hi, s_hi_sign));  // rows 8-11
+                acc3 = _mm_add_epi32(acc3, _mm_unpackhi_epi16(s_hi, s_hi_sign));  // rows 12-15
+            }
+
+            // Convert int32 → float, multiply by group scale * act_scale, accumulate to y
+            __m128 f0 = _mm_cvtepi32_ps(acc0);
+            __m128 f1 = _mm_cvtepi32_ps(acc1);
+            __m128 f2 = _mm_cvtepi32_ps(acc2);
+            __m128 f3 = _mm_cvtepi32_ps(acc3);
+
+            __m128 vas = _mm_set1_ps(act_scale);
+
+            if (rc == 16) {
+                __m128 sc0 = _mm_mul_ps(_mm_loadu_ps(&sc_base[rblk + 0]), vas);
+                __m128 sc1 = _mm_mul_ps(_mm_loadu_ps(&sc_base[rblk + 4]), vas);
+                __m128 sc2 = _mm_mul_ps(_mm_loadu_ps(&sc_base[rblk + 8]), vas);
+                __m128 sc3 = _mm_mul_ps(_mm_loadu_ps(&sc_base[rblk + 12]), vas);
+
+                _mm_storeu_ps(&y[rblk + 0],  _mm_add_ps(_mm_loadu_ps(&y[rblk + 0]),  _mm_mul_ps(f0, sc0)));
+                _mm_storeu_ps(&y[rblk + 4],  _mm_add_ps(_mm_loadu_ps(&y[rblk + 4]),  _mm_mul_ps(f1, sc1)));
+                _mm_storeu_ps(&y[rblk + 8],  _mm_add_ps(_mm_loadu_ps(&y[rblk + 8]),  _mm_mul_ps(f2, sc2)));
+                _mm_storeu_ps(&y[rblk + 12], _mm_add_ps(_mm_loadu_ps(&y[rblk + 12]), _mm_mul_ps(f3, sc3)));
+            } else {
+                float buf[16];
+                _mm_storeu_ps(buf + 0, f0);
+                _mm_storeu_ps(buf + 4, f1);
+                _mm_storeu_ps(buf + 8, f2);
+                _mm_storeu_ps(buf + 12, f3);
+                for (int r = 0; r < rc; r++) y[rblk + r] += buf[r] * sc_base[rblk + r] * act_scale;
+            }
+        }
+    }
+}
 #endif // ARCH_X86_64
+
+// ============================================================
+// ARM NEON KERNEL (AArch64)
+// ============================================================
+
+#if ARCH_ARM64
+// Nibble-Split LUT kernel adapted for ARM NEON.
+// Uses vtbl1q_u8 (ARM's PSHUFB equivalent) for 16-byte LUT lookup.
+// 64-row blocking leverages ARM64's 32 SIMD registers (v0-v31).
+void gemv_neon_lut(const uint8_t * restrict Wt, const float * restrict scales_gm,
+                   const int8_t  * restrict x,  float act_scale,
+                   float * restrict y, int M, int K, int gs, int rows_padded) {
+    int gprow = K / gs, gpp = gs / 4;
+    for (int r = 0; r < M; r++) y[r] = 0;
+
+    const uint8x16_t m0F = vdupq_n_u8(0x0F);
+
+    for (int g = 0; g < gprow; g++) {
+        const float *sc_base = &scales_gm[(size_t)g * rows_padded];
+
+        for (int rblk = 0; rblk < M; rblk += 64) {
+            int rc = (rblk + 64 <= M) ? 64 : M - rblk;
+
+            // 8 int16 accumulators for 64 rows (8 per accumulator)
+            int16x8_t acc[8];
+            for (int i = 0; i < 8; i++) acc[i] = vdupq_n_s16(0);
+
+            for (int j = 0; j < gpp; j++) {
+                int b = (g * gpp + j) * 4;
+                int16_t a0 = x[b], a1 = x[b+1], a2 = x[b+2], a3 = x[b+3];
+
+                // Build lo/hi byte tables for vtbl1q_u8 lookup (nibble-split LUT)
+                uint8_t tbl_llo[16], tbl_lhi[16], tbl_hlo[16], tbl_hhi[16];
+                for (int m = 0; m < 16; m++) {
+                    int16_t s_lo = decode_trit(m & 3) * a0 + decode_trit((m >> 2) & 3) * a1;
+                    int16_t s_hi = decode_trit(m & 3) * a2 + decode_trit((m >> 2) & 3) * a3;
+                    tbl_llo[m] = (uint8_t)(s_lo & 0xFF);
+                    tbl_lhi[m] = (uint8_t)((s_lo >> 8) & 0xFF);
+                    tbl_hlo[m] = (uint8_t)(s_hi & 0xFF);
+                    tbl_hhi[m] = (uint8_t)((s_hi >> 8) & 0xFF);
+                }
+
+                uint8x16_t v_llo = vld1q_u8(tbl_llo);
+                uint8x16_t v_lhi = vld1q_u8(tbl_lhi);
+                uint8x16_t v_hlo = vld1q_u8(tbl_hlo);
+                uint8x16_t v_hhi = vld1q_u8(tbl_hhi);
+
+                // Process 4 × 16-byte chunks = 64 rows
+                for (int sub = 0; sub < 4; sub++) {
+                    uint8x16_t pk = vld1q_u8(&Wt[(size_t)(g * gpp + j) * rows_padded + rblk + sub * 16]);
+
+                    // Extract nibble indices
+                    uint8x16_t idx_lo = vandq_u8(pk, m0F);
+                    uint8x16_t idx_hi = vandq_u8(vshrq_n_u8(pk, 4), m0F);
+
+                    // LUT lookups via vtbl1q_u8 (ARM's 16-byte table lookup)
+                    uint8x16_t slo_lo = vqtbl1q_u8(v_llo, idx_lo);
+                    uint8x16_t slo_hi = vqtbl1q_u8(v_lhi, idx_lo);
+                    uint8x16_t shi_lo = vqtbl1q_u8(v_hlo, idx_hi);
+                    uint8x16_t shi_hi = vqtbl1q_u8(v_hhi, idx_hi);
+
+                    // Reconstruct int16 from lo/hi bytes via zip (interleave)
+                    // zip1 gives alternating lo bytes: {a0,b0, a1,b1, ...} → int16 values
+                    uint8x16_t combined_lo_zip1 = vzip1q_u8(slo_lo, slo_hi);
+                    uint8x16_t combined_lo_zip2 = vzip2q_u8(slo_lo, slo_hi);
+                    uint8x16_t combined_hi_zip1 = vzip1q_u8(shi_lo, shi_hi);
+                    uint8x16_t combined_hi_zip2 = vzip2q_u8(shi_lo, shi_hi);
+
+                    // Reinterpret as int16 and add lo+hi nibble contributions
+                    int16x8_t sum_0 = vaddq_s16(vreinterpretq_s16_u8(combined_lo_zip1),
+                                                vreinterpretq_s16_u8(combined_hi_zip1));
+                    int16x8_t sum_1 = vaddq_s16(vreinterpretq_s16_u8(combined_lo_zip2),
+                                                vreinterpretq_s16_u8(combined_hi_zip2));
+
+                    acc[sub * 2 + 0] = vaddq_s16(acc[sub * 2 + 0], sum_0);
+                    acc[sub * 2 + 1] = vaddq_s16(acc[sub * 2 + 1], sum_1);
+                }
+            }
+
+            // Convert int16→int32→float, apply scales, store to y
+            float32x4_t vas = vdupq_n_f32(act_scale);
+
+            if (rc == 64) {
+                for (int sub = 0; sub < 8; sub++) {
+                    // Widen int16 → int32 → float
+                    int32x4_t i32_lo = vmovl_s16(vget_low_s16(acc[sub]));
+                    int32x4_t i32_hi = vmovl_s16(vget_high_s16(acc[sub]));
+                    float32x4_t flo = vcvtq_f32_s32(i32_lo);
+                    float32x4_t fhi = vcvtq_f32_s32(i32_hi);
+
+                    int base = rblk + sub * 8;
+                    float32x4_t sc0 = vmulq_f32(vld1q_f32(&sc_base[base + 0]), vas);
+                    float32x4_t sc1 = vmulq_f32(vld1q_f32(&sc_base[base + 4]), vas);
+
+                    vst1q_f32(&y[base + 0], vfmaq_f32(vld1q_f32(&y[base + 0]), flo, sc0));
+                    vst1q_f32(&y[base + 4], vfmaq_f32(vld1q_f32(&y[base + 4]), fhi, sc1));
+                }
+            } else {
+                float buf[64];
+                for (int sub = 0; sub < 8; sub++) {
+                    int32x4_t i32_lo = vmovl_s16(vget_low_s16(acc[sub]));
+                    int32x4_t i32_hi = vmovl_s16(vget_high_s16(acc[sub]));
+                    vst1q_f32(&buf[sub * 8 + 0], vcvtq_f32_s32(i32_lo));
+                    vst1q_f32(&buf[sub * 8 + 4], vcvtq_f32_s32(i32_hi));
+                }
+                for (int r = 0; r < rc; r++) y[rblk + r] += buf[r] * sc_base[rblk + r] * act_scale;
+            }
+        }
+    }
+}
+#endif // ARCH_ARM64
 
 // ============================================================
 // DISPATCH CHAIN
 // ============================================================
 
-typedef enum { KERN_VPERMW, KERN_VPERMB, KERN_AVX2, KERN_LUT, KERN_SCALAR } KernelType;
+typedef enum {
+    KERN_VPERMW, KERN_VPERMB, KERN_AVX2, KERN_SSSE3,
+    KERN_NEON,
+    KERN_LUT, KERN_SCALAR
+} KernelType;
 
 static KernelType selected_kernel = KERN_SCALAR;
 static volatile int gemv_initialized = 0;
@@ -456,8 +727,16 @@ static void select_kernel(void) {
     if (cpu_has_avx512bw)   { selected_kernel = KERN_VPERMW; return; }
     if (cpu_has_avx512vbmi) { selected_kernel = KERN_VPERMB; return; }
     if (cpu_has_avx2)       { selected_kernel = KERN_AVX2; return; }
-#endif
+    if (cpu_has_ssse3)      { selected_kernel = KERN_SSSE3; return; }
     selected_kernel = KERN_LUT;
+    return;
+#endif
+#if ARCH_ARM64
+    if (cpu_has_neon)       { selected_kernel = KERN_NEON; return; }
+    selected_kernel = KERN_SCALAR;
+    return;
+#endif
+    selected_kernel = KERN_SCALAR;
 }
 
 static void ensure_init(void) {
@@ -474,17 +753,37 @@ void ternary_gemv(const PlanarWeights *pw, const int8_t * restrict x, float act_
     case KERN_VPERMW: gemv_vpermw(pw->data_colmaj, pw->scales_gm, x, act_scale, y, pw->rows, pw->cols, pw->group_size, pw->rows_padded); return;
     case KERN_VPERMB: gemv_dual_vpermb(pw->data_colmaj, pw->scales_gm, x, act_scale, y, pw->rows, pw->cols, pw->group_size, pw->rows_padded); return;
     case KERN_AVX2:   gemv_avx2_lut(pw->data_colmaj, pw->scales_gm, x, act_scale, y, pw->rows, pw->cols, pw->group_size, pw->rows_padded); return;
+    case KERN_SSSE3:  gemv_ssse3_psignb(pw->data_colmaj, pw->scales_gm, x, act_scale, y, pw->rows, pw->cols, pw->group_size, pw->rows_padded); return;
+#endif
+#if ARCH_ARM64
+    case KERN_NEON:   gemv_neon_lut(pw->data_colmaj, pw->scales_gm, x, act_scale, y, pw->rows, pw->cols, pw->group_size, pw->rows_padded); return;
 #endif
     case KERN_LUT:    gemv_lut_grouped(pw->data, pw->scales_rm, x, act_scale, y, pw->rows, pw->cols, pw->group_size); return;
     default:          gemv_dp4a_ref(pw->data, pw->scales_rm, x, act_scale, y, pw->rows, pw->cols, pw->group_size); return;
     }
 }
 
-const char *kernel_name(KernelType k) {
+const char *ternary_kernel_name(void) {
+    ensure_init();
+    switch (selected_kernel) {
+    case KERN_VPERMW: return "VPERMW fused (AVX-512 BW)";
+    case KERN_VPERMB: return "Dual-VPERMB (AVX-512 VBMI)";
+    case KERN_AVX2:   return "Nibble-Split LUT (AVX2)";
+    case KERN_SSSE3:  return "PSIGNB (SSSE3)";
+    case KERN_NEON:   return "Nibble-Split LUT (NEON)";
+    case KERN_LUT:    return "LUT-Grouped (portable)";
+    default:          return "dp4a scalar (portable)";
+    }
+}
+
+// Keep internal kernel_name for benchmark output compatibility
+static const char *kernel_name(KernelType k) {
     switch (k) {
     case KERN_VPERMW: return "VPERMW fused (AVX-512 BW)";
     case KERN_VPERMB: return "Dual-VPERMB (AVX-512 VBMI)";
     case KERN_AVX2:   return "Nibble-Split LUT (AVX2)";
+    case KERN_SSSE3:  return "PSIGNB (SSSE3)";
+    case KERN_NEON:   return "Nibble-Split LUT (NEON)";
     case KERN_LUT:    return "LUT-Grouped (portable)";
     default:          return "dp4a scalar (portable)";
     }
@@ -529,6 +828,15 @@ static TestResult verify_shape(const char *label, int M, int K, int gs) {
     printf("    %-28s dp4a vs LUT:    %.1e %s\n", label, md, md < 1e-4f ? "✓" : "✗");
 
 #if ARCH_X86_64
+    if (cpu_has_ssse3) {
+        float *ys = (float *)calloc(M, sizeof(float));
+        gemv_ssse3_psignb(pw.data_colmaj, pw.scales_gm, x, as, ys, M, K, gs, pw.rows_padded);
+        md = 0;
+        for (int i = 0; i < M; i++) { float d = fabsf(yr[i] - ys[i]); if (d > md) md = d; }
+        res.total++; if (md < 1e-4f) res.pass++; else res.fail++;
+        printf("    %-28s dp4a vs SSSE3:  %.1e %s\n", label, md, md < 1e-4f ? "✓" : "✗");
+        free(ys);
+    }
     if (cpu_has_avx2) {
         float *ya = (float *)calloc(M, sizeof(float));
         gemv_avx2_lut(pw.data_colmaj, pw.scales_gm, x, as, ya, M, K, gs, pw.rows_padded);
@@ -546,6 +854,17 @@ static TestResult verify_shape(const char *label, int M, int K, int gs) {
         res.total++; if (md < 1e-4f) res.pass++; else res.fail++;
         printf("    %-28s dp4a vs VPERMW: %.1e %s\n", label, md, md < 1e-4f ? "✓" : "✗");
         free(yv);
+    }
+#endif
+#if ARCH_ARM64
+    if (cpu_has_neon) {
+        float *yn = (float *)calloc(M, sizeof(float));
+        gemv_neon_lut(pw.data_colmaj, pw.scales_gm, x, as, yn, M, K, gs, pw.rows_padded);
+        md = 0;
+        for (int i = 0; i < M; i++) { float d = fabsf(yr[i] - yn[i]); if (d > md) md = d; }
+        res.total++; if (md < 1e-4f) res.pass++; else res.fail++;
+        printf("    %-28s dp4a vs NEON:   %.1e %s\n", label, md, md < 1e-4f ? "✓" : "✗");
+        free(yn);
     }
 #endif
     {
@@ -567,14 +886,20 @@ int main(void) {
     select_kernel();
 
     printf("╔══════════════════════════════════════════════════════════════╗\n");
-    printf("║  Ternary Selection v3.4.0 — Production Kernels               ║\n");
-    printf("║  Runtime Dispatch | AVX2 Restored | 16-bit Fast Vertical Acc ║\n");
+    printf("║  Ternary Selection v3.5.0 — Multi-Architecture Kernels       ║\n");
+    printf("║  x86: AVX-512 / AVX2 / SSSE3  |  ARM64: NEON                ║\n");
     printf("╚══════════════════════════════════════════════════════════════╝\n\n");
 
     printf("  CPU Features Detected:\n");
+#if ARCH_X86_64
+    printf("    SSSE3:        %s\n", cpu_has_ssse3      ? "✓" : "✗");
     printf("    AVX2 (+FMA):  %s\n", cpu_has_avx2       ? "✓" : "✗");
     printf("    AVX-512 BW:   %s\n", cpu_has_avx512bw   ? "✓" : "✗");
     printf("    AVX-512 VBMI: %s\n", cpu_has_avx512vbmi ? "✓" : "✗");
+#endif
+#if ARCH_ARM64
+    printf("    NEON:         %s\n", cpu_has_neon        ? "✓" : "✗");
+#endif
     printf("    Selected:     %s\n", kernel_name(selected_kernel));
     printf("  Storage: Planar SoA, 128B aligned, padded col-major\n\n");
 
@@ -623,8 +948,12 @@ int main(void) {
         BENCH("LUT-Grouped (i16)", gemv_lut_grouped(pw.data, pw.scales_rm, x, as, y, M, K, gs));
 
 #if ARCH_X86_64
+        if (cpu_has_ssse3)    BENCH("SSSE3 PSIGNB", gemv_ssse3_psignb(pw.data_colmaj, pw.scales_gm, x, as, y, M, K, gs, pw.rows_padded));
         if (cpu_has_avx2)     BENCH("AVX2 LUT (Nibble-Split) ★", gemv_avx2_lut(pw.data_colmaj, pw.scales_gm, x, as, y, M, K, gs, pw.rows_padded));
         if (cpu_has_avx512bw) BENCH("VPERMW fused (AVX-512)", gemv_vpermw(pw.data_colmaj, pw.scales_gm, x, as, y, M, K, gs, pw.rows_padded));
+#endif
+#if ARCH_ARM64
+        if (cpu_has_neon)     BENCH("NEON LUT (Nibble-Split)", gemv_neon_lut(pw.data_colmaj, pw.scales_gm, x, as, y, M, K, gs, pw.rows_padded));
 #endif
         BENCH("ternary_gemv() [dispatch]", ternary_gemv(&pw, x, as, y));
 
@@ -633,11 +962,14 @@ int main(void) {
         free(fw); free(x); free(y); planar_free(&pw);
     }
 
-    printf("═══ Kernel Dispatch Chain (v3.4.0) ═══\n\n");
+    printf("═══ Kernel Dispatch Chain (v3.5.0) ═══\n\n");
     printf("  1. VPERMW fused    (AVX-512 BW)   [64-row, unconditional SIMD]\n");
     printf("  2. Dual-VPERMB     (AVX-512 VBMI) [32-row, unconditional SIMD]\n");
     printf("  3. Nibble-Split    (AVX2)         ★ [32-row, 16-bit Vertical Acc]\n");
-    printf("  4. LUT-Grouped     (portable)     [L1 cached fallback]\n");
+    printf("  4. PSIGNB          (SSSE3)        [16-row, pre-AVX2 fallback]\n");
+    printf("  5. Nibble-Split    (NEON)         [64-row, ARM64]\n");
+    printf("  6. LUT-Grouped     (portable)     [L1 cached fallback]\n");
+    printf("  7. dp4a scalar     (portable)     [universal reference]\n");
 
     return 0;
 }

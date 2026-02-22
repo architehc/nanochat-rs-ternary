@@ -13,19 +13,31 @@ fn main() {
     let march_flag = format!("-march={}", march);
     println!("cargo:rerun-if-env-changed=TERNARY_MARCH");
 
-    // CPU kernels (v3.4.0) — AVX2 Nibble-Split kernel is self-contained.
-    // No separate AVX2 file needed (consolidated in ternary_gemv.c).
-    cc::Build::new()
+    // CPU kernels (v3.5.0) — All SIMD kernels consolidated in ternary_gemv.c.
+    // Supports x86_64 (AVX-512/AVX2/SSSE3) and AArch64 (NEON).
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+
+    let mut build = cc::Build::new();
+    build
         .file("csrc/ternary_gemv.c")
         .flag("-O3")
-        .flag(&march_flag)
         .flag("-fno-strict-aliasing")
         .flag("-DNDEBUG")
         // Rename main() so it doesn't conflict with Rust binary
         .flag("-Dmain=ternary_gemv_main")
         // Suppress warnings from battle-tested C code
-        .flag("-w")
-        .compile("ternary_gemv");
+        .flag("-w");
+
+    if target_arch == "aarch64" {
+        // ARM64: NEON is baseline, no special -march needed.
+        // Function-level target attributes are not needed since NEON is always available.
+    } else {
+        // x86_64: Use -march flag for non-SIMD helper code.
+        // SIMD kernels use function-level target attributes for runtime dispatch.
+        build.flag(&march_flag);
+    }
+
+    build.compile("ternary_gemv");
 
     println!("cargo:rerun-if-changed=csrc/ternary_gemv.c");
     println!("cargo:rerun-if-changed=csrc/ternary_gemv.h");

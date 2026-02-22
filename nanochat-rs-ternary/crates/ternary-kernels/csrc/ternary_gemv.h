@@ -24,3 +24,6 @@ void gemv_dp4a_ref(
     const int8_t  *x,    float act_scale,
     float *y, int M, int K, int gs
 );
+
+/* Returns the name of the selected kernel (self-initializing) */
+const char *ternary_kernel_name(void);

@@ -29,6 +29,8 @@ extern "C" {
         k: i32,
         gs: i32,
     );
+
+    fn ternary_kernel_name() -> *const std::ffi::c_char;
 }
 
 /// Convert PlanarWeights to the C struct for FFI.
@@ -157,6 +159,40 @@ pub fn has_avx512() -> bool {
 #[cfg(not(target_arch = "x86_64"))]
 pub fn has_avx512() -> bool {
     false
+}
+
+/// Check if SSSE3 is available (x86_64 only).
+#[cfg(target_arch = "x86_64")]
+pub fn has_ssse3() -> bool {
+    std::arch::is_x86_feature_detected!("ssse3")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn has_ssse3() -> bool {
+    false
+}
+
+/// Check if NEON is available (always true on AArch64).
+#[cfg(target_arch = "aarch64")]
+pub fn has_neon() -> bool {
+    std::arch::is_aarch64_feature_detected!("neon")
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+pub fn has_neon() -> bool {
+    false
+}
+
+/// Returns the name of the kernel selected by the C dispatch chain.
+pub fn selected_kernel_name() -> &'static str {
+    // SAFETY: ternary_kernel_name() returns a pointer to a static string literal
+    // in the C code. The pointer is valid for the lifetime of the program.
+    unsafe {
+        let ptr = ternary_kernel_name();
+        std::ffi::CStr::from_ptr(ptr)
+            .to_str()
+            .unwrap_or("unknown")
+    }
 }
 
 /// Safe GEMV dispatch — calls the best available kernel automatically.
