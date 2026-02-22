@@ -1,11 +1,16 @@
-//! Wave Field Attention: O(n log n) physics-based attention via FFT convolution.
+//! Wave Field Attention: O(n log n) physics-based attention via transform-domain convolution.
 //!
 //! Replaces standard KV-cache attention with a constant-size wave field state.
 //! Heavy projections (scatter, gate, output) are ternary BitLinear;
-//! physics engine (omega, alpha, phi + FFT) stays FP32.
+//! physics engine (omega, alpha, phi + transform) stays FP32.
+//!
+//! Supports three convolution modes:
+//! - FFT: Complex<f32> (original, floating-point)
+//! - FWHT: Integer add/sub only, self-inverse
+//! - Haar DWT: Integer add/sub only, multi-scale localized
 
 use crate::bitlinear::BitLinear;
-use crate::config::WaveFieldConfig;
+use crate::config::{ConvolveMode, WaveFieldConfig};
 use num_complex::Complex;
 use std::sync::Mutex;
 
@@ -17,39 +22,148 @@ pub struct WavePhysicsParams {
     pub phi: Vec<f32>,   // [n_heads]
 }
 
-/// Pre-FFT'd wave kernels in frequency domain (cached at model load).
+/// Pre-transformed wave kernels (cached at model load).
 #[derive(Debug)]
-pub struct WaveKernelCache {
-    pub kernels_freq: Vec<Complex<f32>>, // [n_heads * fft_size]
-    pub n_heads: usize,
-    pub field_size: usize,
-    pub fft_size: usize,
+pub enum WaveKernelCache {
+    /// FFT: Complex frequency-domain kernels. [n_heads * fft_size]
+    Fft {
+        kernels_freq: Vec<Complex<f32>>,
+        n_heads: usize,
+        field_size: usize,
+        fft_size: usize,
+    },
+    /// FWHT: Real-valued Walsh-Hadamard transformed kernels. [n_heads * field_size]
+    Fwht {
+        kernels_fwht: Vec<f32>,
+        n_heads: usize,
+        field_size: usize,
+    },
+    /// Haar: Real-valued Haar wavelet transformed kernels. [n_heads * field_size]
+    Haar {
+        kernels_haar: Vec<f32>,
+        n_heads: usize,
+        field_size: usize,
+        levels: usize,
+    },
 }
 
 impl WaveKernelCache {
-    /// Build kernel cache from physics params.
-    pub fn from_physics(physics: &WavePhysicsParams, field_size: usize) -> Self {
+    /// Generate time-domain kernel for a single head.
+    fn generate_kernel(physics: &WavePhysicsParams, head: usize, field_size: usize) -> Vec<f32> {
+        let mut kernel = vec![0.0f32; field_size];
+        for t in 0..field_size {
+            let tf = t as f32;
+            kernel[t] = (-physics.alpha[head] * tf).exp()
+                * (physics.omega[head] * tf + physics.phi[head]).cos();
+        }
+        kernel
+    }
+
+    /// Build FFT kernel cache from physics params.
+    pub fn from_physics_fft(physics: &WavePhysicsParams, field_size: usize) -> Self {
         let n_heads = physics.omega.len();
         let fft_size = (2 * field_size).next_power_of_two();
         let mut kernels_freq = vec![Complex::new(0.0, 0.0); n_heads * fft_size];
 
         for h in 0..n_heads {
-            // Generate time-domain kernel: k[t] = exp(-alpha*t) * cos(omega*t + phi)
-            let mut kernel = vec![0.0f32; field_size];
-            for t in 0..field_size {
-                let tf = t as f32;
-                kernel[t] = (-physics.alpha[h] * tf).exp() * (physics.omega[h] * tf + physics.phi[h]).cos();
-            }
-            // FFT the kernel
+            let kernel = Self::generate_kernel(physics, h, field_size);
             let kernel_fft = wave_fft::cpu_fft::precompute_kernel_fft(&kernel, field_size);
             kernels_freq[h * fft_size..(h + 1) * fft_size].copy_from_slice(&kernel_fft);
         }
 
-        Self {
+        WaveKernelCache::Fft {
             kernels_freq,
             n_heads,
             field_size,
             fft_size,
+        }
+    }
+
+    /// Build FWHT kernel cache from physics params.
+    pub fn from_physics_fwht(physics: &WavePhysicsParams, field_size: usize) -> Self {
+        let n_heads = physics.omega.len();
+        let mut kernels_fwht = vec![0.0f32; n_heads * field_size];
+
+        for h in 0..n_heads {
+            let kernel = Self::generate_kernel(physics, h, field_size);
+            let kf = wave_fft::cpu_fwht::precompute_kernel_fwht(&kernel, field_size);
+            kernels_fwht[h * field_size..(h + 1) * field_size].copy_from_slice(&kf);
+        }
+
+        WaveKernelCache::Fwht {
+            kernels_fwht,
+            n_heads,
+            field_size,
+        }
+    }
+
+    /// Build Haar kernel cache from physics params.
+    pub fn from_physics_haar(physics: &WavePhysicsParams, field_size: usize, levels: usize) -> Self {
+        let n_heads = physics.omega.len();
+        let mut kernels_haar = vec![0.0f32; n_heads * field_size];
+
+        for h in 0..n_heads {
+            let kernel = Self::generate_kernel(physics, h, field_size);
+            let kh = wave_fft::cpu_haar::precompute_kernel_haar(&kernel, field_size, levels);
+            kernels_haar[h * field_size..(h + 1) * field_size].copy_from_slice(&kh);
+        }
+
+        WaveKernelCache::Haar {
+            kernels_haar,
+            n_heads,
+            field_size,
+            levels,
+        }
+    }
+
+    /// Build kernel cache from physics params, dispatching on convolve mode.
+    pub fn from_physics(physics: &WavePhysicsParams, config: &WaveFieldConfig) -> Self {
+        match config.convolve_mode {
+            ConvolveMode::Fft => Self::from_physics_fft(physics, config.field_size),
+            ConvolveMode::Fwht => Self::from_physics_fwht(physics, config.field_size),
+            ConvolveMode::Haar => {
+                let levels = config.haar_levels
+                    .unwrap_or_else(|| (config.field_size as f64).log2() as usize);
+                Self::from_physics_haar(physics, config.field_size, levels)
+            }
+        }
+    }
+
+    pub fn n_heads(&self) -> usize {
+        match self {
+            WaveKernelCache::Fft { n_heads, .. } => *n_heads,
+            WaveKernelCache::Fwht { n_heads, .. } => *n_heads,
+            WaveKernelCache::Haar { n_heads, .. } => *n_heads,
+        }
+    }
+
+    pub fn field_size(&self) -> usize {
+        match self {
+            WaveKernelCache::Fft { field_size, .. } => *field_size,
+            WaveKernelCache::Fwht { field_size, .. } => *field_size,
+            WaveKernelCache::Haar { field_size, .. } => *field_size,
+        }
+    }
+
+    /// Convolve a single column buffer using the cached kernel for the given head.
+    pub fn convolve_column(&self, col_buf: &[f32], head: usize) -> Vec<f32> {
+        let field_size = self.field_size();
+        match self {
+            WaveKernelCache::Fft { kernels_freq, fft_size, .. } => {
+                let kf_start = head * *fft_size;
+                let kf = &kernels_freq[kf_start..kf_start + *fft_size];
+                wave_fft::cpu_fft::fft_convolve_precomputed(col_buf, kf, field_size)
+            }
+            WaveKernelCache::Fwht { kernels_fwht, .. } => {
+                let kf_start = head * field_size;
+                let kf = &kernels_fwht[kf_start..kf_start + field_size];
+                wave_fft::cpu_fwht::fwht_convolve_precomputed(col_buf, kf, field_size)
+            }
+            WaveKernelCache::Haar { kernels_haar, levels, .. } => {
+                let kh_start = head * field_size;
+                let kh = &kernels_haar[kh_start..kh_start + field_size];
+                wave_fft::cpu_haar::haar_convolve_precomputed(col_buf, kh, field_size, *levels)
+            }
         }
     }
 }
@@ -255,7 +369,7 @@ impl WaveFieldAttention {
                 .collect(),
         };
 
-        let kernel_cache = WaveKernelCache::from_physics(&physics, field_size);
+        let kernel_cache = WaveKernelCache::from_physics(&physics, config);
 
         let coupling = if config.use_head_coupling {
             Some(HeadCoupling::identity(n_heads))
@@ -343,17 +457,15 @@ impl WaveFieldAttention {
             bilinear_scatter(values, field, field_pos, field_size, head_dim);
         }
 
-        // 3. FFT convolution per head (using precomputed kernels)
+        // 3. Transform-domain convolution per head (using precomputed kernels)
         // IMPORTANT: Convolve on a temporary copy — don't modify state.fields.
         // State accumulates raw scattered values; convolution is applied only for reading.
         let field_len = n_heads * field_size * head_dim;
         ws.conv_buf.resize(field_len, 0.0);
-        let fft_size = self.kernel_cache.fft_size;
         let mut col_buf = vec![0.0f32; field_size];
         for h in 0..n_heads {
             let field_start = h * field_size * head_dim;
             let conv_start = h * field_size * head_dim;
-            let kf_start = h * fft_size;
 
             for d in 0..head_dim {
                 // Extract column d of this head's field
@@ -361,9 +473,8 @@ impl WaveFieldAttention {
                     col_buf[t] = state.fields[field_start + t * head_dim + d];
                 }
 
-                // Convolve into temporary buffer
-                let kf = &self.kernel_cache.kernels_freq[kf_start..kf_start + fft_size];
-                let convolved = wave_fft::cpu_fft::fft_convolve_precomputed(&col_buf, kf, field_size);
+                // Convolve using cached kernel (dispatches to FFT/FWHT/Haar)
+                let convolved = self.kernel_cache.convolve_column(&col_buf, h);
 
                 // Write to temporary convolved buffer (NOT back to state)
                 for t in 0..field_size {
@@ -439,23 +550,20 @@ impl WaveFieldAttention {
             }
         }
 
-        // 2. Single FFT convolution per head into temporary buffer (O(n log n) total)
+        // 2. Single convolution per head into temporary buffer (O(n log n) total)
         // IMPORTANT: Don't modify state.fields — it accumulates raw scattered values.
-        let fft_size = self.kernel_cache.fft_size;
         let field_len = n_heads * field_size * head_dim;
         let mut conv_fields = vec![0.0f32; field_len];
         let mut col_buf = vec![0.0f32; field_size];
         for h in 0..n_heads {
             let field_start = h * field_size * head_dim;
-            let kf_start = h * fft_size;
-            let kf = &self.kernel_cache.kernels_freq[kf_start..kf_start + fft_size];
 
             for d in 0..head_dim {
                 for t in 0..field_size {
                     col_buf[t] = state.fields[field_start + t * head_dim + d];
                 }
 
-                let convolved = wave_fft::cpu_fft::fft_convolve_precomputed(&col_buf, kf, field_size);
+                let convolved = self.kernel_cache.convolve_column(&col_buf, h);
 
                 for t in 0..field_size {
                     conv_fields[field_start + t * head_dim + d] = convolved[t];
@@ -510,6 +618,8 @@ mod tests {
             n_wave_heads: 4,
             head_dim: 32,
             use_head_coupling: true,
+            convolve_mode: crate::config::ConvolveMode::Fft,
+            haar_levels: None,
         }
     }
 
@@ -589,10 +699,21 @@ mod tests {
             alpha: vec![0.1],
             phi: vec![0.0],
         };
-        let cache = WaveKernelCache::from_physics(&physics, 128);
-        assert_eq!(cache.n_heads, 1);
-        assert_eq!(cache.field_size, 128);
-        assert!(cache.fft_size >= 256);
+        let config = WaveFieldConfig {
+            field_size: 128,
+            n_wave_heads: 1,
+            head_dim: 1,
+            use_head_coupling: false,
+            convolve_mode: crate::config::ConvolveMode::Fft,
+            haar_levels: None,
+        };
+        let cache = WaveKernelCache::from_physics(&physics, &config);
+        assert_eq!(cache.n_heads(), 1);
+        assert_eq!(cache.field_size(), 128);
+        match &cache {
+            WaveKernelCache::Fft { fft_size, .. } => assert!(*fft_size >= 256),
+            _ => panic!("Expected FFT cache"),
+        }
     }
 
     #[test]

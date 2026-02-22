@@ -1344,6 +1344,8 @@ mod tests {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 

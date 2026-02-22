@@ -3975,6 +3975,7 @@ dependencies = [
  "candle-core",
  "num-complex",
  "rustfft",
+ "ternary-kernels",
 ]
 
 [[package]]

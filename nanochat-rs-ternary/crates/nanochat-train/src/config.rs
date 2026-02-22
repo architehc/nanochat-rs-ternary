@@ -202,6 +202,12 @@ pub struct TrainConfig {
     /// Fraction of layers using wave field (1.0 = all layers when enabled)
     #[serde(default = "default_wavefield_ratio")]
     pub wavefield_ratio: f32,
+    /// Convolution mode for wave field: "fft", "fwht", or "haar" (default: "fft")
+    #[serde(default)]
+    pub wavefield_convolve_mode: Option<String>,
+    /// Number of Haar decomposition levels (only for haar mode, None = max)
+    #[serde(default)]
+    pub wavefield_haar_levels: Option<usize>,
 }
 
 impl TrainConfig {
@@ -451,6 +457,8 @@ impl TrainConfig {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 
@@ -505,6 +513,8 @@ impl TrainConfig {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 
@@ -581,6 +591,8 @@ impl TrainConfig {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 
@@ -635,6 +647,8 @@ impl TrainConfig {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 
@@ -698,6 +712,8 @@ impl TrainConfig {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 
@@ -753,6 +769,8 @@ impl TrainConfig {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 
@@ -807,6 +825,8 @@ impl TrainConfig {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 
@@ -861,6 +881,8 @@ impl TrainConfig {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 
@@ -915,6 +937,8 @@ impl TrainConfig {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 

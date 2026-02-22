@@ -77,6 +77,12 @@ impl TransformerBlockTrain {
                 config.wavefield_field_size,
                 config.group_size,
                 config.wavefield_head_coupling,
+                match config.wavefield_convolve_mode.as_deref() {
+                    Some("fwht") => crate::wavefield::ConvolveMode::Fwht,
+                    Some("haar") => crate::wavefield::ConvolveMode::Haar,
+                    _ => crate::wavefield::ConvolveMode::Fft,
+                },
+                config.wavefield_haar_levels,
                 vb.pp("wavefield"),
             )?),
             ffn: FeedForwardTrain::new(config.dim, ffn_dim, config.group_size, vb.pp("ffn"))?,
@@ -185,6 +191,8 @@ mod tests {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 

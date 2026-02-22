@@ -1,12 +1,28 @@
 //! Differentiable Wave Field Attention for training with Candle autograd.
 //!
-//! Uses FFT convolution through wave_fft::candle_fft::FftConvolveOp for
-//! gradient flow through the physics engine (omega, alpha, phi).
+//! Supports three convolution modes for gradient flow:
+//! - FFT: Complex<f32> via wave_fft::candle_fft (original)
+//! - FWHT: Integer add/sub only via wave_fft::candle_fwht
+//! - Haar DWT: Integer add/sub only via wave_fft::candle_haar
 
 use candle_core::{Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 use crate::layers::BitLinearSTE;
+
+// Re-export from nanochat_model::config via the public type.
+// We define it locally to avoid adding nanochat-model as a dependency.
+pub use nanochat_model_config::ConvolveMode;
+
+mod nanochat_model_config {
+    /// Convolution mode for wave field attention (mirrors nanochat_model::config::ConvolveMode).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ConvolveMode {
+        Fft,
+        Fwht,
+        Haar,
+    }
+}
 
 /// Differentiable wave field attention for training.
 ///
@@ -23,6 +39,8 @@ pub struct WaveFieldAttentionTrain {
     pub n_heads: usize,
     pub head_dim: usize,
     pub field_size: usize,
+    pub convolve_mode: ConvolveMode,
+    pub haar_levels: Option<usize>,
 }
 
 impl WaveFieldAttentionTrain {
@@ -33,6 +51,8 @@ impl WaveFieldAttentionTrain {
         field_size: usize,
         group_size: usize,
         use_head_coupling: bool,
+        convolve_mode: ConvolveMode,
+        haar_levels: Option<usize>,
         vb: VarBuilder,
     ) -> Result<Self> {
         let total_proj = n_heads * head_dim;
@@ -86,6 +106,8 @@ impl WaveFieldAttentionTrain {
             n_heads,
             head_dim,
             field_size,
+            convolve_mode,
+            haar_levels,
         })
     }
 
@@ -178,11 +200,9 @@ impl WaveFieldAttentionTrain {
         // kernel: [n_heads, field_size]
         let kernel = damping.mul(&oscillation)?;
 
-        // 5. FFT convolution per head
+        // 5. Transform-domain convolution per head (dispatched by convolve_mode)
         let fields = fields.reshape((batch, n_heads, field_size, head_dim))?;
 
-        // FFT convolution: batch all channels per head into one op.
-        // The CustomOp supports [N, field_size] signals with broadcast [field_size] kernel.
         let mut convolved_heads = Vec::with_capacity(n_heads);
         for h in 0..n_heads {
             let field_h = fields.narrow(1, h, 1)?.squeeze(1)?; // [batch, field_size, head_dim]
@@ -192,12 +212,26 @@ impl WaveFieldAttentionTrain {
             let field_t = field_h.transpose(1, 2)?.contiguous()?; // [batch, head_dim, field_size]
             let field_flat = field_t.reshape((batch * head_dim, field_size))?;
 
-            // Single batched FFT call (kernel broadcast to all batch*head_dim signals)
-            let conv_flat = wave_fft::candle_fft::fft_convolve_with_grad(
-                &field_flat,
-                &kernel_h,
-                field_size,
-            )?; // [batch*head_dim, field_size]
+            // Dispatch convolution based on mode
+            let conv_flat = match self.convolve_mode {
+                ConvolveMode::Fft => {
+                    wave_fft::candle_fft::fft_convolve_with_grad(
+                        &field_flat, &kernel_h, field_size,
+                    )?
+                }
+                ConvolveMode::Fwht => {
+                    wave_fft::candle_fwht::fwht_convolve_with_grad(
+                        &field_flat, &kernel_h, field_size,
+                    )?
+                }
+                ConvolveMode::Haar => {
+                    let levels = self.haar_levels
+                        .unwrap_or_else(|| (field_size as f64).log2() as usize);
+                    wave_fft::candle_haar::haar_convolve_with_grad(
+                        &field_flat, &kernel_h, field_size, levels,
+                    )?
+                }
+            }; // [batch*head_dim, field_size]
 
             // Reshape back: [batch, head_dim, field_size] -> transpose -> [batch, field_size, head_dim]
             let conv_h = conv_flat
@@ -306,6 +340,8 @@ mod tests {
             dim, n_heads, head_dim, field_size,
             dim, // group_size = dim for test
             true, // use_head_coupling
+            ConvolveMode::Fft,
+            None,
             vb.pp("wf"),
         )?;
         Ok((wf, varmap))

@@ -53,6 +53,17 @@ pub enum LayerType {
     DeltaNetAttention,
 }
 
+/// Convolution mode for wave field attention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConvolveMode {
+    /// Complex FFT convolution (original, requires floating-point complex arithmetic).
+    Fft,
+    /// Fast Walsh-Hadamard Transform (integer add/sub only, self-inverse).
+    Fwht,
+    /// Discrete Haar Wavelet Transform (integer add/sub only, multi-scale localized).
+    Haar,
+}
+
 /// Wave Field attention configuration.
 #[derive(Debug, Clone)]
 pub struct WaveFieldConfig {
@@ -64,6 +75,11 @@ pub struct WaveFieldConfig {
     pub head_dim: usize,
     /// Whether to use inter-head coupling (default: true).
     pub use_head_coupling: bool,
+    /// Convolution mode (default: Fwht for integer-only compute).
+    pub convolve_mode: ConvolveMode,
+    /// Number of Haar decomposition levels (only used when convolve_mode == Haar).
+    /// None means use max levels = log2(field_size).
+    pub haar_levels: Option<usize>,
 }
 
 /// Configuration for a nanochat ternary model.

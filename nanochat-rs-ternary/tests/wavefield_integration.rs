@@ -6,10 +6,18 @@
 //! - Full model with wave field layers produces valid output
 //! - Batch prefill matches sequential token-by-token
 
-use nanochat_model::config::{ModelConfig, WaveFieldConfig};
+use nanochat_model::config::{ConvolveMode, ModelConfig, WaveFieldConfig};
 use nanochat_model::model::NanochatModel;
 
 fn make_wavefield_config() -> ModelConfig {
+    make_wavefield_config_mode(ConvolveMode::Fft)
+}
+
+fn make_wavefield_config_mode(mode: ConvolveMode) -> ModelConfig {
+    let haar_levels = match mode {
+        ConvolveMode::Haar => Some(3),
+        _ => None,
+    };
     let mut config = ModelConfig::d20();
     config.dim = 128;
     config.n_layers = 4;
@@ -23,6 +31,8 @@ fn make_wavefield_config() -> ModelConfig {
         n_wave_heads: 4,
         head_dim: 32,
         use_head_coupling: true,
+        convolve_mode: mode,
+        haar_levels,
     });
     config.wavefield_ratio = Some(1.0); // all layers wave field
     config
@@ -295,6 +305,257 @@ fn wave_fft_precomputed_matches_direct() {
             i,
             direct[i],
             precomp[i]
+        );
+    }
+}
+
+// ───────────────── FWHT Mode Tests ─────────────────
+
+#[test]
+fn wavefield_fwht_model_produces_valid_logits() {
+    let config = make_wavefield_config_mode(ConvolveMode::Fwht);
+    let mut model = NanochatModel::new_random(config.clone());
+
+    let logits = model.forward_token(42, 0);
+    assert_eq!(logits.len(), config.vocab_size);
+
+    for (i, &l) in logits.iter().enumerate() {
+        assert!(l.is_finite(), "FWHT logit[{}] = {} not finite", i, l);
+    }
+
+    // Non-zero output
+    let max_abs = logits.iter().map(|l| l.abs()).fold(0.0f32, f32::max);
+    assert!(max_abs > 0.0, "FWHT logits should be non-zero");
+}
+
+#[test]
+fn wavefield_fwht_sequence_produces_valid_logits() {
+    let config = make_wavefield_config_mode(ConvolveMode::Fwht);
+    let mut model = NanochatModel::new_random(config.clone());
+
+    let tokens: Vec<u32> = vec![1, 5, 10, 20, 50];
+    let logits = model.forward_sequence(&tokens);
+    assert_eq!(logits.len(), config.vocab_size);
+
+    for (i, &l) in logits.iter().enumerate() {
+        assert!(l.is_finite(), "FWHT seq logit[{}] = {} not finite", i, l);
+    }
+}
+
+#[test]
+fn wavefield_fwht_causality() {
+    let config = make_wavefield_config_mode(ConvolveMode::Fwht);
+
+    let mut model_a = NanochatModel::new_random(config.clone());
+    let logits_a = model_a.forward_token(1, 0);
+
+    let mut model_b = NanochatModel::new_random(config.clone());
+    let logits_b = model_b.forward_token(1, 0);
+
+    for i in 0..logits_a.len() {
+        assert!(
+            (logits_a[i] - logits_b[i]).abs() < 1e-5,
+            "FWHT causality violation at logit[{}]: {} vs {}",
+            i, logits_a[i], logits_b[i]
+        );
+    }
+}
+
+#[test]
+fn wavefield_fwht_energy_bounded() {
+    use nanochat_model::block::AttentionState;
+
+    let config = make_wavefield_config_mode(ConvolveMode::Fwht);
+    let mut model = NanochatModel::new_random(config);
+
+    for pos in 0..30 {
+        let token = ((pos * 7 + 3) % 256) as u32;
+        let _logits = model.forward_token(token, pos);
+    }
+
+    for (i, state) in model.attn_states.iter().enumerate() {
+        if let AttentionState::WaveField(wf_state) = state {
+            let energy = wf_state.energy();
+            assert!(energy.is_finite(), "FWHT layer {} energy not finite: {}", i, energy);
+            assert!(energy < 1e10, "FWHT layer {} energy exploded: {}", i, energy);
+        }
+    }
+}
+
+// ───────────────── Haar Mode Tests ─────────────────
+
+#[test]
+fn wavefield_haar_model_produces_valid_logits() {
+    let config = make_wavefield_config_mode(ConvolveMode::Haar);
+    let mut model = NanochatModel::new_random(config.clone());
+
+    let logits = model.forward_token(42, 0);
+    assert_eq!(logits.len(), config.vocab_size);
+
+    for (i, &l) in logits.iter().enumerate() {
+        assert!(l.is_finite(), "Haar logit[{}] = {} not finite", i, l);
+    }
+
+    let max_abs = logits.iter().map(|l| l.abs()).fold(0.0f32, f32::max);
+    assert!(max_abs > 0.0, "Haar logits should be non-zero");
+}
+
+#[test]
+fn wavefield_haar_sequence_produces_valid_logits() {
+    let config = make_wavefield_config_mode(ConvolveMode::Haar);
+    let mut model = NanochatModel::new_random(config.clone());
+
+    let tokens: Vec<u32> = vec![1, 5, 10, 20, 50];
+    let logits = model.forward_sequence(&tokens);
+    assert_eq!(logits.len(), config.vocab_size);
+
+    for (i, &l) in logits.iter().enumerate() {
+        assert!(l.is_finite(), "Haar seq logit[{}] = {} not finite", i, l);
+    }
+}
+
+#[test]
+fn wavefield_haar_causality() {
+    let config = make_wavefield_config_mode(ConvolveMode::Haar);
+
+    let mut model_a = NanochatModel::new_random(config.clone());
+    let logits_a = model_a.forward_token(1, 0);
+
+    let mut model_b = NanochatModel::new_random(config.clone());
+    let logits_b = model_b.forward_token(1, 0);
+
+    for i in 0..logits_a.len() {
+        assert!(
+            (logits_a[i] - logits_b[i]).abs() < 1e-5,
+            "Haar causality violation at logit[{}]: {} vs {}",
+            i, logits_a[i], logits_b[i]
+        );
+    }
+}
+
+#[test]
+fn wavefield_haar_energy_bounded() {
+    use nanochat_model::block::AttentionState;
+
+    let config = make_wavefield_config_mode(ConvolveMode::Haar);
+    let mut model = NanochatModel::new_random(config);
+
+    for pos in 0..30 {
+        let token = ((pos * 7 + 3) % 256) as u32;
+        let _logits = model.forward_token(token, pos);
+    }
+
+    for (i, state) in model.attn_states.iter().enumerate() {
+        if let AttentionState::WaveField(wf_state) = state {
+            let energy = wf_state.energy();
+            assert!(energy.is_finite(), "Haar layer {} energy not finite: {}", i, energy);
+            assert!(energy < 1e10, "Haar layer {} energy exploded: {}", i, energy);
+        }
+    }
+}
+
+// ───────────────── Cross-Mode Consistency ─────────────────
+
+#[test]
+fn wavefield_all_modes_produce_output() {
+    // All three modes should produce finite, non-zero logits for the same token
+    for mode in [ConvolveMode::Fft, ConvolveMode::Fwht, ConvolveMode::Haar] {
+        let config = make_wavefield_config_mode(mode);
+        let mut model = NanochatModel::new_random(config.clone());
+        let logits = model.forward_token(42, 0);
+
+        assert_eq!(logits.len(), config.vocab_size, "{:?}: wrong logit count", mode);
+
+        let all_finite = logits.iter().all(|l| l.is_finite());
+        assert!(all_finite, "{:?}: not all logits finite", mode);
+
+        let max_abs = logits.iter().map(|l| l.abs()).fold(0.0f32, f32::max);
+        assert!(max_abs > 0.0, "{:?}: all logits zero", mode);
+    }
+}
+
+// ───────────────── FWHT Infrastructure ─────────────────
+
+#[test]
+fn wave_fwht_roundtrip() {
+    let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let n = x.len();
+
+    // Convolve with delta should return original (up to scaling)
+    let mut delta = vec![0.0f32; n];
+    delta[0] = 1.0;
+
+    let result = wave_fft::cpu_fwht::fwht_convolve(&x, &delta, n);
+    for i in 0..n {
+        assert!(
+            (result[i] - x[i]).abs() < 1e-4,
+            "FWHT roundtrip failed at {}: {} vs {}", i, result[i], x[i]
+        );
+    }
+}
+
+#[test]
+fn wave_fwht_precomputed_matches_direct() {
+    let signal = vec![1.0, 0.5, 0.3, 0.1, 0.0, 0.0, 0.0, 0.0];
+    let kernel = vec![1.0, 0.8, 0.5, 0.2, 0.0, 0.0, 0.0, 0.0];
+    let n = signal.len();
+
+    let direct = wave_fft::cpu_fwht::fwht_convolve(&signal, &kernel, n);
+    let kernel_fwht = wave_fft::cpu_fwht::precompute_kernel_fwht(&kernel, n);
+    let precomp = wave_fft::cpu_fwht::fwht_convolve_precomputed(&signal, &kernel_fwht, n);
+
+    for i in 0..n {
+        assert!(
+            (direct[i] - precomp[i]).abs() < 1e-5,
+            "FWHT precomputed mismatch at {}: {} vs {}", i, direct[i], precomp[i]
+        );
+    }
+}
+
+// ───────────────── Haar Infrastructure ─────────────────
+
+#[test]
+fn wave_haar_self_convolution_finite() {
+    // Haar convolution (pointwise multiply in wavelet domain) doesn't have
+    // the same delta-identity property as FFT/FWHT. Instead verify:
+    // 1. Output is finite and non-zero
+    // 2. Commutative: haar_convolve(a,b) == haar_convolve(b,a)
+    let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let b = vec![0.5, 0.3, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let n = a.len();
+    let levels = 3;
+
+    let result_ab = wave_fft::cpu_haar::haar_convolve(&a, &b, n, levels);
+    let result_ba = wave_fft::cpu_haar::haar_convolve(&b, &a, n, levels);
+
+    assert_eq!(result_ab.len(), n);
+    for i in 0..n {
+        assert!(result_ab[i].is_finite(), "Haar result not finite at {}", i);
+        assert!(
+            (result_ab[i] - result_ba[i]).abs() < 1e-5,
+            "Haar not commutative at {}: {} vs {}", i, result_ab[i], result_ba[i]
+        );
+    }
+
+    let max_abs = result_ab.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+    assert!(max_abs > 0.0, "Haar convolution produced all zeros");
+}
+
+#[test]
+fn wave_haar_precomputed_matches_direct() {
+    let signal = vec![1.0, 0.5, 0.3, 0.1, 0.0, 0.0, 0.0, 0.0];
+    let kernel = vec![1.0, 0.8, 0.5, 0.2, 0.0, 0.0, 0.0, 0.0];
+    let n = signal.len();
+    let levels = 3;
+
+    let direct = wave_fft::cpu_haar::haar_convolve(&signal, &kernel, n, levels);
+    let kernel_haar = wave_fft::cpu_haar::precompute_kernel_haar(&kernel, n, levels);
+    let precomp = wave_fft::cpu_haar::haar_convolve_precomputed(&signal, &kernel_haar, n, levels);
+
+    for i in 0..n {
+        assert!(
+            (direct[i] - precomp[i]).abs() < 1e-5,
+            "Haar precomputed mismatch at {}: {} vs {}", i, direct[i], precomp[i]
         );
     }
 }

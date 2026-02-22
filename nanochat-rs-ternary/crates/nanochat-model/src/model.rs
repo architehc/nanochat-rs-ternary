@@ -260,7 +260,7 @@ impl NanochatModel {
                 }).collect();
 
                 let physics = WavePhysicsParams { omega, alpha, phi };
-                let kernel_cache = WaveKernelCache::from_physics(&physics, field_size);
+                let kernel_cache = WaveKernelCache::from_physics(&physics, wf_config);
 
                 let coupling = if wf_config.use_head_coupling {
                     let logits_data = Self::load_f32_vec(&gguf, &format!("{prefix}.wavefield.coupling_logits"));
@@ -815,11 +815,25 @@ impl NanochatModel {
                             Some(GgufValue::Bool(v)) => *v,
                             _ => true,
                         };
+                        let convolve_mode = match gguf.metadata.get("nanochat.wavefield.convolve_mode") {
+                            Some(GgufValue::String(s)) => match s.as_str() {
+                                "fwht" => crate::config::ConvolveMode::Fwht,
+                                "haar" => crate::config::ConvolveMode::Haar,
+                                _ => crate::config::ConvolveMode::Fft,
+                            },
+                            _ => crate::config::ConvolveMode::Fft,
+                        };
+                        let haar_levels = match gguf.metadata.get("nanochat.wavefield.haar_levels") {
+                            Some(GgufValue::U32(v)) if *v > 0 => Some(*v as usize),
+                            _ => None,
+                        };
                         Some(WaveFieldConfig {
                             field_size: *field_size as usize,
                             n_wave_heads,
                             head_dim,
                             use_head_coupling,
+                            convolve_mode,
+                            haar_levels,
                         })
                     }
                     _ => None,

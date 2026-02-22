@@ -112,6 +112,22 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
             "nanochat.wavefield.ratio_pct",
             GgufValue::U32((config.wavefield_ratio * 100.0) as u32),
         );
+        // Convolution mode for wave field (default: "fft" for backward compat)
+        let convolve_mode_str = match config.wavefield_convolve_mode.as_deref() {
+            Some("fwht") => "fwht",
+            Some("haar") => "haar",
+            _ => "fft",
+        };
+        writer.add_metadata(
+            "nanochat.wavefield.convolve_mode",
+            GgufValue::String(convolve_mode_str.to_string()),
+        );
+        if let Some(levels) = config.wavefield_haar_levels {
+            writer.add_metadata(
+                "nanochat.wavefield.haar_levels",
+                GgufValue::U32(levels as u32),
+            );
+        }
     }
 
     // Token embedding (FP32 -> stored as f32 in GGUF)
@@ -447,6 +463,8 @@ mod tests {
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
             wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
         }
     }
 

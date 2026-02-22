@@ -39,8 +39,27 @@ fn main() {
 
     build.compile("ternary_gemv");
 
+    // FWHT + Haar kernels (integer-only transforms for wave field attention)
+    let mut fwht_build = cc::Build::new();
+    fwht_build
+        .file("csrc/fwht_haar.c")
+        .flag("-O3")
+        .flag("-fno-strict-aliasing")
+        .flag("-DNDEBUG")
+        .flag("-w");
+
+    if target_arch == "aarch64" {
+        // ARM64: NEON is baseline
+    } else {
+        fwht_build.flag(&march_flag);
+    }
+
+    fwht_build.compile("fwht_haar");
+
     println!("cargo:rerun-if-changed=csrc/ternary_gemv.c");
     println!("cargo:rerun-if-changed=csrc/ternary_gemv.h");
+    println!("cargo:rerun-if-changed=csrc/fwht_haar.c");
+    println!("cargo:rerun-if-changed=csrc/fwht_haar.h");
     println!("cargo:rerun-if-changed=csrc/ternary_dp4a.cu");
     println!("cargo:rerun-if-env-changed=CUDA_ARCH");
 

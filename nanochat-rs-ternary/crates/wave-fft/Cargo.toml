@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 rustfft = { workspace = true }
 num-complex = { workspace = true }
+ternary-kernels = { path = "../ternary-kernels" }
 
 [features]
 default = []
