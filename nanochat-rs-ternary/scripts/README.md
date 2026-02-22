@@ -16,6 +16,35 @@ Validates the entire pipeline:
 - ✅ API endpoints
 - ✅ Generation quality
 
+### Full CPU+GPU+RL Orchestration
+```bash
+./scripts/e2e_full_pipeline.sh
+```
+
+Runs full pipeline lanes with artifacts under `artifacts/e2e/<timestamp>`:
+- CPU validation suite
+- GPU kernel + validation suite
+- Supervised smoke checkpoints (CPU + GPU), export to GGUF/MHC
+- Inference server API checks (`/health`, `/v1/models`, completions)
+- GRPO RL fine-tuning (`examples/train_rl`)
+- Baseline vs RL benchmark comparison (optional)
+
+Useful overrides:
+```bash
+RUN_VALIDATE_E2E=0 RUN_BENCHMARKS=0 RL_ITERATIONS=20 ./scripts/e2e_full_pipeline.sh
+```
+
+### Fast CI Smoke
+```bash
+./scripts/e2e_smoke_ci.sh
+```
+
+Minimal CPU smoke path:
+- workspace check + key tests
+- short supervised train + export
+- serve/API smoke checks
+- optional RL smoke (`SMOKE_ENABLE_RL=1`)
+
 ### Production Training
 
 #### Nano 125M - Development & Testing
