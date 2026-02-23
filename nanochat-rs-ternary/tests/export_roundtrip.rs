@@ -228,6 +228,107 @@ fn test_export_load_weight_tied_roundtrip() {
     run_roundtrip(&cfg);
 }
 
+fn tiny_wavefield_config() -> TrainConfig {
+    let mut cfg = tiny_config(false);
+    cfg.use_wave_field = true;
+    cfg.wavefield_field_size = 64;
+    cfg.wavefield_n_heads = 4; // same as n_heads
+    cfg.wavefield_head_coupling = true;
+    cfg.wavefield_ratio = 1.0; // all layers use wavefield
+    cfg
+}
+
+/// Wavefield export roundtrip: exercises Bool metadata write,
+/// wavefield tensor export (scatter/gate/out/physics/coupling),
+/// and wavefield config loading.
+#[test]
+fn test_export_load_wavefield_roundtrip() {
+    let cfg = tiny_wavefield_config();
+    let device = Device::Cpu;
+    let varmap = VarMap::new();
+    let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let train_model = NanochatTrainModel::new(&cfg, vb).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let gguf_path = dir.path().join("test_wf.gguf");
+    let mhc_path = dir.path().join("test_wf.mhc");
+
+    // Export must succeed (was crashing on Bool write before fix)
+    export_model(
+        &train_model,
+        &cfg,
+        gguf_path.to_str().unwrap(),
+        mhc_path.to_str().unwrap(),
+    )
+    .unwrap();
+
+    // Load via inference model
+    let inf_model =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap()).unwrap();
+
+    // Verify wavefield config survived roundtrip
+    let wf_config = inf_model
+        .config
+        .wavefield_config
+        .as_ref()
+        .expect("wavefield_config should be Some after loading wavefield model");
+    assert_eq!(wf_config.field_size, cfg.wavefield_field_size);
+    assert_eq!(wf_config.n_wave_heads, cfg.wavefield_n_heads);
+    assert!(wf_config.use_head_coupling);
+    assert_eq!(wf_config.head_dim, cfg.dim / cfg.wavefield_n_heads);
+
+    // Verify forward pass produces finite output
+    let tokens = vec![1u32, 5, 10, 20, 42];
+    let mut inf_model = inf_model;
+    let logits = inf_model.forward_sequence(&tokens);
+    assert_eq!(logits.len(), cfg.vocab_size);
+    assert!(
+        logits.iter().all(|v| v.is_finite()),
+        "wavefield inference produced non-finite logits"
+    );
+    assert!(
+        logits.iter().any(|&v| v != 0.0),
+        "wavefield inference produced all-zero logits"
+    );
+
+    println!("  ✓ Wavefield export-load roundtrip completed successfully");
+}
+
+/// Wavefield with FWHT mode export roundtrip.
+#[test]
+fn test_export_load_wavefield_fwht_roundtrip() {
+    let mut cfg = tiny_wavefield_config();
+    cfg.wavefield_convolve_mode = Some("fwht".to_string());
+
+    let device = Device::Cpu;
+    let varmap = VarMap::new();
+    let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let train_model = NanochatTrainModel::new(&cfg, vb).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let gguf_path = dir.path().join("test_wf_fwht.gguf");
+    let mhc_path = dir.path().join("test_wf_fwht.mhc");
+
+    export_model(
+        &train_model,
+        &cfg,
+        gguf_path.to_str().unwrap(),
+        mhc_path.to_str().unwrap(),
+    )
+    .unwrap();
+
+    let inf_model =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap()).unwrap();
+
+    let wf_config = inf_model.config.wavefield_config.as_ref().unwrap();
+    assert_eq!(wf_config.convolve_mode, nanochat_model::config::ConvolveMode::Fwht);
+
+    let mut inf_model = inf_model;
+    let logits = inf_model.forward_sequence(&[1, 5, 10]);
+    assert!(logits.iter().all(|v| v.is_finite()));
+    println!("  ✓ Wavefield FWHT export-load roundtrip completed successfully");
+}
+
 #[test]
 fn test_export_load_config_fields() {
     // Verify all config fields survive the roundtrip, including

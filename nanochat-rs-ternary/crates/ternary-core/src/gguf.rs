@@ -702,6 +702,10 @@ fn write_gguf_value(w: &mut impl Write, v: &GgufValue) -> io::Result<()> {
             w.write_all(&8u32.to_le_bytes())?;
             write_gguf_string(w, val)
         }
+        GgufValue::Bool(val) => {
+            w.write_all(&7u32.to_le_bytes())?;
+            w.write_all(&[if *val { 1u8 } else { 0u8 }])
+        }
         GgufValue::U64(val) => {
             w.write_all(&10u32.to_le_bytes())?;
             w.write_all(&val.to_le_bytes())
@@ -1165,15 +1169,24 @@ mod tests {
     }
 
     #[test]
-    fn test_gguf_write_unsupported_value_type() {
-        let path = test_path("test_write_unsupported.gguf");
+    fn test_gguf_write_bool_roundtrip() {
+        let path = test_path("test_write_bool.gguf");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut writer = GgufWriter::new();
-        // Bool is not supported by writer
-        writer.add_metadata("key", GgufValue::Bool(true));
+        writer.add_metadata("flag_true", GgufValue::Bool(true));
+        writer.add_metadata("flag_false", GgufValue::Bool(false));
         writer.add_f32_tensor("t", &[1], &[1.0]);
-        let result = writer.write(&path);
-        assert!(result.is_err());
+        writer.write(&path).unwrap();
+
+        let gguf = GgufFile::open(&path).unwrap();
+        match gguf.metadata.get("flag_true") {
+            Some(GgufValue::Bool(true)) => {}
+            other => panic!("expected Bool(true), got {:?}", other),
+        }
+        match gguf.metadata.get("flag_false") {
+            Some(GgufValue::Bool(false)) => {}
+            other => panic!("expected Bool(false), got {:?}", other),
+        }
         std::fs::remove_file(&path).ok();
     }
 

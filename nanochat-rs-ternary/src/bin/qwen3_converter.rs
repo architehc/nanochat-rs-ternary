@@ -739,10 +739,12 @@ mod tests {
         });
         let dir = tempdir()?;
         let gguf_path = dir.path().join("model.gguf");
-        let export_err = export_gguf(&gguf_path, &config, &converted, 128, false).unwrap_err();
-        assert!(export_err
-            .to_string()
-            .contains("write not implemented for this value type"));
+        export_gguf(&gguf_path, &config, &converted, 128, false)?;
+        assert!(gguf_path.exists(), "GGUF file should be created");
+        assert!(
+            std::fs::metadata(&gguf_path)?.len() > 0,
+            "GGUF file should be non-empty"
+        );
         Ok(())
     }
 
