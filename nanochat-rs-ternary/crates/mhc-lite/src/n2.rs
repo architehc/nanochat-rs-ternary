@@ -141,6 +141,14 @@ impl MhcLiteN2 {
     /// Input:  x = [batch, 2*C] (two streams concatenated)
     /// Output: [batch, C]
     pub fn prepare_input(&self, x: &[f32], dim_c: usize) -> Vec<f32> {
+        let batch = x.len() / (2 * dim_c);
+        let mut out = vec![0.0f32; batch * dim_c];
+        self.prepare_input_into(x, dim_c, &mut out);
+        out
+    }
+
+    /// Prepare layer input into a provided buffer.
+    pub fn prepare_input_into(&self, x: &[f32], dim_c: usize, out: &mut [f32]) {
         assert!(dim_c > 0, "dim_c must be > 0");
         assert!(
             x.len().is_multiple_of(2 * dim_c),
@@ -150,7 +158,7 @@ impl MhcLiteN2 {
         );
         let h_pre = self.h_pre();
         let batch = x.len() / (2 * dim_c);
-        let mut out = vec![0.0f32; batch * dim_c];
+        assert_eq!(out.len(), batch * dim_c);
 
         for b in 0..batch {
             let s0 = &x[b * 2 * dim_c..b * 2 * dim_c + dim_c]; // stream 0
@@ -161,7 +169,6 @@ impl MhcLiteN2 {
                 o[i] = h_pre[0] * s0[i] + h_pre[1] * s1[i];
             }
         }
-        out
     }
 
     /// Apply residual update with training-matching semantics.
@@ -176,6 +183,14 @@ impl MhcLiteN2 {
     /// layer_output: [batch, C]    (single stream from layer F)
     /// Returns:      [batch, 2*C]  (two streams)
     pub fn apply(&self, x: &[f32], layer_output: &[f32], dim_c: usize) -> Vec<f32> {
+        let batch = x.len() / (2 * dim_c);
+        let mut out = vec![0.0f32; batch * 2 * dim_c];
+        self.apply_into(x, layer_output, dim_c, &mut out);
+        out
+    }
+
+    /// Apply residual update into a provided buffer.
+    pub fn apply_into(&self, x: &[f32], layer_output: &[f32], dim_c: usize, out: &mut [f32]) {
         assert!(dim_c > 0, "dim_c must be > 0");
         assert!(
             x.len().is_multiple_of(2 * dim_c),
@@ -193,7 +208,7 @@ impl MhcLiteN2 {
             layer_output.len(),
             batch * dim_c
         );
-        let mut out = vec![0.0f32; batch * 2 * dim_c];
+        assert_eq!(out.len(), batch * 2 * dim_c);
 
         for b in 0..batch {
             let s0 = &x[b * 2 * dim_c..b * 2 * dim_c + dim_c];
@@ -212,7 +227,6 @@ impl MhcLiteN2 {
                 o1[i] = h_res[1][0] * s0_with_res + h_res[1][1] * s1_with_res;
             }
         }
-        out
     }
 
     /// Initialize expanded state from single-stream input

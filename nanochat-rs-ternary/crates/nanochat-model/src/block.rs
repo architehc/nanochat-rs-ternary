@@ -118,46 +118,6 @@ pub struct TransformerBlock {
     batch_workspace: Mutex<BatchWorkspace>,
 }
 
-fn mhc_prepare_input_into(mhc: &MhcLiteN2, x: &[f32], dim_c: usize, out: &mut [f32]) {
-    let h_pre = mhc.h_pre();
-    let batch = x.len() / (2 * dim_c);
-    debug_assert_eq!(x.len(), batch * 2 * dim_c);
-    debug_assert_eq!(out.len(), batch * dim_c);
-
-    for b in 0..batch {
-        let s0 = &x[b * 2 * dim_c..b * 2 * dim_c + dim_c];
-        let s1 = &x[b * 2 * dim_c + dim_c..b * 2 * dim_c + 2 * dim_c];
-        let o = &mut out[b * dim_c..(b + 1) * dim_c];
-        for i in 0..dim_c {
-            o[i] = h_pre[0] * s0[i] + h_pre[1] * s1[i];
-        }
-    }
-}
-
-fn mhc_apply_into(mhc: &MhcLiteN2, x: &[f32], layer_output: &[f32], dim_c: usize, out: &mut [f32]) {
-    let h_res = mhc.h_res();
-    let h_post = mhc.h_post();
-    let batch = x.len() / (2 * dim_c);
-    debug_assert_eq!(x.len(), batch * 2 * dim_c);
-    debug_assert_eq!(layer_output.len(), batch * dim_c);
-    debug_assert_eq!(out.len(), batch * 2 * dim_c);
-
-    for b in 0..batch {
-        let s0 = &x[b * 2 * dim_c..b * 2 * dim_c + dim_c];
-        let s1 = &x[b * 2 * dim_c + dim_c..b * 2 * dim_c + 2 * dim_c];
-        let ly = &layer_output[b * dim_c..(b + 1) * dim_c];
-
-        let (o0, o1) = out[b * 2 * dim_c..b * 2 * dim_c + 2 * dim_c].split_at_mut(dim_c);
-
-        for i in 0..dim_c {
-            let s0_with_res = s0[i] + h_post[0] * ly[i];
-            let s1_with_res = s1[i] + h_post[1] * ly[i];
-            o0[i] = h_res[0][0] * s0_with_res + h_res[0][1] * s1_with_res;
-            o1[i] = h_res[1][0] * s0_with_res + h_res[1][1] * s1_with_res;
-        }
-    }
-}
-
 impl TransformerBlock {
     pub(crate) fn from_parts(
         mhc_attn: MhcLiteN2,
@@ -312,7 +272,7 @@ impl TransformerBlock {
 
         // === Attention sub-layer ===
         // 1. Prepare input: mix streams -> single
-        mhc_prepare_input_into(&self.mhc_attn, x_expanded, dim, attn_in);
+        self.mhc_attn.prepare_input_into(x_expanded, dim, attn_in);
 
         // 2. RMSNorm
         self.norm_attn.forward(attn_in, normed);
@@ -332,12 +292,12 @@ impl TransformerBlock {
         }
 
         // 4. mHC residual update
-        mhc_apply_into(&self.mhc_attn, x_expanded, attn_out, dim, residual_tmp);
+        self.mhc_attn.apply_into(x_expanded, attn_out, dim, residual_tmp);
         x_expanded.copy_from_slice(residual_tmp);
 
         // === FFN sub-layer ===
         // 1. Prepare input
-        mhc_prepare_input_into(&self.mhc_ffn, x_expanded, dim, ffn_in);
+        self.mhc_ffn.prepare_input_into(x_expanded, dim, ffn_in);
 
         // 2. RMSNorm
         self.norm_ffn.forward(ffn_in, normed);
@@ -346,7 +306,7 @@ impl TransformerBlock {
         self.ffn.forward(normed, ffn_out);
 
         // 4. mHC residual update
-        mhc_apply_into(&self.mhc_ffn, x_expanded, ffn_out, dim, residual_tmp);
+        self.mhc_ffn.apply_into(x_expanded, ffn_out, dim, residual_tmp);
         x_expanded.copy_from_slice(residual_tmp);
     }
 
@@ -397,7 +357,7 @@ impl TransformerBlock {
         for t in 0..seq_len {
             let x_exp = &x_exp_batch[t * exp_dim..(t + 1) * exp_dim];
             let out = &mut attn_in_batch[t * dim..(t + 1) * dim];
-            mhc_prepare_input_into(&self.mhc_attn, x_exp, dim, out);
+            self.mhc_attn.prepare_input_into(x_exp, dim, out);
         }
 
         // 2. RMSNorm batch
@@ -429,7 +389,7 @@ impl TransformerBlock {
         for t in 0..seq_len {
             let x_exp = &x_exp_batch[t * exp_dim..(t + 1) * exp_dim];
             let attn_out = &attn_out_batch[t * dim..(t + 1) * dim];
-            mhc_apply_into(&self.mhc_attn, x_exp, attn_out, dim, residual_tmp);
+            self.mhc_attn.apply_into(x_exp, attn_out, dim, residual_tmp);
             x_exp_batch[t * exp_dim..(t + 1) * exp_dim].copy_from_slice(residual_tmp);
         }
 
@@ -438,7 +398,7 @@ impl TransformerBlock {
         for t in 0..seq_len {
             let x_exp = &x_exp_batch[t * exp_dim..(t + 1) * exp_dim];
             let out = &mut ffn_in_batch[t * dim..(t + 1) * dim];
-            mhc_prepare_input_into(&self.mhc_ffn, x_exp, dim, out);
+            self.mhc_ffn.prepare_input_into(x_exp, dim, out);
         }
 
         // 2. RMSNorm batch
@@ -452,7 +412,7 @@ impl TransformerBlock {
         for t in 0..seq_len {
             let x_exp = &x_exp_batch[t * exp_dim..(t + 1) * exp_dim];
             let ffn_out = &ffn_out_batch[t * dim..(t + 1) * dim];
-            mhc_apply_into(&self.mhc_ffn, x_exp, ffn_out, dim, residual_tmp);
+            self.mhc_ffn.apply_into(x_exp, ffn_out, dim, residual_tmp);
             x_exp_batch[t * exp_dim..(t + 1) * exp_dim].copy_from_slice(residual_tmp);
         }
     }

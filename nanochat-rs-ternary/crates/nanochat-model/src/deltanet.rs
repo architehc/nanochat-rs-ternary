@@ -12,8 +12,64 @@
 //! output = S @ (W_q @ x)
 //! ```
 
-use crate::bitlinear::BitLinear;
+use crate::bitlinear::{quantize_activations_i8_into, BitLinear};
 use crate::config::ModelConfig;
+
+#[derive(Debug, Clone)]
+struct DeltaNetScratch {
+    x_q: Vec<i8>,
+    q: Vec<f32>,
+    k: Vec<f32>,
+    v: Vec<f32>,
+    k_norm: Vec<f32>,
+    beta_raw: Vec<f32>,
+    attn_out: Vec<f32>,
+    sk: Vec<f32>,
+}
+
+impl DeltaNetScratch {
+    fn new(n_heads: usize, head_dim: usize) -> Self {
+        let dim = n_heads * head_dim;
+        Self {
+            x_q: vec![0; dim],
+            q: vec![0.0; dim],
+            k: vec![0.0; dim],
+            v: vec![0.0; dim],
+            k_norm: vec![0.0; dim],
+            beta_raw: vec![0.0; n_heads],
+            attn_out: vec![0.0; dim],
+            sk: vec![0.0; head_dim],
+        }
+    }
+
+    fn ensure_size(&mut self, n_heads: usize, head_dim: usize) {
+        let dim = n_heads * head_dim;
+        if self.x_q.len() != dim {
+            self.x_q.resize(dim, 0);
+        }
+        if self.q.len() != dim {
+            self.q.resize(dim, 0.0);
+        }
+        if self.k.len() != dim {
+            self.k.resize(dim, 0.0);
+        }
+        if self.v.len() != dim {
+            self.v.resize(dim, 0.0);
+        }
+        if self.k_norm.len() != dim {
+            self.k_norm.resize(dim, 0.0);
+        }
+        if self.beta_raw.len() != n_heads {
+            self.beta_raw.resize(n_heads, 0.0);
+        }
+        if self.attn_out.len() != dim {
+            self.attn_out.resize(dim, 0.0);
+        }
+        if self.sk.len() != head_dim {
+            self.sk.resize(head_dim, 0.0);
+        }
+    }
+}
 
 /// Recurrent state for DeltaNet attention (one per layer).
 ///
@@ -26,6 +82,7 @@ pub struct DeltaNetState {
     pub s: Vec<f32>,
     pub n_heads: usize,
     pub head_dim: usize,
+    scratch: DeltaNetScratch,
 }
 
 impl DeltaNetState {
@@ -35,6 +92,7 @@ impl DeltaNetState {
             s: vec![0.0; n_heads * head_dim * head_dim],
             n_heads,
             head_dim,
+            scratch: DeltaNetScratch::new(n_heads, head_dim),
         }
     }
 
@@ -43,6 +101,11 @@ impl DeltaNetState {
         for v in self.s.iter_mut() {
             *v = 0.0;
         }
+    }
+
+    fn ensure_scratch(&mut self, dim: usize) {
+        assert_eq!(dim, self.n_heads * self.head_dim);
+        self.scratch.ensure_size(self.n_heads, self.head_dim);
     }
 }
 
@@ -67,6 +130,75 @@ pub struct DeltaNetAttention {
 }
 
 impl DeltaNetAttention {
+    fn forward_token(&self, x: &[f32], state: &mut DeltaNetState, out: &mut [f32]) {
+        let n_heads = self.n_heads;
+        let hd = self.head_dim;
+
+        state.ensure_scratch(x.len());
+        let s = &mut state.s;
+        let scratch = &mut state.scratch;
+
+        let act_scale = quantize_activations_i8_into(x, &mut scratch.x_q);
+        self.wq
+            .forward_quantized(&scratch.x_q, act_scale, &mut scratch.q);
+        self.wk
+            .forward_quantized(&scratch.x_q, act_scale, &mut scratch.k);
+        self.wv
+            .forward_quantized(&scratch.x_q, act_scale, &mut scratch.v);
+        self.w_beta
+            .forward_quantized(&scratch.x_q, act_scale, &mut scratch.beta_raw);
+
+        // Sigmoid for beta gates
+        for b in scratch.beta_raw.iter_mut() {
+            *b = sigmoid(*b);
+        }
+
+        // Normalize K per head (L2 normalization)
+        scratch.k_norm.copy_from_slice(&scratch.k);
+        for h in 0..n_heads {
+            let offset = h * hd;
+            l2_normalize(&mut scratch.k_norm[offset..offset + hd]);
+        }
+
+        // Per-head recurrent update + output computation
+        scratch.attn_out.fill(0.0);
+        for (h, &beta) in scratch.beta_raw.iter().enumerate().take(n_heads) {
+            let h_offset = h * hd;
+            let s_offset = h * hd * hd;
+
+            // Compute S @ k_norm for this head -> sk: [head_dim]
+            for (i, sk_val) in scratch.sk.iter_mut().enumerate() {
+                let mut sum = 0.0f32;
+                for j in 0..hd {
+                    sum += s[s_offset + i * hd + j] * scratch.k_norm[h_offset + j];
+                }
+                *sk_val = sum;
+            }
+
+            // Update S:
+            // S = S - beta * sk @ k_norm^T + beta * v @ k_norm^T
+            // = S + beta * (v - sk) @ k_norm^T
+            for i in 0..hd {
+                let diff_i = scratch.v[h_offset + i] - scratch.sk[i];
+                for j in 0..hd {
+                    s[s_offset + i * hd + j] += beta * diff_i * scratch.k_norm[h_offset + j];
+                }
+            }
+
+            // Output: S @ q for this head
+            for i in 0..hd {
+                let mut sum = 0.0f32;
+                for j in 0..hd {
+                    sum += s[s_offset + i * hd + j] * scratch.q[h_offset + j];
+                }
+                scratch.attn_out[h_offset + i] = sum;
+            }
+        }
+
+        let out_scale = quantize_activations_i8_into(&scratch.attn_out, &mut scratch.x_q);
+        self.wo.forward_quantized(&scratch.x_q, out_scale, out);
+    }
+
     /// Create DeltaNet attention with random weights (for testing).
     pub fn new_random(config: &ModelConfig) -> Self {
         let dim = config.dim;
@@ -98,69 +230,7 @@ impl DeltaNetAttention {
         assert_eq!(out.len(), dim);
         assert_eq!(state.n_heads, n_heads);
         assert_eq!(state.head_dim, hd);
-
-        // Project Q, K, V
-        let mut q = vec![0.0f32; dim];
-        let mut k = vec![0.0f32; dim];
-        let mut v = vec![0.0f32; dim];
-        let mut beta_raw = vec![0.0f32; n_heads];
-
-        self.wq.forward(x, &mut q);
-        self.wk.forward(x, &mut k);
-        self.wv.forward(x, &mut v);
-        self.w_beta.forward(x, &mut beta_raw);
-
-        // Sigmoid for beta gates
-        for b in beta_raw.iter_mut() {
-            *b = sigmoid(*b);
-        }
-
-        // Normalize K per head (L2 normalization)
-        let mut k_norm = k.clone();
-        for h in 0..n_heads {
-            let offset = h * hd;
-            l2_normalize(&mut k_norm[offset..offset + hd]);
-        }
-
-        // Per-head recurrent update + output computation
-        let mut attn_out = vec![0.0f32; dim];
-
-        for (h, &beta) in beta_raw.iter().enumerate().take(n_heads) {
-            let h_offset = h * hd;
-            let s_offset = h * hd * hd;
-
-            // Compute S @ k_norm for this head -> sk: [head_dim]
-            let mut sk = vec![0.0f32; hd];
-            for (i, sk_val) in sk.iter_mut().enumerate() {
-                let mut sum = 0.0f32;
-                for j in 0..hd {
-                    sum += state.s[s_offset + i * hd + j] * k_norm[h_offset + j];
-                }
-                *sk_val = sum;
-            }
-
-            // Update S:
-            // S = S - beta * sk @ k_norm^T + beta * v @ k_norm^T
-            // = S + beta * (v - sk) @ k_norm^T
-            for i in 0..hd {
-                let diff_i = v[h_offset + i] - sk[i];
-                for j in 0..hd {
-                    state.s[s_offset + i * hd + j] += beta * diff_i * k_norm[h_offset + j];
-                }
-            }
-
-            // Output: S @ q for this head
-            for i in 0..hd {
-                let mut sum = 0.0f32;
-                for j in 0..hd {
-                    sum += state.s[s_offset + i * hd + j] * q[h_offset + j];
-                }
-                attn_out[h_offset + i] = sum;
-            }
-        }
-
-        // Output projection
-        self.wo.forward(&attn_out, out);
+        self.forward_token(x, state, out);
     }
 
     /// Batched forward pass for DeltaNet recurrent attention.
@@ -182,63 +252,10 @@ impl DeltaNetAttention {
         assert_eq!(state.n_heads, n_heads);
         assert_eq!(state.head_dim, hd);
 
-        let mut q = vec![0.0f32; dim];
-        let mut k = vec![0.0f32; dim];
-        let mut v = vec![0.0f32; dim];
-        let mut k_norm = vec![0.0f32; dim];
-        let mut beta_raw = vec![0.0f32; n_heads];
-        let mut attn_out = vec![0.0f32; dim];
-        let mut sk = vec![0.0f32; hd];
-
         for t in 0..seq_len {
             let x = &x_batch[t * dim..(t + 1) * dim];
             let out = &mut out_batch[t * dim..(t + 1) * dim];
-
-            self.wq.forward(x, &mut q);
-            self.wk.forward(x, &mut k);
-            self.wv.forward(x, &mut v);
-            self.w_beta.forward(x, &mut beta_raw);
-
-            for b in beta_raw.iter_mut() {
-                *b = sigmoid(*b);
-            }
-
-            k_norm.copy_from_slice(&k);
-            for h in 0..n_heads {
-                let offset = h * hd;
-                l2_normalize(&mut k_norm[offset..offset + hd]);
-            }
-
-            attn_out.fill(0.0);
-            for (h, &beta) in beta_raw.iter().enumerate().take(n_heads) {
-                let h_offset = h * hd;
-                let s_offset = h * hd * hd;
-
-                for (i, sk_val) in sk.iter_mut().enumerate() {
-                    let mut sum = 0.0f32;
-                    for j in 0..hd {
-                        sum += state.s[s_offset + i * hd + j] * k_norm[h_offset + j];
-                    }
-                    *sk_val = sum;
-                }
-
-                for i in 0..hd {
-                    let diff_i = v[h_offset + i] - sk[i];
-                    for j in 0..hd {
-                        state.s[s_offset + i * hd + j] += beta * diff_i * k_norm[h_offset + j];
-                    }
-                }
-
-                for i in 0..hd {
-                    let mut sum = 0.0f32;
-                    for j in 0..hd {
-                        sum += state.s[s_offset + i * hd + j] * q[h_offset + j];
-                    }
-                    attn_out[h_offset + i] = sum;
-                }
-            }
-
-            self.wo.forward(&attn_out, out);
+            self.forward_token(x, state, out);
         }
     }
 }

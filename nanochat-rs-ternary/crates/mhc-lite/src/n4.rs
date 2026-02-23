@@ -182,6 +182,14 @@ impl MhcLiteN4 {
     /// Input:  [batch, 4*C]
     /// Output: [batch, C]
     pub fn prepare_input(&self, x: &[f32], dim_c: usize) -> Vec<f32> {
+        let batch = x.len() / (4 * dim_c);
+        let mut out = vec![0.0f32; batch * dim_c];
+        self.prepare_input_into(x, dim_c, &mut out);
+        out
+    }
+
+    /// Prepare layer input into a provided buffer.
+    pub fn prepare_input_into(&self, x: &[f32], dim_c: usize, out: &mut [f32]) {
         assert!(dim_c > 0, "dim_c must be positive");
         assert!(
             x.len().is_multiple_of(4 * dim_c),
@@ -189,7 +197,7 @@ impl MhcLiteN4 {
         );
         let h_pre = self.h_pre();
         let batch = x.len() / (4 * dim_c);
-        let mut out = vec![0.0f32; batch * dim_c];
+        assert_eq!(out.len(), batch * dim_c);
 
         for b in 0..batch {
             let base = b * 4 * dim_c;
@@ -202,7 +210,6 @@ impl MhcLiteN4 {
                     + h_pre[3] * x[base + 3 * dim_c + i];
             }
         }
-        out
     }
 
     /// Apply residual update with training-matching semantics.
@@ -214,6 +221,14 @@ impl MhcLiteN4 {
     /// layer_output: [batch, C]
     /// Returns:      [batch, 4*C]
     pub fn apply(&self, x: &[f32], layer_output: &[f32], dim_c: usize) -> Vec<f32> {
+        let batch = x.len() / (4 * dim_c);
+        let mut out = vec![0.0f32; batch * 4 * dim_c];
+        self.apply_into(x, layer_output, dim_c, &mut out);
+        out
+    }
+
+    /// Apply residual update into a provided buffer.
+    pub fn apply_into(&self, x: &[f32], layer_output: &[f32], dim_c: usize, out: &mut [f32]) {
         let h_res = self.h_res();
         let h_post = self.h_post();
         assert!(dim_c > 0, "dim_c must be > 0");
@@ -231,7 +246,7 @@ impl MhcLiteN4 {
             layer_output.len(),
             batch * dim_c
         );
-        let mut out = vec![0.0f32; batch * 4 * dim_c];
+        assert_eq!(out.len(), batch * 4 * dim_c);
 
         for b in 0..batch {
             let x_base = b * 4 * dim_c;
@@ -243,16 +258,15 @@ impl MhcLiteN4 {
                     with_res[s] = x[x_base + s * dim_c + i] + h_post[s] * ly[i];
                 }
                 for s in 0..4 {
-                    let o = &mut out[x_base + s * dim_c..x_base + (s + 1) * dim_c];
+                    let o_idx = x_base + s * dim_c + i;
                     let mut val = 0.0f32;
                     for (t, wr) in with_res.iter().enumerate() {
                         val += h_res[s][t] * wr;
                     }
-                    o[i] = val;
+                    out[o_idx] = val;
                 }
             }
         }
-        out
     }
 
     /// Initialize: duplicate single stream to n=4 streams

@@ -36,14 +36,29 @@ impl BitLinear {
     /// x:   [cols] float activations
     /// out: [rows] output buffer
     pub fn forward(&self, x: &[f32], out: &mut [f32]) {
+        let mut x_q_workspace = vec![0i8; self.cols];
+        self.forward_with_workspace(x, &mut x_q_workspace, out);
+    }
+
+    /// Forward pass with caller-provided INT8 workspace.
+    ///
+    /// Reuses `x_q_workspace` for activation quantization to avoid per-call
+    /// heap allocations in hot inference paths.
+    pub fn forward_with_workspace(&self, x: &[f32], x_q_workspace: &mut [i8], out: &mut [f32]) {
         assert_eq!(x.len(), self.cols);
         assert_eq!(out.len(), self.rows);
+        assert_eq!(x_q_workspace.len(), self.cols);
 
         // Per-token absmax quantization to INT8
-        let (x_q, act_scale) = quantize_activations_i8(x);
+        let act_scale = quantize_activations_i8_into(x, x_q_workspace);
+        self.forward_quantized(x_q_workspace, act_scale, out);
+    }
 
-        // Ternary GEMV
-        cpu::gemv(&self.pw, &x_q, act_scale, out);
+    /// Forward pass for already-quantized activations.
+    pub fn forward_quantized(&self, x_q: &[i8], act_scale: f32, out: &mut [f32]) {
+        assert_eq!(x_q.len(), self.cols);
+        assert_eq!(out.len(), self.rows);
+        cpu::gemv(&self.pw, x_q, act_scale, out);
     }
 
     /// Batched forward pass for prefill: process `seq_len` tokens.
@@ -52,13 +67,26 @@ impl BitLinear {
     /// seq_len:   number of tokens
     /// out_batch: [seq_len * rows] — flattened output buffer
     pub fn forward_batch(&self, x_batch: &[f32], seq_len: usize, out_batch: &mut [f32]) {
+        let mut x_q_workspace = vec![0i8; self.cols];
+        self.forward_batch_with_workspace(x_batch, seq_len, out_batch, &mut x_q_workspace);
+    }
+
+    /// Batched forward pass with caller-provided quantization workspace.
+    pub fn forward_batch_with_workspace(
+        &self,
+        x_batch: &[f32],
+        seq_len: usize,
+        out_batch: &mut [f32],
+        x_q_workspace: &mut [i8],
+    ) {
         assert_eq!(x_batch.len(), seq_len * self.cols);
         assert_eq!(out_batch.len(), seq_len * self.rows);
+        assert_eq!(x_q_workspace.len(), self.cols);
 
         for t in 0..seq_len {
             let x = &x_batch[t * self.cols..(t + 1) * self.cols];
             let out = &mut out_batch[t * self.rows..(t + 1) * self.rows];
-            self.forward(x, out);
+            self.forward_with_workspace(x, x_q_workspace, out);
         }
     }
 
@@ -86,22 +114,27 @@ impl Clone for BitLinear {
 ///
 /// Returns (quantized_i8, scale) where scale = absmax / 127.
 fn quantize_activations_i8(x: &[f32]) -> (Vec<i8>, f32) {
+    let mut x_q = vec![0i8; x.len()];
+    let scale = quantize_activations_i8_into(x, &mut x_q);
+    (x_q, scale)
+}
+
+/// Quantize activations to INT8 using a caller-provided output buffer.
+pub fn quantize_activations_i8_into(x: &[f32], x_q_out: &mut [i8]) -> f32 {
+    assert_eq!(x_q_out.len(), x.len());
     let absmax = x.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
     if absmax < 1e-8 {
-        return (vec![0i8; x.len()], 0.0);
+        x_q_out.fill(0);
+        return 0.0;
     }
 
     let scale = absmax / 127.0;
     let inv_scale = 127.0 / absmax;
-    let x_q: Vec<i8> = x
-        .iter()
-        .map(|&v| {
-            let q = (v * inv_scale).round();
-            q.clamp(-127.0, 127.0) as i8
-        })
-        .collect();
-
-    (x_q, scale)
+    for (dst, &v) in x_q_out.iter_mut().zip(x.iter()) {
+        let q = (v * inv_scale).round();
+        *dst = q.clamp(-127.0, 127.0) as i8;
+    }
+    scale
 }
 
 #[cfg(test)]
