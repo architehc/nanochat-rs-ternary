@@ -1023,10 +1023,20 @@ impl TrainConfig {
         cfg
     }
 
-    /// 125M with wave field attention using FWHT (integer-only) convolution.
+    /// 125M with wave field attention using FWHT (XOR convolution, integer-only).
     pub fn nano_125m_wavefield_fwht() -> Self {
         let mut cfg = Self::nano_125m_wavefield();
         cfg.wavefield_convolve_mode = Some("fwht".to_string());
+        cfg
+    }
+
+    /// 125M with wave field attention using Haar (wavelet-basis scaling, integer-only).
+    pub fn nano_125m_wavefield_haar() -> Self {
+        let mut cfg = Self::nano_125m_wavefield();
+        cfg.wavefield_convolve_mode = Some("haar".to_string());
+        // Use ~2/3 of max levels for a balance of local and global context
+        let max_levels = (cfg.wavefield_field_size as f64).log2() as usize;
+        cfg.wavefield_haar_levels = Some(max_levels.max(1));
         cfg
     }
 

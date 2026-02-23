@@ -4,162 +4,121 @@
 //! self-adjoint (H^T = H), so the backward pass uses the same FWHT
 //! transform as the forward pass. No complex numbers needed.
 //!
-//! **Training perf:** Implemented as Candle `CustomOp2` with `cpu_fwd` only —
-//! no `cuda_fwd`. When training on GPU, the caller must move tensors to CPU
-//! before this op and back after (done in `nanochat-train/src/wavefield.rs`).
-//! This costs 2 device transfers per forward pass (batched across all heads).
+//! **Implementation:** Pure Candle tensor ops (reshape + narrow + cat butterflies).
+//! Stays on whatever device the input tensor lives on (CPU or CUDA) — no device
+//! transfers needed. Autograd gradients come for free from Candle's standard ops.
 
-use candle_core::{CpuStorage, Layout, Result, Shape, Tensor};
-use ternary_kernels::fwht;
+use candle_core::{Result, Tensor};
 
-/// Raw FWHT convolution on f32 slices.
-fn convolve_raw(signal: &[f32], kernel: &[f32], n: usize) -> Vec<f32> {
-    let mut output = vec![0.0f32; n];
-    fwht::fwht_convolve_f32_buf(&signal[..n], &kernel[..n], &mut output);
-    output
-}
-
-/// FWHT correlation for gradient computation.
+/// In-place-style FWHT via Candle tensor ops.
 ///
-/// For FWHT, correlation == convolution (FWHT is symmetric/self-adjoint).
-/// grad_signal = FWHT_convolve(kernel, grad_output)
-/// grad_kernel = FWHT_convolve(signal, grad_output)
-fn correlate_raw(a: &[f32], b: &[f32], n: usize) -> Vec<f32> {
-    convolve_raw(a, b, n)
+/// Applies the Walsh-Hadamard butterfly `a' = a + b, b' = a - b` at
+/// exponentially increasing strides, expressed as reshape→narrow→add/sub→cat.
+///
+/// Input shape: `(..., N)` where N is power of 2.
+/// Output shape: same as input.
+///
+/// O(N log N) operations, log2(N) butterfly stages.
+fn fwht_tensor(x: &Tensor) -> Result<Tensor> {
+    let dims = x.dims();
+    let ndim = dims.len();
+    let n = dims[ndim - 1];
+    debug_assert!(n.is_power_of_two(), "FWHT requires power-of-2 length, got {}", n);
+
+    // Flatten all leading dims into a single batch dimension
+    let batch: usize = dims[..ndim - 1].iter().product::<usize>().max(1);
+    let orig_shape: Vec<usize> = dims.to_vec();
+
+    let mut result = x.reshape((batch, n))?;
+
+    let mut half = 1usize;
+    while half < n {
+        let groups = n / (2 * half);
+        // Reshape to (batch, groups, 2, half):
+        //   dim 0: batch
+        //   dim 1: groups of 2*half elements
+        //   dim 2: pair (element vs partner at distance `half`)
+        //   dim 3: position within group
+        result = result.reshape((batch, groups, 2, half))?;
+        let a = result.narrow(2, 0, 1)?; // (batch, groups, 1, half)
+        let b = result.narrow(2, 1, 1)?; // (batch, groups, 1, half)
+        let sum = (&a + &b)?;
+        let diff = (&a - &b)?;
+        result = Tensor::cat(&[&sum, &diff], 2)?; // (batch, groups, 2, half)
+        result = result.reshape((batch, n))?;
+        half *= 2;
+    }
+
+    result.reshape(orig_shape)
 }
 
-/// Candle CustomOp2 for differentiable FWHT convolution.
-struct FwhtConvolveOp {
-    field_size: usize,
-}
-
-impl candle_core::CustomOp2 for FwhtConvolveOp {
-    fn name(&self) -> &'static str {
-        "fwht_convolve"
-    }
-
-    fn cpu_fwd(
-        &self,
-        s1: &CpuStorage,
-        l1: &Layout,
-        s2: &CpuStorage,
-        l2: &Layout,
-    ) -> Result<(CpuStorage, Shape)> {
-        let signal = s1.as_slice::<f32>()?;
-        let kernel = s2.as_slice::<f32>()?;
-
-        let n = self.field_size;
-        let signal_total = l1.shape().elem_count();
-        let kernel_total = l2.shape().elem_count();
-
-        let batch = signal_total / n;
-        let kernel_batch = kernel_total / n;
-
-        assert_eq!(signal_total, batch * n, "signal not divisible by field_size");
-
-        let mut output = vec![0.0f32; batch * n];
-
-        if kernel_batch == batch {
-            for b in 0..batch {
-                let sig_start = l1.start_offset() + b * n;
-                let ker_start = l2.start_offset() + b * n;
-                let sig = &signal[sig_start..sig_start + n];
-                let ker = &kernel[ker_start..ker_start + n];
-                let result = convolve_raw(sig, ker, n);
-                output[b * n..(b + 1) * n].copy_from_slice(&result);
-            }
-        } else if kernel_batch == 1 {
-            let ker_start = l2.start_offset();
-            let ker = &kernel[ker_start..ker_start + n];
-            for b in 0..batch {
-                let sig_start = l1.start_offset() + b * n;
-                let sig = &signal[sig_start..sig_start + n];
-                let result = convolve_raw(sig, ker, n);
-                output[b * n..(b + 1) * n].copy_from_slice(&result);
-            }
-        } else {
-            return Err(candle_core::Error::Msg(format!(
-                "fwht_convolve: incompatible batch sizes signal={} kernel={}",
-                batch, kernel_batch
-            )));
-        }
-
-        let output_shape = l1.shape().clone();
-        Ok((CpuStorage::F32(output).into(), output_shape))
-    }
-
-    fn bwd(
-        &self,
-        arg1: &Tensor,
-        arg2: &Tensor,
-        _res: &Tensor,
-        grad_res: &Tensor,
-    ) -> Result<(Option<Tensor>, Option<Tensor>)> {
-        let n = self.field_size;
-
-        // FWHT is self-adjoint: correlation == convolution
-        let mut grad_signal = fwht_correlate_tensor(arg2, grad_res, n)?;
-        let mut grad_kernel = fwht_correlate_tensor(arg1, grad_res, n)?;
-
-        while grad_signal.dims().len() > arg1.dims().len() {
-            grad_signal = grad_signal.sum(0)?;
-        }
-        while grad_kernel.dims().len() > arg2.dims().len() {
-            grad_kernel = grad_kernel.sum(0)?;
-        }
-
-        Ok((Some(grad_signal), Some(grad_kernel)))
-    }
-}
-
-/// Compute FWHT correlation tensor (same as convolution for FWHT).
-fn fwht_correlate_tensor(a: &Tensor, b: &Tensor, n: usize) -> Result<Tensor> {
-    let a_data = a.flatten_all()?.to_vec1::<f32>()?;
-    let b_data = b.flatten_all()?.to_vec1::<f32>()?;
-
-    let a_total = a_data.len();
-    let b_total = b_data.len();
-    let a_batch = a_total / n;
-    let b_batch = b_total / n;
-
-    let batch = a_batch.max(b_batch);
-    let mut output = vec![0.0f32; batch * n];
-
-    for bidx in 0..batch {
-        let a_idx = if a_batch == 1 { 0 } else { bidx };
-        let b_idx = if b_batch == 1 { 0 } else { bidx };
-        let a_slice = &a_data[a_idx * n..(a_idx + 1) * n];
-        let b_slice = &b_data[b_idx * n..(b_idx + 1) * n];
-        let result = correlate_raw(a_slice, b_slice, n);
-        output[bidx * n..(bidx + 1) * n].copy_from_slice(&result);
-    }
-
-    let target_shape = if a_batch >= b_batch {
-        a.shape().clone()
-    } else {
-        b.shape().clone()
-    };
-    Tensor::from_vec(output, target_shape, a.device())
+/// FWHT convolution (XOR convolution) via pure tensor ops.
+///
+/// Computes `c[k] = (1/N) Σ_i signal[i] · kernel[i ⊕ k]` by:
+/// 1. FWHT(signal)
+/// 2. FWHT(kernel)
+/// 3. Pointwise multiply
+/// 4. FWHT(product) / N
+///
+/// FWHT is self-inverse up to 1/N: FWHT(FWHT(x)) = N·x.
+///
+/// Signal shape: `(batch, field_size)` or `(field_size,)`.
+/// Kernel shape: `(field_size,)` or `(batch, field_size)`.
+fn fwht_convolve_impl(signal: &Tensor, kernel: &Tensor, field_size: usize) -> Result<Tensor> {
+    let s_fwht = fwht_tensor(signal)?;
+    let k_fwht = fwht_tensor(kernel)?;
+    let product = s_fwht.broadcast_mul(&k_fwht)?;
+    let result = fwht_tensor(&product)?;
+    result / (field_size as f64)
 }
 
 /// High-level API: FWHT convolution without gradient tracking.
+///
+/// Gradients still flow if inputs are Vars — use this when you don't
+/// need to distinguish from the with_grad variant.
 pub fn fwht_convolve(signal: &Tensor, kernel: &Tensor, field_size: usize) -> Result<Tensor> {
-    signal.apply_op2_no_bwd(kernel, &FwhtConvolveOp { field_size })
+    fwht_convolve_impl(signal, kernel, field_size)
 }
 
 /// FWHT convolution preserving autograd graph for backward pass.
+///
+/// With pure tensor ops, this is identical to `fwht_convolve` — autograd
+/// is handled automatically by Candle's standard operations.
 pub fn fwht_convolve_with_grad(
     signal: &Tensor,
     kernel: &Tensor,
     field_size: usize,
 ) -> Result<Tensor> {
-    signal.apply_op2(kernel, FwhtConvolveOp { field_size })
+    fwht_convolve_impl(signal, kernel, field_size)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use candle_core::Device;
+
+    #[test]
+    fn test_fwht_tensor_self_inverse() -> Result<()> {
+        let device = Device::Cpu;
+        let n = 16;
+
+        let data: Vec<f32> = (0..n).map(|i| (i as f32 * 0.3).sin()).collect();
+        let x = Tensor::from_vec(data.clone(), (n,), &device)?;
+
+        // FWHT(FWHT(x)) = N * x
+        let twice = fwht_tensor(&fwht_tensor(&x)?)?;
+        let scaled = (twice / n as f64)?;
+        let result = scaled.to_vec1::<f32>()?;
+
+        for i in 0..n {
+            assert!(
+                (result[i] - data[i]).abs() < 1e-4,
+                "FWHT self-inverse failed at {}: {} vs {}",
+                i, result[i], data[i]
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_candle_fwht_basic() -> Result<()> {
@@ -293,6 +252,36 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    /// Verify tensor-op FWHT matches C FFI FWHT output.
+    #[test]
+    fn test_fwht_tensor_matches_c_ffi() -> Result<()> {
+        let device = Device::Cpu;
+        let n = 16;
+
+        let signal_data: Vec<f32> = (0..n).map(|i| (i as f32 * 0.17 + 0.3).sin()).collect();
+        let kernel_data: Vec<f32> = (0..n).map(|i| (-0.15 * i as f32).exp()).collect();
+
+        // Tensor-op path
+        let signal = Tensor::from_vec(signal_data.clone(), (n,), &device)?;
+        let kernel = Tensor::from_vec(kernel_data.clone(), (n,), &device)?;
+        let tensor_result = fwht_convolve(&signal, &kernel, n)?.to_vec1::<f32>()?;
+
+        // C FFI path
+        let mut c_output = vec![0.0f32; n];
+        ternary_kernels::fwht::fwht_convolve_f32_buf(
+            &signal_data, &kernel_data, &mut c_output,
+        );
+
+        for i in 0..n {
+            assert!(
+                (tensor_result[i] - c_output[i]).abs() < 1e-4,
+                "tensor vs C mismatch at [{}]: {} vs {}",
+                i, tensor_result[i], c_output[i]
+            );
+        }
         Ok(())
     }
 }

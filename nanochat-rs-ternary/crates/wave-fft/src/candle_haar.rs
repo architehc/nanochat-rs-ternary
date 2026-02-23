@@ -4,144 +4,124 @@
 //! shift-invariant convolution). Haar DWT is orthogonal: inverse = transpose
 //! (adjoint). The backward pass has the same structure as the forward pass.
 //!
-//! **Training perf:** Implemented as Candle `CustomOp2` with `cpu_fwd` only —
-//! no `cuda_fwd`. When training on GPU, the caller must move tensors to CPU
-//! before this op and back after (done in `nanochat-train/src/wavefield.rs`).
-//! This costs 2 device transfers per forward pass (batched across all heads).
+//! **Implementation:** Pure Candle tensor ops (narrow + reshape + cat for
+//! forward/inverse DWT levels). Stays on whatever device the input tensor
+//! lives on (CPU or CUDA) — no device transfers needed. Autograd gradients
+//! come for free from Candle's standard ops.
 
-use candle_core::{CpuStorage, Layout, Result, Shape, Tensor};
-use ternary_kernels::haar;
+use candle_core::{Result, Tensor};
 
-/// Raw Haar convolution on f32 slices.
-fn convolve_raw(signal: &[f32], kernel: &[f32], n: usize, levels: usize) -> Vec<f32> {
-    let mut output = vec![0.0f32; n];
-    haar::haar_convolve_f32_buf(&signal[..n], &kernel[..n], &mut output, levels);
-    output
-}
-
-/// Haar correlation for gradient computation.
+/// Forward Haar DWT via Candle tensor ops (multi-level).
 ///
-/// Haar is orthogonal, so correlation == convolution with the adjoint.
-/// For pointwise-multiply-in-wavelet-domain, gradients flow through
-/// the same Haar convolution structure.
-fn correlate_raw(a: &[f32], b: &[f32], n: usize, levels: usize) -> Vec<f32> {
-    convolve_raw(a, b, n, levels)
+/// At each level, pairs adjacent elements:
+///   low[i]  = data[2*i] + data[2*i+1]   (approximation)
+///   high[i] = data[2*i] - data[2*i+1]   (detail)
+/// Output: [low_coeffs..., high_coeffs...]
+///
+/// Multi-level: repeat on the low (first half) coefficients.
+///
+/// Input shape: `(batch, N)` where N is power of 2.
+fn haar_forward_tensor(x: &Tensor, n: usize, levels: usize) -> Result<Tensor> {
+    let dims = x.dims();
+    let ndim = dims.len();
+    let batch: usize = dims[..ndim - 1].iter().product::<usize>().max(1);
+    let orig_shape: Vec<usize> = dims.to_vec();
+
+    let mut result = x.reshape((batch, n))?;
+    let mut current_len = n;
+
+    for _ in 0..levels {
+        if current_len < 2 {
+            break;
+        }
+        let half = current_len / 2;
+
+        // Extract prefix [0..current_len]
+        let prefix = result.narrow(1, 0, current_len)?;
+
+        // Reshape prefix into pairs: (batch, half, 2)
+        let pairs = prefix.reshape((batch, half, 2))?;
+        let even = pairs.narrow(2, 0, 1)?.squeeze(2)?; // data[2*i]   → (batch, half)
+        let odd = pairs.narrow(2, 1, 1)?.squeeze(2)?;  // data[2*i+1] → (batch, half)
+
+        let low = (&even + &odd)?;  // approximation
+        let high = (&even - &odd)?; // detail
+        let transformed = Tensor::cat(&[&low, &high], 1)?; // (batch, current_len)
+
+        if current_len < n {
+            let suffix = result.narrow(1, current_len, n - current_len)?;
+            result = Tensor::cat(&[&transformed, &suffix], 1)?;
+        } else {
+            result = transformed;
+        }
+
+        current_len = half;
+    }
+
+    result.reshape(orig_shape)
 }
 
-/// Candle CustomOp2 for differentiable Haar convolution.
-struct HaarConvolveOp {
+/// Inverse Haar DWT via Candle tensor ops (multi-level).
+///
+/// At each level, reconstructs from [low, high]:
+///   data[2*i]   = (low[i] + high[i]) * 0.5
+///   data[2*i+1] = (low[i] - high[i]) * 0.5
+///
+/// Multi-level inverse: starts from deepest (smallest) level and works up.
+fn haar_inverse_tensor(x: &Tensor, n: usize, levels: usize) -> Result<Tensor> {
+    let dims = x.dims();
+    let ndim = dims.len();
+    let batch: usize = dims[..ndim - 1].iter().product::<usize>().max(1);
+    let orig_shape: Vec<usize> = dims.to_vec();
+
+    let mut result = x.reshape((batch, n))?;
+
+    // Forward processed levels: n, n/2, n/4, ..., n/2^(levels-1)
+    // Inverse processes in reverse: start from smallest current_len
+    for l in (0..levels).rev() {
+        let current_len = n >> l;
+        if current_len < 2 {
+            continue;
+        }
+        let half = current_len / 2;
+
+        let prefix = result.narrow(1, 0, current_len)?;
+        let low = prefix.narrow(1, 0, half)?;       // (batch, half)
+        let high = prefix.narrow(1, half, half)?;    // (batch, half)
+
+        let even = ((&low + &high)? * 0.5)?; // data[2*i]
+        let odd = ((&low - &high)? * 0.5)?;  // data[2*i+1]
+
+        // Interleave: stack along last dim then reshape
+        // stack → (batch, half, 2), reshape → (batch, current_len)
+        let interleaved = Tensor::stack(&[&even, &odd], 2)?.reshape((batch, current_len))?;
+
+        if current_len < n {
+            let suffix = result.narrow(1, current_len, n - current_len)?;
+            result = Tensor::cat(&[&interleaved, &suffix], 1)?;
+        } else {
+            result = interleaved;
+        }
+    }
+
+    result.reshape(orig_shape)
+}
+
+/// Haar wavelet-domain convolution via pure tensor ops.
+///
+/// Computes: IHaar(Haar(signal) ⊙ Haar(kernel))
+/// Each Haar coefficient is scaled independently — this is a diagonal
+/// operator in the wavelet basis (scale-selective filtering).
+fn haar_convolve_impl(
+    signal: &Tensor,
+    kernel: &Tensor,
     field_size: usize,
     levels: usize,
-}
-
-impl candle_core::CustomOp2 for HaarConvolveOp {
-    fn name(&self) -> &'static str {
-        "haar_convolve"
-    }
-
-    fn cpu_fwd(
-        &self,
-        s1: &CpuStorage,
-        l1: &Layout,
-        s2: &CpuStorage,
-        l2: &Layout,
-    ) -> Result<(CpuStorage, Shape)> {
-        let signal = s1.as_slice::<f32>()?;
-        let kernel = s2.as_slice::<f32>()?;
-
-        let n = self.field_size;
-        let levels = self.levels;
-        let signal_total = l1.shape().elem_count();
-        let kernel_total = l2.shape().elem_count();
-
-        let batch = signal_total / n;
-        let kernel_batch = kernel_total / n;
-
-        assert_eq!(signal_total, batch * n, "signal not divisible by field_size");
-
-        let mut output = vec![0.0f32; batch * n];
-
-        if kernel_batch == batch {
-            for b in 0..batch {
-                let sig_start = l1.start_offset() + b * n;
-                let ker_start = l2.start_offset() + b * n;
-                let sig = &signal[sig_start..sig_start + n];
-                let ker = &kernel[ker_start..ker_start + n];
-                let result = convolve_raw(sig, ker, n, levels);
-                output[b * n..(b + 1) * n].copy_from_slice(&result);
-            }
-        } else if kernel_batch == 1 {
-            let ker_start = l2.start_offset();
-            let ker = &kernel[ker_start..ker_start + n];
-            for b in 0..batch {
-                let sig_start = l1.start_offset() + b * n;
-                let sig = &signal[sig_start..sig_start + n];
-                let result = convolve_raw(sig, ker, n, levels);
-                output[b * n..(b + 1) * n].copy_from_slice(&result);
-            }
-        } else {
-            return Err(candle_core::Error::Msg(format!(
-                "haar_convolve: incompatible batch sizes signal={} kernel={}",
-                batch, kernel_batch
-            )));
-        }
-
-        let output_shape = l1.shape().clone();
-        Ok((CpuStorage::F32(output).into(), output_shape))
-    }
-
-    fn bwd(
-        &self,
-        arg1: &Tensor,
-        arg2: &Tensor,
-        _res: &Tensor,
-        grad_res: &Tensor,
-    ) -> Result<(Option<Tensor>, Option<Tensor>)> {
-        let n = self.field_size;
-        let levels = self.levels;
-
-        let mut grad_signal = haar_correlate_tensor(arg2, grad_res, n, levels)?;
-        let mut grad_kernel = haar_correlate_tensor(arg1, grad_res, n, levels)?;
-
-        while grad_signal.dims().len() > arg1.dims().len() {
-            grad_signal = grad_signal.sum(0)?;
-        }
-        while grad_kernel.dims().len() > arg2.dims().len() {
-            grad_kernel = grad_kernel.sum(0)?;
-        }
-
-        Ok((Some(grad_signal), Some(grad_kernel)))
-    }
-}
-
-/// Compute Haar correlation tensor.
-fn haar_correlate_tensor(a: &Tensor, b: &Tensor, n: usize, levels: usize) -> Result<Tensor> {
-    let a_data = a.flatten_all()?.to_vec1::<f32>()?;
-    let b_data = b.flatten_all()?.to_vec1::<f32>()?;
-
-    let a_total = a_data.len();
-    let b_total = b_data.len();
-    let a_batch = a_total / n;
-    let b_batch = b_total / n;
-
-    let batch = a_batch.max(b_batch);
-    let mut output = vec![0.0f32; batch * n];
-
-    for bidx in 0..batch {
-        let a_idx = if a_batch == 1 { 0 } else { bidx };
-        let b_idx = if b_batch == 1 { 0 } else { bidx };
-        let a_slice = &a_data[a_idx * n..(a_idx + 1) * n];
-        let b_slice = &b_data[b_idx * n..(b_idx + 1) * n];
-        let result = correlate_raw(a_slice, b_slice, n, levels);
-        output[bidx * n..(bidx + 1) * n].copy_from_slice(&result);
-    }
-
-    let target_shape = if a_batch >= b_batch {
-        a.shape().clone()
-    } else {
-        b.shape().clone()
-    };
-    Tensor::from_vec(output, target_shape, a.device())
+) -> Result<Tensor> {
+    let s_haar = haar_forward_tensor(signal, field_size, levels)?;
+    let k_haar = haar_forward_tensor(kernel, field_size, levels)?;
+    let product = s_haar.broadcast_mul(&k_haar)?;
+    haar_inverse_tensor(&product, field_size, levels)
 }
 
 /// High-level API: Haar convolution without gradient tracking.
@@ -151,23 +131,49 @@ pub fn haar_convolve(
     field_size: usize,
     levels: usize,
 ) -> Result<Tensor> {
-    signal.apply_op2_no_bwd(kernel, &HaarConvolveOp { field_size, levels })
+    haar_convolve_impl(signal, kernel, field_size, levels)
 }
 
 /// Haar convolution preserving autograd graph for backward pass.
+///
+/// With pure tensor ops, this is identical to `haar_convolve` — autograd
+/// is handled automatically by Candle's standard operations.
 pub fn haar_convolve_with_grad(
     signal: &Tensor,
     kernel: &Tensor,
     field_size: usize,
     levels: usize,
 ) -> Result<Tensor> {
-    signal.apply_op2(kernel, HaarConvolveOp { field_size, levels })
+    haar_convolve_impl(signal, kernel, field_size, levels)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use candle_core::Device;
+
+    #[test]
+    fn test_haar_forward_inverse_roundtrip() -> Result<()> {
+        let device = Device::Cpu;
+        let n = 16;
+        let levels = (n as f64).log2() as usize;
+
+        let data: Vec<f32> = (0..n).map(|i| (i as f32 * 0.3).sin()).collect();
+        let x = Tensor::from_vec(data.clone(), (n,), &device)?;
+
+        let forward = haar_forward_tensor(&x, n, levels)?;
+        let roundtrip = haar_inverse_tensor(&forward, n, levels)?;
+        let result = roundtrip.to_vec1::<f32>()?;
+
+        for i in 0..n {
+            assert!(
+                (result[i] - data[i]).abs() < 1e-4,
+                "Haar roundtrip failed at {}: {} vs {}",
+                i, result[i], data[i]
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_candle_haar_basic() -> Result<()> {
@@ -310,6 +316,37 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    /// Verify tensor-op Haar matches C FFI Haar output.
+    #[test]
+    fn test_haar_tensor_matches_c_ffi() -> Result<()> {
+        let device = Device::Cpu;
+        let n = 16;
+        let levels = (n as f64).log2() as usize;
+
+        let signal_data: Vec<f32> = (0..n).map(|i| (i as f32 * 0.17 + 0.3).sin()).collect();
+        let kernel_data: Vec<f32> = (0..n).map(|i| (-0.15 * i as f32).exp()).collect();
+
+        // Tensor-op path
+        let signal = Tensor::from_vec(signal_data.clone(), (n,), &device)?;
+        let kernel = Tensor::from_vec(kernel_data.clone(), (n,), &device)?;
+        let tensor_result = haar_convolve(&signal, &kernel, n, levels)?.to_vec1::<f32>()?;
+
+        // C FFI path
+        let mut c_output = vec![0.0f32; n];
+        ternary_kernels::haar::haar_convolve_f32_buf(
+            &signal_data, &kernel_data, &mut c_output, levels,
+        );
+
+        for i in 0..n {
+            assert!(
+                (tensor_result[i] - c_output[i]).abs() < 1e-4,
+                "tensor vs C mismatch at [{}]: {} vs {}",
+                i, tensor_result[i], c_output[i]
+            );
+        }
         Ok(())
     }
 }

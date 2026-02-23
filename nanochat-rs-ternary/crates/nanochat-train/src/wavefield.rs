@@ -8,9 +8,9 @@
 //!   `wave_fft::candle_haar`. Integer add/sub only. Scale-selective filtering,
 //!   NOT shift-invariant.
 //!
-//! **Training-specific:** All three modes use Candle `CustomOp2` with `cpu_fwd` only.
-//! On GPU, tensors are moved to CPU before the transform op and back after — 2 device
-//! transfers per forward pass (batched across all heads, not per-head).
+//! **Training-specific:** All three modes use pure Candle tensor ops (reshape + narrow +
+//! cat butterflies). Ops stay on whatever device the input lives on (CPU or CUDA) —
+//! no device transfers needed. Autograd gradients come for free.
 
 use candle_core::{Result, Tensor, D};
 use candle_nn::VarBuilder;
@@ -210,16 +210,10 @@ impl WaveFieldAttentionTrain {
         // 5. Transform-domain convolution per head (dispatched by convolve_mode)
         let fields = fields.reshape((batch, n_heads, field_size, head_dim))?;
 
-        // Move fields and kernel to CPU once (CustomOp2 only has cpu_fwd),
-        // then do all per-head convolutions on CPU, then move result back.
-        let orig_device = fields.device().clone();
-        let fields_cpu = fields.to_device(&candle_core::Device::Cpu)?;
-        let kernel_cpu = kernel.to_device(&candle_core::Device::Cpu)?;
-
         let mut convolved_heads = Vec::with_capacity(n_heads);
         for h in 0..n_heads {
-            let field_h = fields_cpu.narrow(1, h, 1)?.squeeze(1)?; // [batch, field_size, head_dim]
-            let kernel_h = kernel_cpu.narrow(0, h, 1)?.squeeze(0)?.contiguous()?; // [field_size]
+            let field_h = fields.narrow(1, h, 1)?.squeeze(1)?; // [batch, field_size, head_dim]
+            let kernel_h = kernel.narrow(0, h, 1)?.squeeze(0)?.contiguous()?; // [field_size]
 
             // Transpose to [batch, head_dim, field_size], flatten to [batch*head_dim, field_size]
             let field_t = field_h.transpose(1, 2)?.contiguous()?; // [batch, head_dim, field_size]
@@ -254,8 +248,6 @@ impl WaveFieldAttentionTrain {
             convolved_heads.push(conv_h.unsqueeze(1)?); // [batch, 1, field_size, head_dim]
         }
         let convolved = Tensor::cat(&convolved_heads, 1)?; // [batch, n_heads, field_size, head_dim]
-        // Move convolved result back to original device
-        let convolved = convolved.to_device(&orig_device)?;
 
         // 6. Optional head coupling
         let convolved = if let Some(ref logits) = self.coupling_logits {

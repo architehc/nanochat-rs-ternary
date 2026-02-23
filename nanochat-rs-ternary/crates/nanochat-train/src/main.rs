@@ -31,6 +31,9 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-125m-wave-fwht" | "nano_125m_wave_fwht" => {
             Some(TrainConfig::nano_125m_wavefield_fwht())
         }
+        "nano-125m-wave-haar" | "nano_125m_wave_haar" => {
+            Some(TrainConfig::nano_125m_wavefield_haar())
+        }
         "nano-125m-hybrid" | "nano_125m_hybrid" => Some(TrainConfig::nano_125m_hybrid()),
         _ => None,
     }
