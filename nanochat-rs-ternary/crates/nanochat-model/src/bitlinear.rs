@@ -113,6 +113,7 @@ impl Clone for BitLinear {
 /// Quantize activations to INT8 using per-token absmax scaling.
 ///
 /// Returns (quantized_i8, scale) where scale = absmax / 127.
+#[cfg(test)]
 fn quantize_activations_i8(x: &[f32]) -> (Vec<i8>, f32) {
     let mut x_q = vec![0i8; x.len()];
     let scale = quantize_activations_i8_into(x, &mut x_q);
@@ -120,6 +121,17 @@ fn quantize_activations_i8(x: &[f32]) -> (Vec<i8>, f32) {
 }
 
 /// Quantize activations to INT8 using a caller-provided output buffer.
+///
+/// Uses per-token absmax scaling: `scale = absmax / 127`.
+///
+/// **Rounding:** Uses `f32::round()` (IEEE 754 "round half to even" / banker's
+/// rounding). This matches Candle's training quantization path. Note that some
+/// frameworks use round-half-away-from-zero — if loading weights trained with
+/// such a framework, expect minor numerical differences (< 1 LSB).
+///
+/// **Near-zero inputs:** When `absmax < 1e-8`, outputs all-zero with scale 0.0.
+/// This is correct — near-zero activations produce near-zero output. The GEMV
+/// kernel handles `act_scale = 0.0` by multiplying all accumulators by zero.
 pub fn quantize_activations_i8_into(x: &[f32], x_q_out: &mut [i8]) -> f32 {
     assert_eq!(x_q_out.len(), x.len());
     let absmax = x.iter().map(|v| v.abs()).fold(0.0f32, f32::max);

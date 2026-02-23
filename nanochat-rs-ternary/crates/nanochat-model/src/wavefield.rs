@@ -415,6 +415,10 @@ impl WaveFieldAttention {
     }
 
     /// Construct from pre-loaded parts (for GGUF loading).
+    ///
+    /// Validates that stride is finite and non-negative — a NaN stride would
+    /// silently propagate through position calculations, producing NaN field
+    /// positions that pass through `clamp` unchanged.
     pub fn from_parts(
         scatter_proj: BitLinear,
         gate_proj: BitLinear,
@@ -427,6 +431,11 @@ impl WaveFieldAttention {
         field_size: usize,
         stride: f32,
     ) -> Self {
+        assert!(
+            stride.is_finite() && stride >= 0.0,
+            "WaveFieldAttention stride must be finite and non-negative, got {}",
+            stride
+        );
         Self {
             scatter_proj,
             gate_proj,

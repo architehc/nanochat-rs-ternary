@@ -47,7 +47,15 @@ impl StreamingDecoder {
         let current_text = tokenizer.decode(&self.tokens, true).unwrap_or_default();
 
         if current_text.len() > self.last_text.len() && current_text.starts_with(&self.last_text) {
-            let diff = current_text[self.last_text.len()..].to_string();
+            // Safety: starts_with guarantees last_text.len() is a char boundary,
+            // but check defensively for multi-byte edge cases.
+            let offset = self.last_text.len();
+            let diff = if current_text.is_char_boundary(offset) {
+                current_text[offset..].to_string()
+            } else {
+                // Rare: BPE merge changed a multi-byte sequence. Reset.
+                current_text.clone()
+            };
             self.last_text = current_text;
             diff
         } else if current_text.len() > self.last_text.len() {
@@ -195,14 +203,19 @@ async fn health(State(state): State<Arc<AppState>>) -> Response {
     if state.engines.is_empty() {
         return (StatusCode::SERVICE_UNAVAILABLE, "no engines available").into_response();
     }
-    // Probe each engine mutex to detect poisoning (prior panic).
+    // Use try_lock to avoid blocking inference during health probes.
+    // A contended lock means the engine is busy (healthy), not broken.
     for (i, engine_mutex) in state.engines.iter().enumerate() {
-        if engine_mutex.lock().is_err() {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("engine {} mutex poisoned", i),
-            )
-                .into_response();
+        match engine_mutex.try_lock() {
+            Ok(_) => {} // Lock acquired and released — engine is healthy
+            Err(std::sync::TryLockError::WouldBlock) => {} // Busy = healthy
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("engine {} mutex poisoned", i),
+                )
+                    .into_response();
+            }
         }
     }
     (StatusCode::OK, "ok").into_response()
@@ -347,7 +360,7 @@ async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest)
             let mut output_ids = Vec::new();
             let mut finish_reason = crate::engine::FinishReason::Stop;
             engine.generate_streaming(&token_ids, &params, |tok| {
-                if cancel_inner.load(Ordering::Relaxed) {
+                if cancel_inner.load(Ordering::Acquire) {
                     return false; // Timeout fired — stop generating
                 }
                 output_ids.push(tok.token_id);
@@ -432,7 +445,9 @@ async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest)
         }
         Err(_) => {
             // Signal the blocking task to stop generating tokens.
-            cancel.store(true, Ordering::Relaxed);
+            // Use Release ordering so the background thread sees all prior
+            // writes when it loads with Acquire.
+            cancel.store(true, Ordering::Release);
             metrics::INFERENCE_ERRORS.inc();
             return error_json(
                 StatusCode::REQUEST_TIMEOUT,

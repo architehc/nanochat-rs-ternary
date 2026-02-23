@@ -40,12 +40,16 @@ impl Embedding {
     }
 
     /// Look up a single token embedding.
+    ///
+    /// Out-of-bounds tokens return all-zeros and log a warning. This indicates
+    /// a tokenizer/model version mismatch that should be investigated.
     pub fn forward_token(&self, token_id: u32, out: &mut [f32]) {
         assert_eq!(out.len(), self.dim);
         let token_idx = token_id as usize;
         if token_idx >= self.vocab_size {
             eprintln!(
-                "WARNING: embed OOB token_id {} >= vocab_size {}, returning zeros (possible tokenizer bug)",
+                "WARNING: embed OOB token_id {} >= vocab_size {} — returning zeros \
+                 (likely tokenizer/model version mismatch, investigate!)",
                 token_id, self.vocab_size
             );
             out.fill(0.0);

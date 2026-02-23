@@ -52,8 +52,15 @@ fn fft_inverse(data: &mut [RustFftComplex<f32>]) {
 
 /// FFT convolution of two real signals.
 ///
-/// Zero-pads both to `2 * n`, FFTs both, pointwise multiplies, IFFTs,
-/// and returns the first `n` elements (linear convolution, not circular).
+/// Computes linear (not circular) convolution by zero-padding both inputs
+/// to `next_power_of_two(2*n)` before FFT. This padding ensures the circular
+/// convolution performed by FFT matches the linear convolution for the first
+/// `n` elements. The result is truncated to length `n` — this discards the
+/// "tail" of the full linear convolution (which has length `2n-1`).
+///
+/// For wave field attention, this truncation is correct: the kernel is a
+/// damped cosine that decays toward zero, so the tail contains only negligible
+/// wrap-around artifacts.
 ///
 /// # Arguments
 /// * `signal` - Input signal of length `n`

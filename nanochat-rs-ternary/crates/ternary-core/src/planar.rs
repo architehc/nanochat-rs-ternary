@@ -213,7 +213,13 @@ impl<T: Copy + Default> AlignedVec<T> {
             // Advise huge pages for large buffers (>= 2MB)
             if size >= 2 * 1024 * 1024 {
                 unsafe {
-                    libc::madvise(raw, size as libc::size_t, libc::MADV_HUGEPAGE);
+                    let ret = libc::madvise(raw, size as libc::size_t, libc::MADV_HUGEPAGE);
+                    if ret != 0 {
+                        log::warn!(
+                            "madvise(MADV_HUGEPAGE) failed for NUMA alloc of {} bytes on node {} (non-fatal)",
+                            size, node
+                        );
+                    }
                 }
             }
 

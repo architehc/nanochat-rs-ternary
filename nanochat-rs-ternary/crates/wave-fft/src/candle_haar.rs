@@ -22,6 +22,13 @@ use candle_core::{Result, Tensor};
 ///
 /// Input shape: `(batch, N)` where N is power of 2.
 fn haar_forward_tensor(x: &Tensor, n: usize, levels: usize) -> Result<Tensor> {
+    debug_assert!(
+        levels <= (n as f64).log2() as usize,
+        "Haar levels ({}) exceeds log2(n={}) = {}",
+        levels,
+        n,
+        (n as f64).log2() as usize
+    );
     let dims = x.dims();
     let ndim = dims.len();
     let batch: usize = dims[..ndim - 1].iter().product::<usize>().max(1);

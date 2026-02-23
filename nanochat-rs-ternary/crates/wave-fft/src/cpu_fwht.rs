@@ -135,7 +135,7 @@ mod tests {
 
         for i in 0..n {
             assert!(
-                (direct[i] - precomputed[i]).abs() < 1e-3,
+                (direct[i] - precomputed[i]).abs() < 1e-4,
                 "precomputed mismatch at {}: {} vs {}",
                 i, direct[i], precomputed[i]
             );

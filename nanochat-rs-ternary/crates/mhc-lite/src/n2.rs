@@ -80,20 +80,20 @@ impl MhcLiteN2 {
         post_logits: [f32; 2],
         post_bias: [f32; 2],
     ) -> Self {
-        debug_assert!(alpha_logit.is_finite(), "alpha_logit must be finite");
-        debug_assert!(
+        assert!(alpha_logit.is_finite(), "alpha_logit must be finite, got {}", alpha_logit);
+        assert!(
             pre_logits.iter().all(|v| v.is_finite()),
             "pre_logits must be finite"
         );
-        debug_assert!(
+        assert!(
             pre_bias.iter().all(|v| v.is_finite()),
             "pre_bias must be finite"
         );
-        debug_assert!(
+        assert!(
             post_logits.iter().all(|v| v.is_finite()),
             "post_logits must be finite"
         );
-        debug_assert!(
+        assert!(
             post_bias.iter().all(|v| v.is_finite()),
             "post_bias must be finite"
         );

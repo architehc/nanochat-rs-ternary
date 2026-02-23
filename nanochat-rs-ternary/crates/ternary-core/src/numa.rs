@@ -84,6 +84,14 @@ impl NumaAllocator {
             return None; // Let caller use standard allocation
         }
 
+        // Reject negative node IDs early — casting negative i32 to u32 wraps
+        // to a large value which would pass the `< 64` check but produce
+        // an invalid nodemask shift.
+        if node < 0 {
+            log::warn!("NUMA alloc_on_node called with negative node {}, falling back", node);
+            return None;
+        }
+
         unsafe {
             // Use mmap for large allocations
             let ptr = libc::mmap(
@@ -219,10 +227,12 @@ impl<T: Copy + Default> NumaVec<T> {
                 // 2MB threshold
                 NumaAllocator::enable_huge_pages(numa_ptr, size);
             }
-            if !(numa_ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
+            // Check against 128-byte alignment (NT-load requirement), not just
+            // align_of::<T>() which is 1 for u8 and would never fail.
+            if !(numa_ptr as usize).is_multiple_of(128) {
                 log::warn!(
-                    "NUMA allocation returned misaligned pointer for T (align={}), falling back to std alloc",
-                    std::mem::align_of::<T>()
+                    "NUMA allocation returned non-128B-aligned pointer ({:#x}), falling back to std alloc",
+                    numa_ptr as usize
                 );
                 unsafe {
                     NumaAllocator::dealloc(numa_ptr, size);

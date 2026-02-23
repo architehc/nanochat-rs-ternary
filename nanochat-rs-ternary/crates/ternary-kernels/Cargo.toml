@@ -11,6 +11,7 @@ log = "0.4"
 
 [features]
 cuda = []
+autotune = []
 
 [build-dependencies]
 cc = "1.0"

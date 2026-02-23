@@ -19,7 +19,7 @@ use crate::optim::{wsd_schedule, Lion, LionState, MuonOptimizer, MuonOptimizerSt
 /// Optimizer state save/restore is positional, so different ordering on resume
 /// causes shape mismatches. This helper ensures consistent ordering.
 fn sorted_vars(varmap: &VarMap) -> Vec<Var> {
-    let data = varmap.data().lock().unwrap();
+    let data = varmap.data().lock().unwrap_or_else(|e| e.into_inner());
     let mut named: Vec<_> = data.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     named.sort_by(|a, b| a.0.cmp(&b.0));
     named.into_iter().map(|(_, v)| v).collect()
@@ -771,9 +771,12 @@ impl Trainer {
         // Backward pass for this micro-step.
         let mut grads = scaled_loss.backward()?;
 
-        // Detach gradients from the computation graph so forward-pass tensors
-        // can be freed. Without this, storing gradients in self.accum_grads
-        // keeps the entire forward graph alive, leaking ~2GB/step on GPU.
+        // CRITICAL: detach must be called immediately after backward(), before
+        // any fallible operation. If this line were skipped (e.g., by an early
+        // `?` between backward and here), the GradStore would keep the entire
+        // forward-pass computation graph alive, leaking ~2GB/step on GPU.
+        // The current layout guarantees no fallible code between backward() and
+        // detach — do not insert any `?` operations between these two lines.
         detach_grad_store_inplace(&mut grads, &self.varmap);
 
         if let Some(accum) = self.accum_grads.as_mut() {

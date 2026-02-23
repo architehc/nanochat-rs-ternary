@@ -216,8 +216,8 @@ void fwht_f32(float *data, int len) {
 #endif
 }
 
-void fwht_convolve_i32(const int32_t *signal, const int32_t *kernel,
-                       int32_t *output, int len) {
+void fwht_convolve_i32(const int32_t *restrict signal, const int32_t *restrict kernel,
+                       int32_t *restrict output, int len) {
     /* Allocate temp buffers for transformed signal and kernel */
     int32_t *sig_t = (int32_t *)malloc(len * sizeof(int32_t));
     int32_t *ker_t = (int32_t *)malloc(len * sizeof(int32_t));
@@ -245,9 +245,9 @@ void fwht_convolve_i32(const int32_t *signal, const int32_t *kernel,
     free(ker_t);
 }
 
-void fwht_convolve_f32_buf(const float *signal, const float *kernel,
-                           float *output, int len,
-                           float *scratch1, float *scratch2) {
+void fwht_convolve_f32_buf(const float *restrict signal, const float *restrict kernel,
+                           float *restrict output, int len,
+                           float *restrict scratch1, float *restrict scratch2) {
     memcpy(scratch1, signal, len * sizeof(float));
     memcpy(scratch2, kernel, len * sizeof(float));
 
@@ -266,8 +266,8 @@ void fwht_convolve_f32_buf(const float *signal, const float *kernel,
     }
 }
 
-void fwht_convolve_f32(const float *signal, const float *kernel,
-                       float *output, int len) {
+void fwht_convolve_f32(const float *restrict signal, const float *restrict kernel,
+                       float *restrict output, int len) {
     float *sig_t = (float *)malloc(len * sizeof(float));
     float *ker_t = (float *)malloc(len * sizeof(float));
 
@@ -535,8 +535,8 @@ void haar_inverse_f32(float *data, int len, int levels) {
     }
 }
 
-void haar_convolve_i32(const int32_t *signal, const int32_t *kernel,
-                       int32_t *output, int len, int levels) {
+void haar_convolve_i32(const int32_t *restrict signal, const int32_t *restrict kernel,
+                       int32_t *restrict output, int len, int levels) {
     int32_t *sig_t = (int32_t *)malloc(len * sizeof(int32_t));
     int32_t *ker_t = (int32_t *)malloc(len * sizeof(int32_t));
     memcpy(sig_t, signal, len * sizeof(int32_t));
@@ -576,9 +576,9 @@ static void haar_inverse_f32_with_scratch(float *data, int len, int levels, floa
     }
 }
 
-void haar_convolve_f32_buf(const float *signal, const float *kernel,
-                           float *output, int len, int levels,
-                           float *scratch) {
+void haar_convolve_f32_buf(const float *restrict signal, const float *restrict kernel,
+                           float *restrict output, int len, int levels,
+                           float *restrict scratch) {
     /* Use scratch as temp for signal transform, output as temp for kernel */
     float *sig_t = scratch;         /* borrow first len of scratch */
     /* We need a second buffer for kernel; use output temporarily */
@@ -603,8 +603,8 @@ void haar_convolve_f32_buf(const float *signal, const float *kernel,
     if (len > 512) free(level_scratch);
 }
 
-void haar_convolve_f32(const float *signal, const float *kernel,
-                       float *output, int len, int levels) {
+void haar_convolve_f32(const float *restrict signal, const float *restrict kernel,
+                       float *restrict output, int len, int levels) {
     float *sig_t = (float *)malloc(len * sizeof(float));
     float *ker_t = (float *)malloc(len * sizeof(float));
     memcpy(sig_t, signal, len * sizeof(float));

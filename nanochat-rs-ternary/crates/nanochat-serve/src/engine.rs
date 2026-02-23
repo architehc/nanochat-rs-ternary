@@ -501,6 +501,12 @@ impl NumaInferenceEngine {
     }
 
     /// Returns which NUMA node a given layer index should run on.
+    ///
+    /// NOTE: This computes the mapping but is not yet wired into the forward
+    /// pass — all layers currently run on the preferred node (or node 0).
+    /// To actually distribute layers across NUMA nodes, the forward pass would
+    /// need to migrate thread affinity per-layer, which adds complexity for
+    /// marginal gain on models that fit in single-socket memory bandwidth.
     pub fn node_for_layer(&self, layer_idx: usize) -> usize {
         if let Some(preferred) = self.preferred_node {
             return preferred % self.numa_config.num_nodes;
