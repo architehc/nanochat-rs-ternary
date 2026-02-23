@@ -527,9 +527,14 @@ async fn stream_completion(
         let _timer = metrics::LatencyTimer::new();
 
         let send_event = |tx: &mpsc::Sender<Result<Event, Infallible>>, data: String| -> bool {
-            match tx.blocking_send(Ok(Event::default().data(data))) {
+            match tx.try_send(Ok(Event::default().data(data))) {
                 Ok(()) => true,
-                Err(_) => {
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    eprintln!("WARN: streaming channel full (slow client), dropping connection");
+                    metrics::INFERENCE_ERRORS.inc();
+                    false
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
                     metrics::INFERENCE_ERRORS.inc();
                     false
                 }

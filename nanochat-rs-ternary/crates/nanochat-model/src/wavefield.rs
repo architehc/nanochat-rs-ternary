@@ -455,7 +455,7 @@ impl WaveFieldAttention {
         let field_size = self.field_size;
         let total_proj = n_heads * head_dim;
 
-        let mut ws = self.workspace.lock().expect("workspace lock poisoned");
+        let mut ws = self.workspace.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         ws.scattered.resize(total_proj, 0.0);
         ws.gate_out.resize(n_heads, 0.0);
         ws.gathered.resize(total_proj, 0.0);
@@ -551,7 +551,7 @@ impl WaveFieldAttention {
         let total_proj = n_heads * head_dim;
 
         // Acquire workspace for reusable buffers
-        let mut ws = self.workspace.lock().expect("workspace lock poisoned");
+        let mut ws = self.workspace.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // 1. Scatter all tokens onto fields
         ws.scattered.resize(total_proj, 0.0);

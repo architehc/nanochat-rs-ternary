@@ -254,7 +254,7 @@ impl TransformerBlock {
         let mut ws = self
             .token_workspace
             .lock()
-            .expect("token_workspace lock poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let TokenWorkspace {
             attn_in,
             normed,
@@ -336,7 +336,7 @@ impl TransformerBlock {
         let mut ws = self
             .batch_workspace
             .lock()
-            .expect("batch_workspace lock poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let BatchWorkspace {
             attn_in_batch,
             normed_batch,

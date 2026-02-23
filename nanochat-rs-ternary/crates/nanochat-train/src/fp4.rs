@@ -372,6 +372,51 @@ mod tests {
     }
 
     #[test]
+    fn test_stochastic_bracket_search_correctness() -> Result<()> {
+        // Verify bracket search: for value 1.3 (between levels 1.0 and 1.5),
+        // stochastic rounding should produce only those two neighbors with
+        // P(1.5) ≈ 0.6, P(1.0) ≈ 0.4 (unbiased).
+        let device = Device::Cpu;
+        let mut fp4 = FP4Trainer::new(true);
+
+        // x=[6.0, 1.3]: absmax=6.0, scale=1.0, scaled=[6.0, 1.3]
+        // For 1.3: lower=1.0, upper=1.5, P(high)=(1.3-1.0)/(1.5-1.0)=0.6
+        let x = Tensor::new(&[6.0f32, 1.3], &device)?;
+
+        let mut count_low = 0u32;
+        let mut count_high = 0u32;
+        let n_trials = 1000;
+        for _ in 0..n_trials {
+            let q = fp4.quantize_fp4(&x)?;
+            let vals = q.to_vec1::<f32>()?;
+            let v = (vals[1] * 100.0).round() as i32;
+            if v == 100 {
+                count_low += 1;
+            } else if v == 150 {
+                count_high += 1;
+            } else {
+                panic!(
+                    "unexpected quantized value for 1.3: {:.3} (expected 1.0 or 1.5)",
+                    vals[1]
+                );
+            }
+        }
+
+        let p_high = count_high as f64 / n_trials as f64;
+        assert!(
+            (p_high - 0.6).abs() < 0.1,
+            "P(round to 1.5) should be ~0.6, got {:.3} (high={}, low={})",
+            p_high, count_high, count_low
+        );
+        assert_eq!(
+            count_low + count_high,
+            n_trials as u32,
+            "all trials should produce one of the two neighbors"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_quantize_stochastic_preserves_shape() -> Result<()> {
         let device = Device::Cpu;
         let mut fp4 = FP4Trainer::new(true);

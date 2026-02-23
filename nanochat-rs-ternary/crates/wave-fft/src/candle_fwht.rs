@@ -67,7 +67,7 @@ fn fwht_tensor(x: &Tensor) -> Result<Tensor> {
 fn fwht_convolve_impl(signal: &Tensor, kernel: &Tensor, field_size: usize) -> Result<Tensor> {
     let s_fwht = fwht_tensor(signal)?;
     let k_fwht = fwht_tensor(kernel)?;
-    let product = s_fwht.broadcast_mul(&k_fwht)?;
+    let product = s_fwht.broadcast_mul(&k_fwht)?.contiguous()?;
     let result = fwht_tensor(&product)?;
     result / (field_size as f64)
 }
@@ -246,7 +246,7 @@ mod tests {
             let analytic = analytic_grad[i];
 
             assert!(
-                (numerical - analytic).abs() < 0.5,
+                (numerical - analytic).abs() < 0.05,
                 "FWHT gradient mismatch at signal[{}]: numerical={} analytic={}",
                 i, numerical, analytic
             );

@@ -13,7 +13,7 @@ use std::alloc::{handle_alloc_error, Layout};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static NUMA_AVAILABLE: AtomicBool = AtomicBool::new(false);
-static NUMA_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static NUMA_INIT: std::sync::Once = std::sync::Once::new();
 
 /// NUMA allocator for node-local memory.
 pub struct NumaAllocator;
@@ -21,25 +21,22 @@ pub struct NumaAllocator;
 impl NumaAllocator {
     /// Initialize NUMA subsystem and detect availability.
     pub fn init() {
-        if NUMA_INITIALIZED.swap(true, Ordering::SeqCst) {
-            return; // Already initialized
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            // Check if NUMA is available by reading /proc/self/numa_maps
-            if std::path::Path::new("/sys/devices/system/node/node1").exists() {
-                NUMA_AVAILABLE.store(true, Ordering::SeqCst);
-                log::info!("NUMA subsystem detected and initialized");
-            } else {
-                log::info!("NUMA not available (single-socket system)");
+        NUMA_INIT.call_once(|| {
+            #[cfg(target_os = "linux")]
+            {
+                if std::path::Path::new("/sys/devices/system/node/node1").exists() {
+                    NUMA_AVAILABLE.store(true, Ordering::SeqCst);
+                    log::info!("NUMA subsystem detected and initialized");
+                } else {
+                    log::info!("NUMA not available (single-socket system)");
+                }
             }
-        }
 
-        #[cfg(not(target_os = "linux"))]
-        {
-            log::info!("NUMA allocation not supported on this platform");
-        }
+            #[cfg(not(target_os = "linux"))]
+            {
+                log::info!("NUMA allocation not supported on this platform");
+            }
+        });
     }
 
     /// Check if NUMA is available on this system.

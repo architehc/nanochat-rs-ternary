@@ -120,7 +120,7 @@ fn haar_convolve_impl(
 ) -> Result<Tensor> {
     let s_haar = haar_forward_tensor(signal, field_size, levels)?;
     let k_haar = haar_forward_tensor(kernel, field_size, levels)?;
-    let product = s_haar.broadcast_mul(&k_haar)?;
+    let product = s_haar.broadcast_mul(&k_haar)?.contiguous()?;
     haar_inverse_tensor(&product, field_size, levels)
 }
 
@@ -310,7 +310,7 @@ mod tests {
             let analytic = analytic_grad[i];
 
             assert!(
-                (numerical - analytic).abs() < 0.5,
+                (numerical - analytic).abs() < 0.05,
                 "Haar gradient mismatch at signal[{}]: numerical={} analytic={}",
                 i, numerical, analytic
             );

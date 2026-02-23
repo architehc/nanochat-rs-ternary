@@ -230,6 +230,14 @@ impl Attention {
         let dim = self.wq.cols;
         let kv_dim = self.n_kv_heads * self.head_dim;
 
+        // Validate that all tokens will fit in the KV cache
+        let max_seq = cache.k.len() / kv_dim;
+        assert!(
+            start_pos + seq_len <= max_seq,
+            "Batch forward would overflow KV cache: start_pos={} + seq_len={} > max_seq_len={}",
+            start_pos, seq_len, max_seq
+        );
+
         // 1. Project all Q, K, V for all tokens
         let mut all_q = vec![0.0f32; seq_len * dim];
         let mut all_k = vec![0.0f32; seq_len * kv_dim];

@@ -396,7 +396,7 @@ mod tests {
             let analytic = analytic_grad_signal[i];
 
             assert!(
-                (numerical - analytic).abs() < 0.1,
+                (numerical - analytic).abs() < 0.05,
                 "gradient mismatch at signal[{}]: numerical={} analytic={}",
                 i,
                 numerical,
