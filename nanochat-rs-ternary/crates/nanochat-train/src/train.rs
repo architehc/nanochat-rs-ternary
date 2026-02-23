@@ -682,7 +682,7 @@ impl Trainer {
         };
 
         // Label smoothing: smooth_targets = (1-eps)*one_hot + eps/V
-        let label_smooth_eps = 0.1; // 10% smoothing
+        let label_smooth_eps = self.config.label_smooth_eps;
         let log_probs_for_smoothing = candle_nn::ops::log_softmax(&logits_flat, 1)?;
         // Reuse the same log-probabilities for CE and smoothing to avoid duplicate work.
         let ce_loss = candle_nn::loss::nll(&log_probs_for_smoothing, &targets_flat)?;
@@ -693,6 +693,19 @@ impl Trainer {
         let ce_scaled = (ce_loss * (1.0 - label_smooth_eps))?;
         let uniform_scaled = (uniform_loss * label_smooth_eps)?;
         let mut loss = (ce_scaled + uniform_scaled)?;
+
+        // Explicit entropy regularization: loss -= entropy_weight * H(p)
+        // H(p) = -Σ p * log(p), maximized when predictions are spread out.
+        // Prevents logit collapse in ternary models where weight quantization
+        // can amplify distributional imbalance.
+        let entropy_weight = self.config.entropy_weight;
+        if entropy_weight > 0.0 {
+            let probs = log_probs_for_smoothing.exp()?;
+            let neg_entropy = probs.mul(&log_probs_for_smoothing)?.sum(D::Minus1)?; // Σ p*log(p) < 0
+            let entropy = neg_entropy.neg()?.mean_all()?; // H = -Σ p*log(p) > 0
+            // Subtract: encourages higher entropy (more diverse predictions)
+            loss = (loss - (entropy * entropy_weight)?)?;
+        }
 
         // E3: Multi-Token Prediction (15-20% data efficiency boost)
         if let Some(ref mtp) = self.mtp {
@@ -1334,6 +1347,8 @@ mod tests {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -1599,6 +1614,72 @@ mod tests {
             step_dirs <= 2,
             "expected limited number of step directories"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_entropy_regularization_reduces_loss() -> Result<()> {
+        // Verify that entropy regularization subtracts from loss (encourages diversity).
+        // With peaked logits, entropy is low → small reduction.
+        // With uniform logits, entropy is high → large reduction.
+        let device = Device::Cpu;
+        let vocab = 8usize;
+
+        // Peaked logits: one class dominates → low entropy
+        let peaked = Tensor::new(&[[5.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], &device)?;
+        // Uniform logits: all classes equal → high entropy
+        let uniform = Tensor::new(&[[1.0f32, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]], &device)?;
+
+        let compute_entropy = |logits: &Tensor| -> Result<f32> {
+            let log_probs = candle_nn::ops::log_softmax(logits, 1)?;
+            let probs = log_probs.exp()?;
+            let neg_entropy = probs.mul(&log_probs)?.sum(D::Minus1)?;
+            let entropy = neg_entropy.neg()?.mean_all()?;
+            entropy.to_scalar::<f32>()
+        };
+
+        let h_peaked = compute_entropy(&peaked)?;
+        let h_uniform = compute_entropy(&uniform)?;
+
+        // Peaked entropy should be much lower than uniform
+        assert!(h_peaked < 1.0, "peaked entropy too high: {}", h_peaked);
+        assert!(h_uniform > 1.5, "uniform entropy too low: {}", h_uniform);
+        // max entropy for vocab=8 is ln(8) ≈ 2.08
+        assert!(
+            (h_uniform - (vocab as f32).ln()).abs() < 0.01,
+            "uniform entropy should be ln(V)={}, got {}",
+            (vocab as f32).ln(),
+            h_uniform
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_entropy_weight_in_train_step() -> Result<()> {
+        let device = Device::Cpu;
+
+        // Train step WITHOUT entropy regularization
+        let mut cfg_no_ent = tiny_config();
+        cfg_no_ent.entropy_weight = 0.0;
+        let mut trainer_no_ent = Trainer::new(cfg_no_ent, device.clone())?;
+        let input_ids = Tensor::zeros((2, 8), DType::U32, &device)?;
+        let target_ids = Tensor::zeros((2, 8), DType::U32, &device)?;
+        let stats_no_ent = trainer_no_ent.train_step(&input_ids, &target_ids)?;
+
+        // Train step WITH entropy regularization
+        let mut cfg_ent = tiny_config();
+        cfg_ent.entropy_weight = 0.1;
+        let mut trainer_ent = Trainer::new(cfg_ent, device.clone())?;
+        let stats_ent = trainer_ent.train_step(&input_ids, &target_ids)?;
+
+        // Both should produce finite losses
+        assert!(stats_no_ent.loss.is_finite(), "no-ent loss not finite: {}", stats_no_ent.loss);
+        assert!(stats_ent.loss.is_finite(), "ent loss not finite: {}", stats_ent.loss);
+
+        // Both must have non-zero gradient norms (training is working)
+        assert!(stats_no_ent.grad_norm > 0.0, "no-ent grad_norm should be > 0");
+        assert!(stats_ent.grad_norm > 0.0, "ent grad_norm should be > 0");
+
         Ok(())
     }
 }

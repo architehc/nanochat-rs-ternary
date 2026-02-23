@@ -38,6 +38,14 @@ fn default_fp4_stochastic_rounding() -> bool {
     true
 }
 
+fn default_label_smooth_eps() -> f64 {
+    0.1 // 10% label smoothing
+}
+
+fn default_entropy_weight() -> f64 {
+    0.0 // disabled by default
+}
+
 fn default_wavefield_field_size() -> usize {
     1024
 }
@@ -166,6 +174,17 @@ pub struct TrainConfig {
     /// Number of batches to prefetch (4-16 recommended)
     #[serde(default = "default_async_prefetch_size")]
     pub async_prefetch_size: usize,
+
+    // Loss regularization
+    /// Label smoothing epsilon: smooth_targets = (1-eps)*one_hot + eps/V.
+    /// Default 0.1 (10%). Set to 0.0 to disable.
+    #[serde(default = "default_label_smooth_eps")]
+    pub label_smooth_eps: f64,
+    /// Explicit entropy regularization weight: loss -= entropy_weight * H(p).
+    /// Encourages diverse predictions, prevents logit collapse in ternary models.
+    /// Default 0.0 (disabled). Typical values: 0.01-0.1.
+    #[serde(default = "default_entropy_weight")]
+    pub entropy_weight: f64,
 
     // FP4 mixed precision (Blackwell-oriented)
     /// Enable software-simulated FP4 activation quantization in training loop.
@@ -477,6 +496,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -533,6 +554,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -609,6 +632,8 @@ impl TrainConfig {
             use_async_loader: true,
             async_n_workers: 6,
             async_prefetch_size: 12,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
             use_fp4: false,
             fp4_stochastic_rounding: true,
 
@@ -667,6 +692,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -732,6 +759,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None, // Can be set to teacher model path
@@ -789,6 +818,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -845,6 +876,8 @@ impl TrainConfig {
             use_async_loader: false,
             async_n_workers: 4,
             async_prefetch_size: 8,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -901,6 +934,8 @@ impl TrainConfig {
             use_async_loader: true,
             async_n_workers: 8,
             async_prefetch_size: 16,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -957,6 +992,8 @@ impl TrainConfig {
             use_async_loader: true,
             async_n_workers: 8,
             async_prefetch_size: 16,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,

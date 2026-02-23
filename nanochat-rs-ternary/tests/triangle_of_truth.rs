@@ -226,6 +226,135 @@ fn triangle_parallel_matches_scalar() {
     }
 }
 
+// ============================================================
+// GOPS Regression Tests — catch layout changes that break SIMD
+// ============================================================
+//
+// These measure wall-clock throughput and assert minimum GOPS thresholds.
+// Thresholds are deliberately conservative (well below typical measured values)
+// to avoid flaky tests on busy CI runners, while still catching catastrophic
+// regressions (e.g., wrong data layout breaking SIMD, fallback to scalar).
+
+/// Measure GOPS for a given shape and kernel function.
+fn measure_gops(
+    m: usize,
+    k: usize,
+    kernel: impl Fn(&PlanarWeights, &[i8], f32, &mut [f32]),
+) -> f64 {
+    let w = gen_weights(m, k);
+    let pw = PlanarWeights::from_row_major(&w, m, k, 128);
+    let x = gen_activations(k);
+    let mut y = vec![0.0f32; m];
+    let act_scale = 1.0 / 127.0;
+
+    // Warmup
+    for _ in 0..5 {
+        kernel(&pw, &x, act_scale, &mut y);
+    }
+
+    // Timed iterations
+    let iters = 50;
+    let start = std::time::Instant::now();
+    for _ in 0..iters {
+        kernel(&pw, &x, act_scale, &mut y);
+        std::hint::black_box(&y);
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+
+    let ops_per_iter = 2.0 * m as f64 * k as f64; // multiply + accumulate
+    let total_ops = ops_per_iter * iters as f64;
+    total_ops / elapsed / 1e9 // GOPS
+}
+
+/// Scalar reference kernel: must complete in reasonable time.
+/// This is the unoptimized Rust implementation for cross-validation only.
+/// Typical: ~0.1 GOPS (pure scalar byte-by-byte). Threshold catches hangs.
+#[test]
+fn gops_regression_scalar_4096x4096() {
+    let gops = measure_gops(4096, 4096, |pw, x, s, y| {
+        gemv_scalar_ref(pw, x, s, y);
+    });
+    assert!(
+        gops > 0.01,
+        "Scalar GEMV 4096x4096: {:.3} GOPS below minimum 0.01 GOPS (hung?)",
+        gops
+    );
+    eprintln!("Scalar 4096x4096: {:.2} GOPS", gops);
+}
+
+/// FFI kernel must achieve at least 5 GOPS at production shapes.
+/// Typical: 14-110 GOPS depending on ISA. 5 GOPS catches SIMD fallback.
+#[test]
+fn gops_regression_ffi_4096x4096() {
+    let gops = measure_gops(4096, 4096, |pw, x, s, y| {
+        cpu::gemv(pw, x, s, y);
+    });
+    assert!(
+        gops > 5.0,
+        "FFI GEMV 4096x4096: {:.1} GOPS below minimum 5.0 GOPS",
+        gops
+    );
+    eprintln!("FFI 4096x4096: {:.1} GOPS", gops);
+}
+
+/// FFI kernel at FFN production shape (4096x11008).
+#[test]
+fn gops_regression_ffi_4096x11008() {
+    let gops = measure_gops(4096, 11008, |pw, x, s, y| {
+        cpu::gemv(pw, x, s, y);
+    });
+    assert!(
+        gops > 5.0,
+        "FFI GEMV 4096x11008: {:.1} GOPS below minimum 5.0 GOPS",
+        gops
+    );
+    eprintln!("FFI 4096x11008: {:.1} GOPS", gops);
+}
+
+/// FFI kernel at reverse FFN shape (11008x4096).
+#[test]
+fn gops_regression_ffi_11008x4096() {
+    let gops = measure_gops(11008, 4096, |pw, x, s, y| {
+        cpu::gemv(pw, x, s, y);
+    });
+    assert!(
+        gops > 5.0,
+        "FFI GEMV 11008x4096: {:.1} GOPS below minimum 5.0 GOPS",
+        gops
+    );
+    eprintln!("FFI 11008x4096: {:.1} GOPS", gops);
+}
+
+/// Parallel GEMV must achieve minimum absolute throughput.
+/// When the single-thread kernel is already memory-bandwidth-saturated
+/// (100+ GOPS with nibble-split AVX2), parallel adds overhead. So we
+/// check absolute GOPS, not relative speedup.
+#[test]
+fn gops_regression_parallel_8192x4096() {
+    let m = 8192;
+    let k = 4096;
+    let gops_single = measure_gops(m, k, |pw, x, s, y| {
+        cpu::gemv(pw, x, s, y);
+    });
+    let gops_parallel = measure_gops(m, k, |pw, x, s, y| {
+        cpu::gemv_parallel(pw, x, s, y);
+    });
+
+    eprintln!(
+        "8192x4096: single={:.1} GOPS, parallel={:.1} GOPS, ratio={:.2}x",
+        gops_single,
+        gops_parallel,
+        gops_parallel / gops_single.max(0.001)
+    );
+
+    // Parallel must at least achieve 5 GOPS (not hanging or broken)
+    assert!(
+        gops_parallel > 5.0,
+        "Parallel GEMV 8192x4096: {:.1} GOPS below minimum 5.0 GOPS",
+        gops_parallel
+    );
+}
+
 /// Uniform positive weights: every weight = +1.
 #[test]
 fn triangle_uniform_positive() {
