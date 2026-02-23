@@ -12,6 +12,17 @@ pub struct FeedForward {
     pub ffn_dim: usize,
 }
 
+impl Clone for FeedForward {
+    fn clone(&self) -> Self {
+        Self {
+            w_gate: self.w_gate.clone(),
+            w_up: self.w_up.clone(),
+            w_down: self.w_down.clone(),
+            ffn_dim: self.ffn_dim,
+        }
+    }
+}
+
 impl FeedForward {
     /// Create FFN with random weights (for testing).
     pub fn new_random(config: &ModelConfig) -> Self {
@@ -65,6 +76,17 @@ pub struct MoeExperts {
     pub n_active: usize,
     /// Optional shared expert that is always active.
     pub shared_expert: Option<FeedForward>,
+}
+
+impl Clone for MoeExperts {
+    fn clone(&self) -> Self {
+        Self {
+            router: self.router.clone(),
+            experts: self.experts.clone(),
+            n_active: self.n_active,
+            shared_expert: self.shared_expert.clone(),
+        }
+    }
 }
 
 impl MoeExperts {

@@ -104,12 +104,20 @@ fn parse_args() -> Args {
     }
 }
 
-fn parse_numa_mode(raw: &str) -> (bool, bool) {
+fn parse_numa_mode(raw: &str) -> (NumaMode, bool) {
     match raw.trim().to_ascii_lowercase().as_str() {
-        "off" | "false" | "0" => (false, true),
-        "threadpool" | "on" | "true" | "1" => (true, true),
-        _ => (false, false),
+        "off" | "false" | "0" => (NumaMode::Off, true),
+        "threadpool" | "on" | "true" | "1" => (NumaMode::ThreadPool, true),
+        "local" => (NumaMode::Local, true),
+        _ => (NumaMode::Off, false),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NumaMode {
+    Off,
+    ThreadPool, // One engine uses all nodes
+    Local,      // Replicas distributed across nodes, each node-local
 }
 
 #[tokio::main]
@@ -187,7 +195,7 @@ async fn main() {
         .filter(|&v| v > 0)
         .unwrap_or(64);
     let numa_mode_raw = std::env::var("NANOCHAT_NUMA_MODE").unwrap_or_else(|_| "off".to_string());
-    let (use_numa_engine, known_numa_mode) = parse_numa_mode(&numa_mode_raw);
+    let (numa_mode, known_numa_mode) = parse_numa_mode(&numa_mode_raw);
     if !known_numa_mode {
         tracing::warn!(
             "Unknown NANOCHAT_NUMA_MODE='{}', defaulting to off",
@@ -211,44 +219,44 @@ async fn main() {
     }
     tracing::info!("Chat template: {:?}", chat_template);
     tracing::info!("Stream channel capacity: {}", stream_channel_capacity);
-    tracing::info!(
-        "NUMA engine mode: {}",
-        if use_numa_engine { "threadpool" } else { "off" }
-    );
+    tracing::info!("NUMA engine mode: {:?}", numa_mode);
 
+    let numa_config = nanochat_serve::engine::NumaConfig::detect();
     let mut engines = Vec::new();
-    if use_numa_engine {
-        let numa_engine = NumaInferenceEngine::new(model);
-        tracing::info!("{}", numa_engine.numa_status());
-        engines.push(std::sync::Mutex::new(EngineHandle::Numa(numa_engine)));
-    } else {
-        engines.push(std::sync::Mutex::new(EngineHandle::Standard(
-            InferenceEngine::new(model),
-        )));
-    }
-
-    // Optional engine replication for concurrent streaming requests.
+    
     let replicas = std::env::var("NANOCHAT_ENGINE_REPLICAS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(1)
         .max(1);
-    if replicas > 1 {
-        tracing::info!("Initializing {} inference engine replicas", replicas);
-        for replica_idx in 1..replicas {
-            let replica_model =
-                NanochatModel::from_gguf(&args.model, &args.mhc).unwrap_or_else(|e| {
-                    eprintln!("Failed to load replica {} model: {e}", replica_idx);
-                    std::process::exit(1);
-                });
-            if use_numa_engine {
-                let replica = NumaInferenceEngine::new(replica_model);
-                tracing::info!("replica {}: {}", replica_idx, replica.numa_status());
-                engines.push(std::sync::Mutex::new(EngineHandle::Numa(replica)));
-            } else {
-                engines.push(std::sync::Mutex::new(EngineHandle::Standard(
-                    InferenceEngine::new(replica_model),
-                )));
+
+    for replica_idx in 0..replicas {
+        let node_idx = replica_idx % numa_config.num_nodes;
+        
+        // Clone model to the assigned node if using NUMA
+        let replica_model = if numa_mode != NumaMode::Off {
+            tracing::info!("Cloning model for replica {} to NUMA node {}", replica_idx, node_idx);
+            model.clone_to_node(node_idx)
+        } else {
+            model.clone()
+        };
+
+        match numa_mode {
+            NumaMode::ThreadPool => {
+                let engine = NumaInferenceEngine::new(replica_model);
+                tracing::info!("Replica {} (ThreadPool): {}", replica_idx, engine.numa_status());
+                engines.push(std::sync::Mutex::new(EngineHandle::Numa(engine)));
+            }
+            NumaMode::Local | NumaMode::Off => {
+                if numa_mode == NumaMode::Local {
+                    let engine = NumaInferenceEngine::new(replica_model).with_preferred_node(node_idx);
+                    tracing::info!("Replica {} (Local): Node {}", replica_idx, node_idx);
+                    engines.push(std::sync::Mutex::new(EngineHandle::Numa(engine)));
+                } else {
+                    engines.push(std::sync::Mutex::new(EngineHandle::Standard(
+                        InferenceEngine::new(replica_model),
+                    )));
+                }
             }
         }
     }
@@ -383,10 +391,11 @@ mod tests {
 
     #[test]
     fn test_parse_numa_mode_variants() {
-        assert_eq!(parse_numa_mode("off"), (false, true));
-        assert_eq!(parse_numa_mode("0"), (false, true));
-        assert_eq!(parse_numa_mode("threadpool"), (true, true));
-        assert_eq!(parse_numa_mode("ON"), (true, true));
-        assert_eq!(parse_numa_mode("weird"), (false, false));
+        assert_eq!(parse_numa_mode("off"), (NumaMode::Off, true));
+        assert_eq!(parse_numa_mode("0"), (NumaMode::Off, true));
+        assert_eq!(parse_numa_mode("threadpool"), (NumaMode::ThreadPool, true));
+        assert_eq!(parse_numa_mode("ON"), (NumaMode::ThreadPool, true));
+        assert_eq!(parse_numa_mode("local"), (NumaMode::Local, true));
+        assert_eq!(parse_numa_mode("weird"), (NumaMode::Off, false));
     }
 }

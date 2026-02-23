@@ -9,7 +9,7 @@ use ternary_kernels::cpu;
 ///
 /// Weights are packed ternary in PlanarWeights format.
 /// Activations are quantized to INT8 per-token before GEMV.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BitLinear {
     pub pw: PlanarWeights,
     pub rows: usize, // output dim
@@ -59,6 +59,25 @@ impl BitLinear {
             let x = &x_batch[t * self.cols..(t + 1) * self.cols];
             let out = &mut out_batch[t * self.rows..(t + 1) * self.rows];
             self.forward(x, out);
+        }
+    }
+
+    /// Clone the layer and place the weight allocations on a specific NUMA node.
+    pub fn clone_to_node(&self, node: usize) -> Self {
+        Self {
+            pw: self.pw.clone_to_node(node),
+            rows: self.rows,
+            cols: self.cols,
+        }
+    }
+}
+
+impl Clone for BitLinear {
+    fn clone(&self) -> Self {
+        Self {
+            pw: self.pw.clone(),
+            rows: self.rows,
+            cols: self.cols,
         }
     }
 }

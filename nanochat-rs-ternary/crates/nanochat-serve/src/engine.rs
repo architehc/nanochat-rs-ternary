@@ -157,21 +157,54 @@ impl InferenceEngine {
             return;
         }
 
-        self.model.reset_caches();
+        // Prefix caching logic: find common prefix with last processed prompt
+        let mut common_prefix_len = 0;
+        let cache_len = self.model.get_cache_len();
+        for (a, b) in self.last_prompt.iter().zip(prompt_ids.iter()) {
+            if a == b {
+                common_prefix_len += 1;
+            } else {
+                break;
+            }
+        }
+        // Cannot reuse more than what's currently in the model's cache
+        common_prefix_len = common_prefix_len.min(cache_len);
+
+        if common_prefix_len > 0 {
+            // Rewind model state to the end of the common prefix
+            self.model.rewind_caches(common_prefix_len);
+        } else {
+            // No usable prefix, full reset
+            self.model.reset_caches();
+        }
+
+        let tokens_to_prefill = &prompt_ids[common_prefix_len..];
 
         let mut rng: Box<dyn RngCore> = match params.seed {
             Some(seed) => Box::new(StdRng::seed_from_u64(seed)),
             None => Box::new(StdRng::from_entropy()),
         };
 
-        // Prefill: process all prompt tokens (batched for efficiency)
-        let mut logits = if prompt_ids.len() > 1 {
-            self.model.forward_sequence_batched(prompt_ids)
-        } else if prompt_ids.len() == 1 {
-            self.model.forward_token(prompt_ids[0], 0)
+        // Prefill: process new prompt tokens (batched for efficiency)
+        let mut logits = if tokens_to_prefill.len() > 1 {
+            self.model
+                .forward_sequence_batched_at(tokens_to_prefill, common_prefix_len)
+        } else if tokens_to_prefill.len() == 1 {
+            self.model
+                .forward_token(tokens_to_prefill[0], common_prefix_len)
+        } else if common_prefix_len > 0 {
+            // Entire prompt was already cached.
+            // We need logits for the last token to sample the next one.
+            let last_token = prompt_ids[common_prefix_len - 1];
+            self.model.rewind_caches(common_prefix_len - 1);
+            self.model.forward_token(last_token, common_prefix_len - 1)
         } else {
             vec![]
         };
+
+        // Store the prompt for future prefix caching.
+        // We will also append generated tokens to this during the decode loop.
+        self.last_prompt = prompt_ids.to_vec();
 
         // Check for degraded state after prefill
         if self.model.last_forward_was_degraded() {
@@ -209,6 +242,9 @@ impl InferenceEngine {
             if !should_continue || is_eot || at_limit {
                 break;
             }
+
+            // Append generated token to last_prompt so it can be cached for the next turn
+            self.last_prompt.push(next_token);
 
             logits = self.model.forward_token(next_token, pos);
             pos += 1;
@@ -381,6 +417,8 @@ pub struct NumaInferenceEngine {
     pub thread_pinning_active: bool,
     /// Layer split point: layers 0..split on node 0, split..N on node 1
     pub layer_split: usize,
+    /// If set, all computation will be forced onto this NUMA node's thread pool.
+    pub preferred_node: Option<usize>,
 }
 
 impl NumaInferenceEngine {
@@ -443,7 +481,14 @@ impl NumaInferenceEngine {
             thread_pools,
             thread_pinning_active,
             layer_split,
+            preferred_node: None,
         }
+    }
+
+    /// Set a preferred NUMA node for all inference operations.
+    pub fn with_preferred_node(mut self, node: usize) -> Self {
+        self.preferred_node = Some(node);
+        self
     }
 
     /// Create a NUMA engine with random weights for testing.
@@ -454,6 +499,9 @@ impl NumaInferenceEngine {
 
     /// Returns which NUMA node a given layer index should run on.
     pub fn node_for_layer(&self, layer_idx: usize) -> usize {
+        if let Some(preferred) = self.preferred_node {
+            return preferred % self.numa_config.num_nodes;
+        }
         if self.numa_config.num_nodes <= 1 {
             return 0;
         }
@@ -465,12 +513,12 @@ impl NumaInferenceEngine {
     }
 
     fn forward_prefill_on_node(&mut self, prompt_ids: &[u32]) -> Vec<f32> {
-        let node_idx = 0;
+        let node_idx = self.preferred_node.unwrap_or(0) % self.thread_pools.len();
         let pool = &self.thread_pools[node_idx];
         let model = &mut self.model;
         pool.install(|| {
             if prompt_ids.len() > 1 {
-                model.forward_sequence_batched(prompt_ids)
+                model.forward_sequence_batched_at(prompt_ids, 0)
             } else if prompt_ids.len() == 1 {
                 model.forward_token(prompt_ids[0], 0)
             } else {
@@ -480,7 +528,9 @@ impl NumaInferenceEngine {
     }
 
     fn forward_decode_on_node(&mut self, token: u32, pos: usize) -> Vec<f32> {
-        let node_idx = if self.numa_config.num_nodes <= 1 {
+        let node_idx = if let Some(preferred) = self.preferred_node {
+            preferred % self.thread_pools.len()
+        } else if self.numa_config.num_nodes <= 1 {
             0
         } else {
             // Round-robin token decode work across detected NUMA pools.

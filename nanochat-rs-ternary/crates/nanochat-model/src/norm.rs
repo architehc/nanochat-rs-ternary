@@ -1,17 +1,23 @@
 //! RMSNorm — Root Mean Square Layer Normalization.
 
+use ternary_core::planar::AlignedVec;
+
 /// RMSNorm parameters: just a learned scale vector.
 #[derive(Debug, Clone)]
 pub struct RMSNorm {
-    pub weight: Vec<f32>,
+    pub weight: AlignedVec<f32>,
     pub eps: f32,
 }
 
 impl RMSNorm {
     /// Create RMSNorm with all-ones weight (identity init).
     pub fn new(dim: usize) -> Self {
+        let mut weight = AlignedVec::new_zeroed(dim);
+        for w in weight.iter_mut() {
+            *w = 1.0;
+        }
         Self {
-            weight: vec![1.0; dim],
+            weight,
             eps: 1e-6,
         }
     }
@@ -66,6 +72,14 @@ impl RMSNorm {
             self.forward(x, out);
         }
     }
+
+    /// Clone the layer and place weight allocations on a specific NUMA node.
+    pub fn clone_to_node(&self, node: usize) -> Self {
+        Self {
+            weight: self.weight.clone_to_node(node),
+            eps: self.eps,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -96,7 +110,9 @@ mod tests {
     #[test]
     fn test_rmsnorm_with_weights() {
         let mut norm = RMSNorm::new(4);
-        norm.weight = vec![2.0, 2.0, 2.0, 2.0];
+        for w in norm.weight.iter_mut() {
+            *w = 2.0;
+        }
 
         let x = vec![1.0, 1.0, 1.0, 1.0];
         let mut out = vec![0.0; 4];

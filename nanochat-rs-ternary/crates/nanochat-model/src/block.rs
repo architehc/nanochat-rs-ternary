@@ -12,7 +12,7 @@ use crate::config::ModelConfig;
 use crate::deltanet::{DeltaNetAttention, DeltaNetState};
 use crate::ffn::{FeedForward, FfnLayer, MoeExperts};
 use crate::norm::RMSNorm;
-use crate::wavefield::{WaveFieldAttention, WaveFieldState};
+use crate::wavefield::{HeadCoupling, WaveFieldAttention, WaveFieldState, WaveKernelCache, WavePhysicsParams};
 use mhc_lite::MhcLiteN2;
 use std::sync::Mutex;
 
@@ -455,6 +455,183 @@ impl TransformerBlock {
             mhc_apply_into(&self.mhc_ffn, x_exp, ffn_out, dim, residual_tmp);
             x_exp_batch[t * exp_dim..(t + 1) * exp_dim].copy_from_slice(residual_tmp);
         }
+    }
+
+    /// Clone the block and place weight allocations on a specific NUMA node.
+    pub fn clone_to_node(&self, node: usize) -> Self {
+        Self::from_parts(
+            self.mhc_attn.clone(),
+            self.mhc_ffn.clone(),
+            self.norm_attn.clone_to_node(node),
+            self.norm_ffn.clone_to_node(node),
+            match &self.attention {
+                AttentionLayer::Standard(a) => AttentionLayer::Standard(Attention {
+                    wq: a.wq.clone_to_node(node),
+                    wk: a.wk.clone_to_node(node),
+                    wv: a.wv.clone_to_node(node),
+                    wo: a.wo.clone_to_node(node),
+                    n_heads: a.n_heads,
+                    n_kv_heads: a.n_kv_heads,
+                    head_dim: a.head_dim,
+                    n_rep: a.n_rep,
+                }),
+                AttentionLayer::DeltaNet(a) => AttentionLayer::DeltaNet(DeltaNetAttention {
+                    wq: a.wq.clone_to_node(node),
+                    wk: a.wk.clone_to_node(node),
+                    wv: a.wv.clone_to_node(node),
+                    wo: a.wo.clone_to_node(node),
+                    w_beta: a.w_beta.clone_to_node(node),
+                    n_heads: a.n_heads,
+                    head_dim: a.head_dim,
+                }),
+                AttentionLayer::WaveField(a) => AttentionLayer::WaveField(WaveFieldAttention::from_parts(
+                    a.scatter_proj.clone_to_node(node),
+                    a.gate_proj.clone_to_node(node),
+                    a.out_proj.clone_to_node(node),
+                    WavePhysicsParams {
+                        omega: a.physics.omega.clone(),
+                        alpha: a.physics.alpha.clone(),
+                        phi: a.physics.phi.clone(),
+                    },
+                    a.coupling.as_ref().map(|c| HeadCoupling {
+                        weights: c.weights.clone(),
+                        n_heads: c.n_heads,
+                    }),
+                    match &a.kernel_cache {
+                        WaveKernelCache::Fft { kernels_freq, n_heads, field_size, fft_size } => WaveKernelCache::Fft {
+                            kernels_freq: kernels_freq.clone(),
+                            n_heads: *n_heads,
+                            field_size: *field_size,
+                            fft_size: *fft_size,
+                        },
+                        WaveKernelCache::Fwht { kernels_fwht, n_heads, field_size } => WaveKernelCache::Fwht {
+                            kernels_fwht: kernels_fwht.clone(),
+                            n_heads: *n_heads,
+                            field_size: *field_size,
+                        },
+                        WaveKernelCache::Haar { kernels_haar, n_heads, field_size, levels } => WaveKernelCache::Haar {
+                            kernels_haar: kernels_haar.clone(),
+                            n_heads: *n_heads,
+                            field_size: *field_size,
+                            levels: *levels,
+                        },
+                    },
+                    a.n_heads,
+                    a.head_dim,
+                    a.field_size,
+                    a.stride,
+                )),
+            },
+            match &self.ffn {
+                FfnLayer::Dense(f) => FfnLayer::Dense(Box::new(FeedForward {
+                    w_gate: f.w_gate.clone_to_node(node),
+                    w_up: f.w_up.clone_to_node(node),
+                    w_down: f.w_down.clone_to_node(node),
+                    ffn_dim: f.ffn_dim,
+                })),
+                FfnLayer::Moe(m) => FfnLayer::Moe(Box::new(MoeExperts {
+                    router: m.router.clone_to_node(node),
+                    experts: m.experts.iter().map(|e| FeedForward {
+                        w_gate: e.w_gate.clone_to_node(node),
+                        w_up: e.w_up.clone_to_node(node),
+                        w_down: e.w_down.clone_to_node(node),
+                        ffn_dim: e.ffn_dim,
+                    }).collect(),
+                    n_active: m.n_active,
+                    shared_expert: m.shared_expert.as_ref().map(|e| FeedForward {
+                        w_gate: e.w_gate.clone_to_node(node),
+                        w_up: e.w_up.clone_to_node(node),
+                        w_down: e.w_down.clone_to_node(node),
+                        ffn_dim: e.ffn_dim,
+                    }),
+                })),
+            },
+            self.dim,
+        )
+    }
+}
+
+impl Clone for TransformerBlock {
+    fn clone(&self) -> Self {
+        Self::from_parts(
+            self.mhc_attn.clone(),
+            self.mhc_ffn.clone(),
+            self.norm_attn.clone(),
+            self.norm_ffn.clone(),
+            match &self.attention {
+                AttentionLayer::Standard(a) => AttentionLayer::Standard(Attention {
+                    wq: a.wq.clone(),
+                    wk: a.wk.clone(),
+                    wv: a.wv.clone(),
+                    wo: a.wo.clone(),
+                    n_heads: a.n_heads,
+                    n_kv_heads: a.n_kv_heads,
+                    head_dim: a.head_dim,
+                    n_rep: a.n_rep,
+                }),
+                AttentionLayer::DeltaNet(a) => AttentionLayer::DeltaNet(DeltaNetAttention {
+                    wq: a.wq.clone(),
+                    wk: a.wk.clone(),
+                    wv: a.wv.clone(),
+                    wo: a.wo.clone(),
+                    w_beta: a.w_beta.clone(),
+                    n_heads: a.n_heads,
+                    head_dim: a.head_dim,
+                }),
+                AttentionLayer::WaveField(a) => AttentionLayer::WaveField(WaveFieldAttention::from_parts(
+                    a.scatter_proj.clone(),
+                    a.gate_proj.clone(),
+                    a.out_proj.clone(),
+                    WavePhysicsParams {
+                        omega: a.physics.omega.clone(),
+                        alpha: a.physics.alpha.clone(),
+                        phi: a.physics.phi.clone(),
+                    },
+                    a.coupling.as_ref().map(|c| HeadCoupling {
+                        weights: c.weights.clone(),
+                        n_heads: c.n_heads,
+                    }),
+                    match &a.kernel_cache {
+                        WaveKernelCache::Fft { kernels_freq, n_heads, field_size, fft_size } => WaveKernelCache::Fft {
+                            kernels_freq: kernels_freq.clone(),
+                            n_heads: *n_heads,
+                            field_size: *field_size,
+                            fft_size: *fft_size,
+                        },
+                        WaveKernelCache::Fwht { kernels_fwht, n_heads, field_size } => WaveKernelCache::Fwht {
+                            kernels_fwht: kernels_fwht.clone(),
+                            n_heads: *n_heads,
+                            field_size: *field_size,
+                        },
+                        WaveKernelCache::Haar { kernels_haar, n_heads, field_size, levels } => WaveKernelCache::Haar {
+                            kernels_haar: kernels_haar.clone(),
+                            n_heads: *n_heads,
+                            field_size: *field_size,
+                            levels: *levels,
+                        },
+                    },
+                    a.n_heads,
+                    a.head_dim,
+                    a.field_size,
+                    a.stride,
+                )),
+            },
+            match &self.ffn {
+                FfnLayer::Dense(f) => FfnLayer::Dense(Box::new(FeedForward {
+                    w_gate: f.w_gate.clone(),
+                    w_up: f.w_up.clone(),
+                    w_down: f.w_down.clone(),
+                    ffn_dim: f.ffn_dim,
+                })),
+                FfnLayer::Moe(m) => FfnLayer::Moe(Box::new(MoeExperts {
+                    router: m.router.clone(),
+                    experts: m.experts.clone(),
+                    n_active: m.n_active,
+                    shared_expert: m.shared_expert.clone(),
+                })),
+            },
+            self.dim,
+        )
     }
 }
 

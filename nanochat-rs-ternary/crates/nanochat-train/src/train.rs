@@ -642,7 +642,7 @@ impl Trainer {
 
         // Optional FP4 path via STE: forward uses quantized activations while
         // gradients flow through the original hidden states.
-        let hidden_for_lm = if let Some(ref fp4) = self.fp4 {
+        let hidden_for_lm = if let Some(ref mut fp4) = self.fp4 {
             let hidden_detached = hidden.detach();
             let hidden_quant = fp4.quantize_fp4(&hidden_detached)?;
             // Forward value is exactly `hidden_quant`; gradient remains identity via STE.

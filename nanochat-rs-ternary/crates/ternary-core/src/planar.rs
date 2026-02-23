@@ -328,12 +328,23 @@ impl<T: Copy + Default + std::fmt::Debug> std::fmt::Debug for AlignedVec<T> {
 
 impl<T: Copy + Default> Clone for AlignedVec<T> {
     fn clone(&self) -> Self {
-        // Preserve NUMA placement when cloning
+        // Preserve NUMA placement when cloning using default clone()
         let mut new = match self.alloc_source {
             AllocSource::Standard => Self::new_zeroed(self.len),
             #[cfg(all(target_os = "linux", has_numa))]
             AllocSource::Numa { node } => Self::new_on_node(self.len, node),
         };
+        if self.len > 0 {
+            new.copy_from_slice(self);
+        }
+        new
+    }
+}
+
+impl<T: Copy + Default> AlignedVec<T> {
+    /// Clone the vector and place the new allocation on a specific NUMA node.
+    pub fn clone_to_node(&self, node: usize) -> Self {
+        let mut new = Self::new_on_node(self.len, node);
         if self.len > 0 {
             new.copy_from_slice(self);
         }
@@ -480,6 +491,20 @@ impl PlanarWeights {
             group_size,
         };
         Self::from_packed_matrix(&pm)
+    }
+
+    /// Clone the weights and place the new allocations on a specific NUMA node.
+    pub fn clone_to_node(&self, node: usize) -> Self {
+        Self {
+            data: self.data.clone_to_node(node),
+            data_colmaj: self.data_colmaj.clone_to_node(node),
+            scales_rm: self.scales_rm.clone_to_node(node),
+            scales_gm: self.scales_gm.clone_to_node(node),
+            rows: self.rows,
+            cols: self.cols,
+            group_size: self.group_size,
+            rows_padded: self.rows_padded,
+        }
     }
 }
 

@@ -15,6 +15,7 @@ use crate::loop_block::SharedLoopBlock;
 use crate::norm::RMSNorm;
 use mhc_lite::MhcLiteN2;
 use ternary_core::gguf::{GgufFile, GgufValue};
+use ternary_core::planar::AlignedVec;
 
 /// Full nanochat-rs ternary model.
 #[derive(Debug)]
@@ -1130,10 +1131,10 @@ impl NanochatModel {
         }
 
         let data = gguf.tensor_data(tensor)?;
-        let weight: Vec<f32> = data
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
+        let mut weight = AlignedVec::new_zeroed(data.len() / 4);
+        for (i, chunk) in data.chunks_exact(4).enumerate() {
+            weight[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        }
 
         Ok(RMSNorm { weight, eps: 1e-6 })
     }
@@ -1518,7 +1519,7 @@ impl NanochatModel {
                     &mut x_exp_all,
                     &mut self.attn_states[i],
                     &self.rope,
-                    0, // start_pos for fresh prefill
+                    start_pos,
                     seq_len,
                 );
             }
@@ -1689,6 +1690,61 @@ impl NanochatModel {
             norm: norm_total + final_norm,
             mhc: mhc_total,
             lm_head,
+        }
+    }
+
+    /// Clone the model and place all weight allocations on a specific NUMA node.
+    pub fn clone_to_node(&self, node: usize) -> Self {
+        Self {
+            config: self.config.clone(),
+            tok_embed: Embedding {
+                weight: self.tok_embed.weight.clone(),
+                vocab_size: self.tok_embed.vocab_size,
+                dim: self.tok_embed.dim,
+            },
+            blocks: self.blocks.iter().map(|b| b.clone_to_node(node)).collect(),
+            attn_states: self.attn_states.iter().map(|s| s.clone()).collect(),
+            local_blocks_before: self.local_blocks_before.iter().map(|b| b.clone_to_node(node)).collect(),
+            local_states_before: self.local_states_before.iter().map(|s| s.clone()).collect(),
+            shared_loop_block: self.shared_loop_block.as_ref().map(|b| b.clone_to_node(node)),
+            loop_kv_cache: self.loop_kv_cache.clone(),
+            local_blocks_after: self.local_blocks_after.iter().map(|b| b.clone_to_node(node)).collect(),
+            local_states_after: self.local_states_after.iter().map(|s| s.clone()).collect(),
+            norm_final: self.norm_final.clone_to_node(node),
+            lm_head: self.lm_head.as_ref().map(|h| h.clone_to_node(node)),
+            weight_tied: self.weight_tied,
+            rope: self.rope.clone(),
+            last_forward_degraded: std::sync::atomic::AtomicBool::new(false),
+            last_forward_error: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl Clone for NanochatModel {
+    fn clone(&self) -> Self {
+        // By default, clone to the same NUMA nodes as the original
+        // (Individual components will handle their own clone logic)
+        Self {
+            config: self.config.clone(),
+            tok_embed: Embedding {
+                weight: self.tok_embed.weight.clone(),
+                vocab_size: self.tok_embed.vocab_size,
+                dim: self.tok_embed.dim,
+            },
+            blocks: self.blocks.clone(),
+            attn_states: self.attn_states.clone(),
+            local_blocks_before: self.local_blocks_before.clone(),
+            local_states_before: self.local_states_before.clone(),
+            shared_loop_block: self.shared_loop_block.clone(),
+            loop_kv_cache: self.loop_kv_cache.clone(),
+            local_blocks_after: self.local_blocks_after.clone(),
+            local_states_after: self.local_states_after.clone(),
+            norm_final: self.norm_final.clone(),
+            lm_head: self.lm_head.clone(),
+            weight_tied: self.weight_tied,
+            rope: self.rope.clone(),
+            last_forward_degraded: std::sync::atomic::AtomicBool::new(false),
+            last_forward_error: std::sync::Mutex::new(None),
         }
     }
 }

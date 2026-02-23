@@ -491,6 +491,57 @@ impl SharedLoopBlock {
 
         Ok(new_global_states)
     }
+
+    /// Clone the block and place weight allocations on a specific NUMA node.
+    pub fn clone_to_node(&self, node: usize) -> Self {
+        Self {
+            wq: self.wq.clone_to_node(node),
+            wk: self.wk.clone_to_node(node),
+            wv: self.wv.clone_to_node(node),
+            wo: self.wo.clone_to_node(node),
+            g_qk: self.g_qk.clone_to_node(node),
+            w_gate: self.w_gate.clone_to_node(node),
+            w_up: self.w_up.clone_to_node(node),
+            w_down: self.w_down.clone_to_node(node),
+            g_ffn: self.g_ffn.clone_to_node(node),
+            norm_attn: self.norm_attn.clone_to_node(node),
+            norm_ffn: self.norm_ffn.clone_to_node(node),
+            mhc_attn: self.mhc_attn.clone(),
+            mhc_ffn: self.mhc_ffn.clone(),
+            dim: self.dim,
+            n_heads: self.n_heads,
+            n_kv_heads: self.n_kv_heads,
+            head_dim: self.head_dim,
+            n_rep: self.n_rep,
+            ffn_dim: self.ffn_dim,
+        }
+    }
+}
+
+impl Clone for SharedLoopBlock {
+    fn clone(&self) -> Self {
+        Self {
+            wq: self.wq.clone(),
+            wk: self.wk.clone(),
+            wv: self.wv.clone(),
+            wo: self.wo.clone(),
+            g_qk: self.g_qk.clone(),
+            w_gate: self.w_gate.clone(),
+            w_up: self.w_up.clone(),
+            w_down: self.w_down.clone(),
+            g_ffn: self.g_ffn.clone(),
+            norm_attn: self.norm_attn.clone(),
+            norm_ffn: self.norm_ffn.clone(),
+            mhc_attn: self.mhc_attn.clone(),
+            mhc_ffn: self.mhc_ffn.clone(),
+            dim: self.dim,
+            n_heads: self.n_heads,
+            n_kv_heads: self.n_kv_heads,
+            head_dim: self.head_dim,
+            n_rep: self.n_rep,
+            ffn_dim: self.ffn_dim,
+        }
+    }
 }
 
 #[cfg(test)]
