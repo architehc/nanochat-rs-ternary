@@ -630,6 +630,59 @@ fn wavefield_all_modes_produce_output() {
     }
 }
 
+// ───────────────── Batched vs Sequential Parity ─────────────────
+//
+// forward_sequence (batched prefill) must produce the same last-token logits
+// as feeding tokens one-by-one via forward_token (sequential autoregressive).
+
+/// Helper: compare batched vs sequential for a given mode.
+fn check_batched_vs_sequential(mode: ConvolveMode) {
+    let config = make_wavefield_config_mode(mode);
+    let tokens: Vec<u32> = vec![5, 10, 42, 100, 200];
+
+    // Sequential: feed tokens one by one
+    let mut model_seq = NanochatModel::new_random(config.clone());
+    let mut last_logits_seq = vec![];
+    for (pos, &tok) in tokens.iter().enumerate() {
+        last_logits_seq = model_seq.forward_token(tok, pos);
+    }
+
+    // Batched: forward_sequence processes all at once
+    let mut model_batch = NanochatModel::new_random(config.clone());
+    let last_logits_batch = model_batch.forward_sequence(&tokens);
+
+    assert_eq!(last_logits_seq.len(), last_logits_batch.len());
+
+    let max_diff: f32 = last_logits_seq
+        .iter()
+        .zip(last_logits_batch.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+
+    // Tolerance: ternary quantization + different accumulation order
+    // allows small numerical differences
+    assert!(
+        max_diff < 0.1,
+        "{:?} batched vs sequential max_diff={} (should be < 0.1)",
+        mode, max_diff
+    );
+}
+
+#[test]
+fn wavefield_fft_batched_vs_sequential() {
+    check_batched_vs_sequential(ConvolveMode::Fft);
+}
+
+#[test]
+fn wavefield_fwht_batched_vs_sequential() {
+    check_batched_vs_sequential(ConvolveMode::Fwht);
+}
+
+#[test]
+fn wavefield_haar_batched_vs_sequential() {
+    check_batched_vs_sequential(ConvolveMode::Haar);
+}
+
 // ───────────────── FWHT Infrastructure ─────────────────
 
 #[test]

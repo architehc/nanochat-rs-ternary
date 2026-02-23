@@ -817,11 +817,16 @@ impl NanochatModel {
                         };
                         let convolve_mode = match gguf.metadata.get("nanochat.wavefield.convolve_mode") {
                             Some(GgufValue::String(s)) => match s.as_str() {
+                                "fft" => crate::config::ConvolveMode::Fft,
                                 "fwht" => crate::config::ConvolveMode::Fwht,
                                 "haar" => crate::config::ConvolveMode::Haar,
-                                _ => crate::config::ConvolveMode::Fft,
+                                other => return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!("unknown wavefield convolve_mode '{}'; expected 'fft', 'fwht', or 'haar'", other),
+                                )),
                             },
-                            _ => crate::config::ConvolveMode::Fft,
+                            None => crate::config::ConvolveMode::Fft, // absent = legacy FFT model
+                            _ => crate::config::ConvolveMode::Fft,    // non-string metadata = legacy
                         };
                         let haar_levels = match gguf.metadata.get("nanochat.wavefield.haar_levels") {
                             Some(GgufValue::U32(v)) if *v > 0 => Some(*v as usize),
@@ -1166,20 +1171,52 @@ impl NanochatModel {
 
     /// Reset attention states (KV caches or recurrent states) for a new sequence.
     pub fn reset_caches(&mut self) {
+        self.rewind_caches(0);
+    }
+
+    /// Get the current sequence length in the attention caches.
+    ///
+    /// Returns the length of the first KV cache found.
+    pub fn get_cache_len(&self) -> usize {
+        // Check standard blocks
+        if let Some(state) = self.attn_states.first() {
+            match state {
+                AttentionState::Kv(cache) => return cache.len,
+                _ => {}
+            }
+        }
+        // Check local blocks before
+        if let Some(state) = self.local_states_before.first() {
+            match state {
+                AttentionState::Kv(cache) => return cache.len,
+                _ => {}
+            }
+        }
+        // Check loop cache
+        if let Some(ref cache) = self.loop_kv_cache {
+            return cache.len;
+        }
+        0
+    }
+
+    /// Rewind attention states to a specific sequence length.
+    pub fn rewind_caches(&mut self, len: usize) {
         // Reset standard block caches
         for state in &mut self.attn_states {
-            state.reset();
+            state.rewind(len);
         }
 
         // Reset LoopLM caches
         for state in &mut self.local_states_before {
-            state.reset();
+            state.rewind(len);
         }
         for state in &mut self.local_states_after {
-            state.reset();
+            state.rewind(len);
         }
         if let Some(ref mut kv_cache) = self.loop_kv_cache {
-            kv_cache.len = 0; // Reset shared loop KV cache
+            if len < kv_cache.len {
+                kv_cache.len = len;
+            }
         }
     }
 
@@ -1344,20 +1381,38 @@ impl NanochatModel {
     ///
     /// Returns logits for the last token only.
     pub fn forward_sequence(&mut self, token_ids: &[u32]) -> Vec<f32> {
-        self.reset_caches();
+        self.forward_sequence_at(token_ids, 0)
+    }
+
+    /// Forward pass for a sequence of tokens starting at `start_pos`.
+    pub fn forward_sequence_at(&mut self, token_ids: &[u32], start_pos: usize) -> Vec<f32> {
+        if start_pos == 0 {
+            self.reset_caches();
+        } else {
+            self.rewind_caches(start_pos);
+        }
         let mut logits = vec![];
-        for (pos, &tid) in token_ids.iter().enumerate() {
-            logits = self.forward_token(tid, pos);
+        for (i, &tid) in token_ids.iter().enumerate() {
+            logits = self.forward_token(tid, start_pos + i);
         }
         logits
     }
 
     /// Batched forward pass for a sequence of tokens (prefill).
+    pub fn forward_sequence_batched(&mut self, token_ids: &[u32]) -> Vec<f32> {
+        self.forward_sequence_batched_at(token_ids, 0)
+    }
+
+    /// Batched forward pass for a sequence of tokens starting at `start_pos`.
     ///
     /// Processes all tokens through each layer in batch, with causal attention masking.
     /// Returns logits for the last token only.
-    pub fn forward_sequence_batched(&mut self, token_ids: &[u32]) -> Vec<f32> {
-        self.reset_caches();
+    pub fn forward_sequence_batched_at(&mut self, token_ids: &[u32], start_pos: usize) -> Vec<f32> {
+        if start_pos == 0 {
+            self.reset_caches();
+        } else {
+            self.rewind_caches(start_pos);
+        }
         // Reset degraded flag at start of forward
         self.clear_forward_error_state();
 
@@ -1394,7 +1449,7 @@ impl NanochatModel {
                     &mut x_exp_all,
                     &mut self.local_states_before[i],
                     &self.rope,
-                    0,
+                    start_pos,
                     seq_len,
                 );
             }
@@ -1452,7 +1507,7 @@ impl NanochatModel {
                     &mut x_exp_all,
                     &mut self.local_states_after[i],
                     &self.rope,
-                    0,
+                    start_pos,
                     seq_len,
                 );
             }

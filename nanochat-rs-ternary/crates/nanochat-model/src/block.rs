@@ -60,13 +60,36 @@ pub enum AttentionState {
 }
 
 impl AttentionState {
+    /// Rewind the attention state to a specific sequence length.
+    ///
+    /// For KV caches, this truncates the cache.
+    /// For recurrent states (DeltaNet, WaveField), this currently resets
+    /// if len is 0, otherwise it's a no-op (recurrent states cannot be easily rewound).
+    pub fn rewind(&mut self, len: usize) {
+        match self {
+            AttentionState::Kv(cache) => {
+                if len < cache.len {
+                    cache.len = len;
+                }
+            }
+            AttentionState::Recurrent(state) => {
+                if len == 0 {
+                    state.reset();
+                }
+                // Partial rewind not supported for recurrent state
+            }
+            AttentionState::WaveField(state) => {
+                if len == 0 {
+                    state.reset();
+                }
+                // Partial rewind not supported for wave field state
+            }
+        }
+    }
+
     /// Reset the attention state (KV cache len or recurrent state to zeros).
     pub fn reset(&mut self) {
-        match self {
-            AttentionState::Kv(cache) => cache.len = 0,
-            AttentionState::Recurrent(state) => state.reset(),
-            AttentionState::WaveField(state) => state.reset(),
-        }
+        self.rewind(0);
     }
 }
 

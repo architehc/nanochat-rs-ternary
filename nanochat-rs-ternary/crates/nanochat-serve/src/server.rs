@@ -21,6 +21,52 @@ use crate::api::*;
 use crate::engine::EngineHandle;
 use crate::metrics;
 
+/// Helper for decoding tokens into UTF-8 strings incrementally.
+///
+/// Handles multi-byte UTF-8 sequences that span across multiple tokens by
+/// maintaining a buffer of tokens and only returning newly decoded complete
+/// characters.
+pub struct StreamingDecoder {
+    tokens: Vec<u32>,
+    last_text: String,
+}
+
+impl StreamingDecoder {
+    pub fn new() -> Self {
+        Self {
+            tokens: Vec::new(),
+            last_text: String::new(),
+        }
+    }
+
+    /// Add a token and return any newly decoded complete UTF-8 string part.
+    pub fn decode_next(&mut self, token_id: u32, tokenizer: &tokenizers::Tokenizer) -> String {
+        self.tokens.push(token_id);
+
+        // Decode the full sequence of tokens. skip_special_tokens=true is standard for SSE.
+        let current_text = tokenizer.decode(&self.tokens, true).unwrap_or_default();
+
+        if current_text.len() > self.last_text.len() && current_text.starts_with(&self.last_text) {
+            let diff = current_text[self.last_text.len()..].to_string();
+            self.last_text = current_text;
+            diff
+        } else if current_text.len() > self.last_text.len() {
+            // If it doesn't start with last_text (rare for BPE), we reset and send the whole thing.
+            self.last_text = current_text.clone();
+            current_text
+        } else {
+            // No new complete UTF-8 characters yet.
+            String::new()
+        }
+    }
+}
+
+impl Default for StreamingDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Shared application state.
 pub struct AppState {
     pub engines: Vec<std::sync::Mutex<EngineHandle>>,
@@ -599,6 +645,8 @@ async fn stream_completion(
         let mut token_count = 0usize;
         let mut had_degraded = false;
         let mut timed_out = false;
+        let mut decoder = StreamingDecoder::new();
+
         engine.generate_streaming(&token_ids, &params, |tok| {
             if started.elapsed() >= request_timeout {
                 timed_out = true;
@@ -634,19 +682,12 @@ async fn stream_completion(
                 had_degraded = true;
             }
 
-            // NOTE: Per-token BPE decode can produce garbled output for multi-byte
-            // UTF-8 characters that span multiple BPE tokens. A future improvement
-            // would use a token accumulator buffer that collects tokens until a
-            // complete UTF-8 codepoint boundary is reached before decoding, similar
-            // to how HuggingFace text-generation-inference handles this.
-            let text = state
-                .tokenizer
-                .decode(&[tok.token_id], true)
-                .unwrap_or_else(|err| {
-                    metrics::INFERENCE_ERRORS.inc();
-                    eprintln!("ERROR: tokenizer decode failed in stream: {}", err);
-                    String::new()
-                });
+            let text = decoder.decode_next(tok.token_id, &state.tokenizer);
+
+            if text.is_empty() && tok.finish_reason.is_none() {
+                // Skip sending empty chunks unless it's the final token with a finish reason.
+                return true;
+            }
 
             let chunk = ChatCompletionChunk {
                 id: req_id.clone(),
@@ -657,7 +698,7 @@ async fn stream_completion(
                     index: 0,
                     delta: ChunkDelta {
                         role: None,
-                        content: if tok.finish_reason.is_some() {
+                        content: if text.is_empty() {
                             None
                         } else {
                             Some(text)

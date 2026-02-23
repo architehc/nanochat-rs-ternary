@@ -67,6 +67,8 @@ pub struct GeneratedToken {
 pub struct InferenceEngine {
     pub model: NanochatModel,
     pub eot_token: u32,
+    /// Last prompt tokens processed by this engine (used for prefix caching)
+    pub last_prompt: Vec<u32>,
 }
 
 impl InferenceEngine {
@@ -81,6 +83,7 @@ impl InferenceEngine {
         Self {
             model,
             eot_token: eot,
+            last_prompt: Vec::new(),
         }
     }
 
@@ -95,6 +98,7 @@ impl InferenceEngine {
         Self {
             model: NanochatModel::new_random(config),
             eot_token: eot,
+            last_prompt: Vec::new(),
         }
     }
 

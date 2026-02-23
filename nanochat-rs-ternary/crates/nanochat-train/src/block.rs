@@ -82,11 +82,10 @@ impl TransformerBlockTrain {
                     Some("haar") => crate::wavefield::ConvolveMode::Haar,
                     Some("fft") | None => crate::wavefield::ConvolveMode::Fft,
                     Some(other) => {
-                        eprintln!(
-                            "WARNING: unknown wavefield_convolve_mode '{}', falling back to FFT",
+                        return Err(candle_core::Error::Msg(format!(
+                            "unknown wavefield_convolve_mode '{}'; expected 'fft', 'fwht', or 'haar'",
                             other
-                        );
-                        crate::wavefield::ConvolveMode::Fft
+                        )));
                     }
                 },
                 config.wavefield_haar_levels,

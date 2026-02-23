@@ -116,7 +116,13 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
         let convolve_mode_str = match config.wavefield_convolve_mode.as_deref() {
             Some("fwht") => "fwht",
             Some("haar") => "haar",
-            _ => "fft",
+            Some("fft") | None => "fft",
+            Some(other) => {
+                return Err(candle_core::Error::Msg(format!(
+                    "unknown wavefield_convolve_mode '{}'; expected 'fft', 'fwht', or 'haar'",
+                    other
+                )));
+            }
         };
         writer.add_metadata(
             "nanochat.wavefield.convolve_mode",
