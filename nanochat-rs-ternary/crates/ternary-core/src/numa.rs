@@ -78,6 +78,9 @@ impl NumaAllocator {
     /// Allocate memory on a specific NUMA node.
     ///
     /// Falls back to standard allocation if NUMA is unavailable.
+    /// **Note:** If `mbind()` fails (e.g. kernel policy restriction), the allocation
+    /// still succeeds with default NUMA policy. A warning is logged, but `Some(ptr)`
+    /// is returned — the memory is usable, just not guaranteed node-local.
     #[cfg(target_os = "linux")]
     pub fn alloc_on_node(size: usize, node: i32) -> Option<*mut u8> {
         if !Self::is_available() {

@@ -7,6 +7,11 @@
 //!   3. Pack 4 trits per byte (LSB-first)
 //!
 //! The packed representation stores `group_size / 4` bytes per group plus one f32 scale.
+//!
+//! **Error handling:** Functions in this module use assert/panic for precondition
+//! violations (zero cols, misaligned sizes) since these indicate programming errors
+//! in the caller, not runtime data issues. For untrusted input (e.g. GGUF loading),
+//! validate dimensions before calling pack/unpack.
 
 use crate::encode::{decode_trit, encode_trit, pack_4_trits, unpack_4_trits};
 

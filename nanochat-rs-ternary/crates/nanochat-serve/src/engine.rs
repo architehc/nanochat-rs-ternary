@@ -707,6 +707,9 @@ impl NumaInferenceEngine {
 use rand::RngCore;
 
 /// Sample a token from logits given sampling parameters.
+///
+/// When `top_k == 0`, top-k filtering is disabled (all tokens are candidates).
+/// This is standard behavior matching the OpenAI API convention.
 pub fn sample_token(logits: &[f32], params: &SamplingParams, rng: &mut dyn RngCore) -> u32 {
     if params.temperature < 1e-6 {
         return argmax(logits);

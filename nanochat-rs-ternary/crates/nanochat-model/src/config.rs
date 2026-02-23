@@ -547,6 +547,22 @@ impl ModelConfig {
         if self.ffn_mult <= 0.0 && self.expert_dim.is_none() {
             return Err("ffn_mult must be > 0 or expert_dim must be set".into());
         }
+        if let Some(v_heads) = self.deltanet_v_heads {
+            if v_heads == 0 || !self.dim.is_multiple_of(v_heads) {
+                return Err(format!(
+                    "dim ({}) must be divisible by deltanet_v_heads ({})",
+                    self.dim, v_heads
+                ));
+            }
+        }
+        if let Some(qk_heads) = self.deltanet_qk_heads {
+            if qk_heads == 0 || !self.dim.is_multiple_of(qk_heads) {
+                return Err(format!(
+                    "dim ({}) must be divisible by deltanet_qk_heads ({})",
+                    self.dim, qk_heads
+                ));
+            }
+        }
         if self.mhc_n_streams != 2 {
             return Err(format!(
                 "Only mhc_n_streams=2 is currently supported; got {}. N4 integration is not yet implemented",

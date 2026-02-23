@@ -70,6 +70,11 @@ impl Drop for DeviceAlloc {
 }
 
 /// Initialize CUDA decode LUT. Call once before any GPU GEMV.
+///
+/// **Note:** Init failure is cached permanently via `OnceLock`. If GPU init fails
+/// (e.g. driver not loaded), the process must be restarted to retry. This is
+/// intentional — transient GPU failures during model load indicate an
+/// unsalvageable environment.
 pub fn init() -> GpuResult<()> {
     INIT_RESULT
         .get_or_init(|| {
@@ -86,6 +91,10 @@ pub fn init() -> GpuResult<()> {
 }
 
 /// Device-side weight storage for GPU GEMV.
+///
+/// `d_scales` is stored as `*mut u8` (raw device pointer) rather than `*mut f32`
+/// because the CUDA FFI interface uses untyped device pointers. The actual device
+/// memory contains f32 scale values — the kernel casts internally.
 pub struct GpuWeights {
     d_data: *mut u8,
     d_scales: *mut u8,

@@ -222,6 +222,26 @@ impl NanochatModel {
         // Load embeddings (FP16 -> F32)
         let tok_embed = Self::load_embedding(&gguf, "tok_embed.weight")?;
 
+        // Verify embedding dimensions match model config
+        if tok_embed.dim != config.dim {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "tok_embed dim {} != config.dim {} (embedding/model dimension mismatch)",
+                    tok_embed.dim, config.dim
+                ),
+            ));
+        }
+        if config.weight_tied && tok_embed.vocab_size != config.vocab_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "weight_tied but tok_embed vocab_size {} != config.vocab_size {}",
+                    tok_embed.vocab_size, config.vocab_size
+                ),
+            ));
+        }
+
         // Load mHC parameters
         let (_, mhc_layers) = mhc_lite::load_mhc_file(mhc_path)?;
 

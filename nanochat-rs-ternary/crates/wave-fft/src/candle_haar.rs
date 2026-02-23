@@ -22,6 +22,11 @@ use candle_core::{Result, Tensor};
 ///
 /// Input shape: `(batch, N)` where N is power of 2.
 fn haar_forward_tensor(x: &Tensor, n: usize, levels: usize) -> Result<Tensor> {
+    assert!(
+        n.is_power_of_two(),
+        "Haar DWT requires power-of-2 length, got {}",
+        n
+    );
     debug_assert!(
         levels <= (n as f64).log2() as usize,
         "Haar levels ({}) exceeds log2(n={}) = {}",

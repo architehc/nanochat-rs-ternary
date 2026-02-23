@@ -31,7 +31,10 @@ pub fn absmean_quantize(w: &Tensor, group_size: usize) -> Result<(Tensor, Tensor
     let n_groups = w_flat.elem_count() / group_size;
     let w_grouped = w_flat.reshape((n_groups, group_size))?;
 
-    // Per-group scale = mean(|w|), clamped
+    // Per-group scale = mean(|w|), clamped to avoid div-by-zero.
+    // The 1e-8 clamp ensures zero-weight groups produce zero ternary values
+    // rather than NaN (0/0). This threshold is well below any meaningful
+    // weight magnitude and does not affect quantization accuracy.
     let scales = w_grouped
         .abs()?
         .mean_keepdim(1)?

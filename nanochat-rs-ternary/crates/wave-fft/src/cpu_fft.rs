@@ -119,7 +119,12 @@ pub fn fft_convolve_precomputed(
     n: usize,
 ) -> Vec<f32> {
     let fft_size = kernel_freq.len();
-    assert!(fft_size >= 2 * n, "kernel_freq too short");
+    let expected = next_power_of_two(2 * n);
+    assert_eq!(
+        fft_size, expected,
+        "kernel_freq length {} != expected {} (next_pow2(2*{}))",
+        fft_size, expected, n
+    );
 
     // Zero-pad signal
     let mut sig_c: Vec<RustFftComplex<f32>> = signal[..n]

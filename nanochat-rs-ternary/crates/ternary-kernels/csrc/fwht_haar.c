@@ -586,7 +586,8 @@ void haar_convolve_f32_buf(const float *restrict signal, const float *restrict k
     memcpy(output, kernel, len * sizeof(float));
 
     /* For the one-level scratch, we need another len buffer.
-     * Allocate one on the stack for small sizes, otherwise malloc. */
+     * Stack buffer of 512 floats (2KB) covers field_size <= 512 without malloc.
+     * For larger sizes, falls back to heap. Typical wave field sizes are 64-256. */
     float stack_buf[512];
     float *level_scratch = (len <= 512) ? stack_buf : (float *)malloc(len * sizeof(float));
 

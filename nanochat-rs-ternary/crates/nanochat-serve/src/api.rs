@@ -3,6 +3,9 @@
 use crate::engine::SamplingParams;
 use serde::{Deserialize, Serialize};
 
+/// Maximum number of chat messages per request. This limits request parsing
+/// complexity but does NOT enforce model max_seq_len — the tokenized prompt
+/// length is validated separately in `InferenceEngine::generate_streaming`.
 pub const MAX_MESSAGES: usize = 256;
 pub const MAX_MESSAGE_CHARS: usize = 16 * 1024;
 pub const MAX_PROMPT_CHARS: usize = 256 * 1024;

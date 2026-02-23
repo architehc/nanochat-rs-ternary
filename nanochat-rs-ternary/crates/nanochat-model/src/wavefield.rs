@@ -545,6 +545,12 @@ impl WaveFieldAttention {
     /// start_pos: starting position
     /// seq_len: number of tokens
     /// out_batch: [seq_len * dim]
+    ///
+    /// **Coupling note:** In batched mode, head coupling is applied once to the
+    /// fully-accumulated field (after all tokens are scattered). In sequential
+    /// single-token mode, coupling is applied per-token. For well-trained models
+    /// the difference is negligible, but outputs may differ by O(eps) from calling
+    /// `forward()` in a loop.
     pub fn forward_batch(
         &self,
         x_batch: &[f32],

@@ -23,6 +23,10 @@ impl RMSNorm {
     }
 
     /// Apply RMSNorm in-place: x = x / rms(x) * weight
+    ///
+    /// Epsilon is added in the linear domain *before* sqrt: `1/sqrt(mean(x^2) + eps)`.
+    /// This differs from some implementations that add eps after sqrt. The pre-sqrt
+    /// form is standard for RMSNorm (as in LLaMA, Qwen) and avoids a second addition.
     pub fn forward_inplace(&self, x: &mut [f32]) {
         let dim = self.weight.len();
         assert_eq!(x.len(), dim);

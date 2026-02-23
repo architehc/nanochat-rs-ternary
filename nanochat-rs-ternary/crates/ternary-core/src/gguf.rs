@@ -441,6 +441,8 @@ impl GgufWriter {
         file.write_all(&vec![0u8; padding])?;
 
         // Tensor data
+        // Note: padding arithmetic (data.len() + 31) & !31 is safe — data.len() is usize
+        // (64-bit) and practical tensor sizes are <2^60. Overflow is not possible.
         for (_, _, _, data) in &self.tensors {
             file.write_all(data)?;
             // Pad to 32-byte alignment

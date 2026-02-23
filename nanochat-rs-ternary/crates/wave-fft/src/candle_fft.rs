@@ -105,6 +105,10 @@ fn correlate_raw(a: &[f32], b: &[f32], n: usize) -> Vec<f32> {
 /// Forward: output = IFFT(FFT(signal) * FFT(kernel))[:n]
 /// Backward w.r.t. signal: IFFT(FFT(grad_output) * conj(FFT(kernel)))[:n]
 /// Backward w.r.t. kernel: IFFT(conj(FFT(signal)) * FFT(grad_output))[:n]
+///
+/// **Broadcast semantics:** Supports `kernel_batch == 1` (single kernel broadcast
+/// across all batch elements) or `kernel_batch == signal_batch` (per-element).
+/// Other combinations produce a runtime error.
 struct FftConvolveOp {
     field_size: usize,
 }

@@ -31,6 +31,12 @@ pub struct StreamingDecoder {
     last_text: String,
 }
 
+/// Maximum tokens before warning about StreamingDecoder buffer growth.
+/// BPE decoding requires full token history for correctness (merges can
+/// change earlier decoded text), so we can't truncate. This limit only
+/// triggers a warning for debugging memory-related issues.
+const MAX_STREAMING_TOKENS_WARN: usize = 64 * 1024;
+
 impl StreamingDecoder {
     pub fn new() -> Self {
         Self {
@@ -42,6 +48,13 @@ impl StreamingDecoder {
     /// Add a token and return any newly decoded complete UTF-8 string part.
     pub fn decode_next(&mut self, token_id: u32, tokenizer: &tokenizers::Tokenizer) -> String {
         self.tokens.push(token_id);
+        if self.tokens.len() == MAX_STREAMING_TOKENS_WARN {
+            eprintln!(
+                "WARNING: StreamingDecoder token buffer reached {} tokens — \
+                 consider shorter max_tokens to bound memory usage",
+                MAX_STREAMING_TOKENS_WARN
+            );
+        }
 
         // Decode the full sequence of tokens. skip_special_tokens=true is standard for SSE.
         let current_text = tokenizer.decode(&self.tokens, true).unwrap_or_default();
