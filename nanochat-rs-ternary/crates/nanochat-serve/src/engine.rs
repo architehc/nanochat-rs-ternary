@@ -774,10 +774,12 @@ pub fn sample_token(logits: &[f32], params: &SamplingParams, rng: &mut dyn RngCo
                 break;
             }
         }
-        let keep: std::collections::HashSet<usize> =
-            sorted[..cutoff_idx].iter().map(|&(idx, _)| idx).collect();
+        let mut keep = vec![false; probs.len()];
+        for &(idx, _) in &sorted[..cutoff_idx] {
+            keep[idx] = true;
+        }
         for (i, p) in probs.iter_mut().enumerate() {
-            if !keep.contains(&i) {
+            if !keep[i] {
                 *p = 0.0;
             }
         }
@@ -795,8 +797,9 @@ pub fn sample_token(logits: &[f32], params: &SamplingParams, rng: &mut dyn RngCo
     categorical_sample(&probs, rng)
 }
 
-/// Argmax over a slice.
+/// Argmax over a slice. Panics if the slice is empty.
 fn argmax(x: &[f32]) -> u32 {
+    assert!(!x.is_empty(), "argmax called on empty logits slice");
     let mut best_idx = 0;
     let mut best_val = f32::NEG_INFINITY;
     for (i, &v) in x.iter().enumerate() {

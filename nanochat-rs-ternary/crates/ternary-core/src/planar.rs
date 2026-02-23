@@ -262,6 +262,11 @@ impl<T: Copy + Default> AlignedVec<T> {
         self.len == 0
     }
 
+    /// Returns the capacity in elements (may be >= len after resize operations).
+    pub fn capacity(&self) -> usize {
+        self.cap_elems
+    }
+
     pub fn as_ptr(&self) -> *const T {
         self.ptr.as_ptr()
     }

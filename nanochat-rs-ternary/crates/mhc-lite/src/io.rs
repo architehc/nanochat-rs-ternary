@@ -161,8 +161,9 @@ mod tests {
     use std::path::PathBuf;
 
     fn test_path(name: &str) -> PathBuf {
-        PathBuf::from("/tmp/claude-1000/-home-habitat-ternary-clawd/95e7afdf-b472-41a0-a3d5-73532dc4ecb7/scratchpad")
-            .join(name)
+        let dir = std::env::temp_dir().join("mhc-lite-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
     }
 
     #[test]

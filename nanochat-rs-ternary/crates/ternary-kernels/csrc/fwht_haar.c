@@ -19,6 +19,19 @@
 #include "fwht_haar.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+
+/* Checked malloc: abort on NULL (OOM). All callers use bounded sizes
+ * derived from field_size (typically 64-256), so this should never fire
+ * on systems with overcommit. Provides a clear error message if it does. */
+static void *checked_malloc(size_t bytes) {
+    void *p = malloc(bytes);
+    if (!p && bytes > 0) {
+        fprintf(stderr, "FATAL: fwht_haar.c: malloc(%zu) returned NULL\n", bytes);
+        abort();
+    }
+    return p;
+}
 
 /* ============================================================
  *  FWHT — Fast Walsh-Hadamard Transform
@@ -219,8 +232,8 @@ void fwht_f32(float *data, int len) {
 void fwht_convolve_i32(const int32_t *restrict signal, const int32_t *restrict kernel,
                        int32_t *restrict output, int len) {
     /* Allocate temp buffers for transformed signal and kernel */
-    int32_t *sig_t = (int32_t *)malloc(len * sizeof(int32_t));
-    int32_t *ker_t = (int32_t *)malloc(len * sizeof(int32_t));
+    int32_t *sig_t = (int32_t *)checked_malloc(len * sizeof(int32_t));
+    int32_t *ker_t = (int32_t *)checked_malloc(len * sizeof(int32_t));
     memcpy(sig_t, signal, len * sizeof(int32_t));
     memcpy(ker_t, kernel, len * sizeof(int32_t));
 
@@ -268,8 +281,8 @@ void fwht_convolve_f32_buf(const float *restrict signal, const float *restrict k
 
 void fwht_convolve_f32(const float *restrict signal, const float *restrict kernel,
                        float *restrict output, int len) {
-    float *sig_t = (float *)malloc(len * sizeof(float));
-    float *ker_t = (float *)malloc(len * sizeof(float));
+    float *sig_t = (float *)checked_malloc(len * sizeof(float));
+    float *ker_t = (float *)checked_malloc(len * sizeof(float));
 
     fwht_convolve_f32_buf(signal, kernel, output, len, sig_t, ker_t);
 
@@ -293,7 +306,7 @@ static void haar_forward_one_level_i32_scratch(int32_t *data, int n, int32_t *tm
 }
 
 static void haar_forward_one_level_i32(int32_t *data, int n) {
-    int32_t *tmp = (int32_t *)malloc(n * sizeof(int32_t));
+    int32_t *tmp = (int32_t *)checked_malloc(n * sizeof(int32_t));
     haar_forward_one_level_i32_scratch(data, n, tmp);
     free(tmp);
 }
@@ -309,7 +322,7 @@ static void haar_forward_one_level_f32_scratch(float *data, int n, float *tmp) {
 }
 
 static void haar_forward_one_level_f32(float *data, int n) {
-    float *tmp = (float *)malloc(n * sizeof(float));
+    float *tmp = (float *)checked_malloc(n * sizeof(float));
     haar_forward_one_level_f32_scratch(data, n, tmp);
     free(tmp);
 }
@@ -326,7 +339,7 @@ static void haar_inverse_one_level_i32_scratch(int32_t *data, int n, int32_t *tm
 }
 
 static void haar_inverse_one_level_i32(int32_t *data, int n) {
-    int32_t *tmp = (int32_t *)malloc(n * sizeof(int32_t));
+    int32_t *tmp = (int32_t *)checked_malloc(n * sizeof(int32_t));
     haar_inverse_one_level_i32_scratch(data, n, tmp);
     free(tmp);
 }
@@ -342,7 +355,7 @@ static void haar_inverse_one_level_f32_scratch(float *data, int n, float *tmp) {
 }
 
 static void haar_inverse_one_level_f32(float *data, int n) {
-    float *tmp = (float *)malloc(n * sizeof(float));
+    float *tmp = (float *)checked_malloc(n * sizeof(float));
     haar_inverse_one_level_f32_scratch(data, n, tmp);
     free(tmp);
 }
@@ -352,7 +365,7 @@ static void haar_inverse_one_level_f32(float *data, int n) {
 
 __attribute__((target("avx2")))
 static void haar_forward_one_level_f32_avx2(float *data, int n) {
-    float *tmp = (float *)malloc(n * sizeof(float));
+    float *tmp = (float *)checked_malloc(n * sizeof(float));
     int half = n / 2;
     int i;
     /* Process 8 pairs (16 elements) at a time */
@@ -397,7 +410,7 @@ static void haar_forward_one_level_f32_avx2(float *data, int n) {
 
 __attribute__((target("avx2")))
 static void haar_inverse_one_level_f32_avx2(float *data, int n) {
-    float *tmp = (float *)malloc(n * sizeof(float));
+    float *tmp = (float *)checked_malloc(n * sizeof(float));
     int half = n / 2;
     int i;
     __m256 half_vec = _mm256_set1_ps(0.5f);
@@ -425,7 +438,7 @@ static void haar_inverse_one_level_f32_avx2(float *data, int n) {
 #if defined(__aarch64__) || defined(_M_ARM64)
 
 static void haar_forward_one_level_f32_neon(float *data, int n) {
-    float *tmp = (float *)malloc(n * sizeof(float));
+    float *tmp = (float *)checked_malloc(n * sizeof(float));
     int half = n / 2;
     int i;
     for (i = 0; i + 3 < half; i += 4) {
@@ -445,7 +458,7 @@ static void haar_forward_one_level_f32_neon(float *data, int n) {
 }
 
 static void haar_inverse_one_level_f32_neon(float *data, int n) {
-    float *tmp = (float *)malloc(n * sizeof(float));
+    float *tmp = (float *)checked_malloc(n * sizeof(float));
     int half = n / 2;
     float32x4_t half_vec = vdupq_n_f32(0.5f);
     int i;
@@ -537,8 +550,8 @@ void haar_inverse_f32(float *data, int len, int levels) {
 
 void haar_convolve_i32(const int32_t *restrict signal, const int32_t *restrict kernel,
                        int32_t *restrict output, int len, int levels) {
-    int32_t *sig_t = (int32_t *)malloc(len * sizeof(int32_t));
-    int32_t *ker_t = (int32_t *)malloc(len * sizeof(int32_t));
+    int32_t *sig_t = (int32_t *)checked_malloc(len * sizeof(int32_t));
+    int32_t *ker_t = (int32_t *)checked_malloc(len * sizeof(int32_t));
     memcpy(sig_t, signal, len * sizeof(int32_t));
     memcpy(ker_t, kernel, len * sizeof(int32_t));
 
@@ -589,7 +602,7 @@ void haar_convolve_f32_buf(const float *restrict signal, const float *restrict k
      * Stack buffer of 512 floats (2KB) covers field_size <= 512 without malloc.
      * For larger sizes, falls back to heap. Typical wave field sizes are 64-256. */
     float stack_buf[512];
-    float *level_scratch = (len <= 512) ? stack_buf : (float *)malloc(len * sizeof(float));
+    float *level_scratch = (len <= 512) ? stack_buf : (float *)checked_malloc(len * sizeof(float));
 
     haar_forward_f32_with_scratch(sig_t, len, levels, level_scratch);
     haar_forward_f32_with_scratch(output, len, levels, level_scratch);
@@ -606,8 +619,8 @@ void haar_convolve_f32_buf(const float *restrict signal, const float *restrict k
 
 void haar_convolve_f32(const float *restrict signal, const float *restrict kernel,
                        float *restrict output, int len, int levels) {
-    float *sig_t = (float *)malloc(len * sizeof(float));
-    float *ker_t = (float *)malloc(len * sizeof(float));
+    float *sig_t = (float *)checked_malloc(len * sizeof(float));
+    float *ker_t = (float *)checked_malloc(len * sizeof(float));
     memcpy(sig_t, signal, len * sizeof(float));
     memcpy(ker_t, kernel, len * sizeof(float));
 

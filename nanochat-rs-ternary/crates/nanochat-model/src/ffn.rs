@@ -247,6 +247,9 @@ pub fn softmax_selected(logits: &[f32], selected: &[usize]) -> Vec<f32> {
 }
 
 /// SiLU activation: x * sigmoid(x)
+///
+/// Numerically stable for all f32 inputs: when x << -10, (-x).exp() overflows
+/// to +inf, giving x/inf = 0.0 (correct asymptote). IEEE 754 0/inf = 0.
 #[inline]
 fn silu(x: f32) -> f32 {
     x / (1.0 + (-x).exp())

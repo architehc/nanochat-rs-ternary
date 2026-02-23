@@ -700,6 +700,7 @@ impl Trainer {
         // can amplify distributional imbalance.
         let entropy_weight = self.config.entropy_weight;
         if entropy_weight > 0.0 {
+            // log_softmax guarantees finite outputs (softmax(x) > 0 for all finite x)
             let probs = log_probs_for_smoothing.exp()?;
             let neg_entropy = probs.mul(&log_probs_for_smoothing)?.sum(D::Minus1)?; // Σ p*log(p) < 0
             let entropy = neg_entropy.neg()?.mean_all()?; // H = -Σ p*log(p) > 0

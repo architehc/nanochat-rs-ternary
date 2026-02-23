@@ -214,6 +214,9 @@ impl HeadCoupling {
     }
 
     /// Apply coupling: mix head fields. fields: [n_heads * field_size * head_dim]
+    ///
+    /// **Note:** Allocates a temporary buffer on each call. For hot paths, prefer
+    /// `apply_with_buf()` with a pre-allocated scratch buffer.
     pub fn apply(&self, fields: &mut [f32], field_size: usize, head_dim: usize) {
         let mut tmp = vec![0.0f32; fields.len()];
         self.apply_with_buf(fields, field_size, head_dim, &mut tmp);

@@ -11,6 +11,8 @@
 use candle_core::{DType, Result, Tensor};
 
 /// The 16 E2M1 FP4 quantization levels (sorted, two zeros).
+/// Specific to E2M1 format — alternative FP4 formats (E3M0, custom) would
+/// require different level tables and bracket search logic.
 const FP4_TABLE: [f32; 16] = [
     -6.0, -4.0, -3.0, -2.0, -1.5, -1.0, -0.5, 0.0,
      0.0,  0.5,  1.0,  1.5,  2.0,  3.0,  4.0,  6.0,

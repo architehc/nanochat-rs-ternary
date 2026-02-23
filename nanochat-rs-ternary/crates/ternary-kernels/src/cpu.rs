@@ -17,6 +17,7 @@ struct PlanarWeightsC {
 }
 
 extern "C" {
+    // C function does not mutate through const pointers — verified in ternary_gemv.c
     fn ternary_gemv(pw: *const PlanarWeightsC, x: *const i8, act_scale: f32, y: *mut f32);
 
     fn gemv_dp4a_ref(
@@ -308,6 +309,7 @@ pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]
                 pw.scales_rm.len()
             );
 
+            // Col-major last byte: column (kp-1) at stride rows_padded, plus last row in chunk
             let data_colmaj_end = row_start + (kp.saturating_sub(1)) * pw.rows_padded + chunk_rows;
             assert!(
                 data_colmaj_end <= pw.data_colmaj.len(),
@@ -316,6 +318,7 @@ pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]
                 pw.data_colmaj.len()
             );
 
+            // Group-major last byte: group (gprow-1) at stride rows_padded, plus last row
             let scales_gm_end = row_start + (gprow.saturating_sub(1)) * pw.rows_padded + chunk_rows;
             assert!(
                 scales_gm_end <= pw.scales_gm.len(),

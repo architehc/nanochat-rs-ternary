@@ -435,8 +435,13 @@ mod tests {
         let layers: Vec<_> = (0..64).map(|_| AdaptiveInit::balanced()).collect();
         let analysis = MhcAnalyzer::analyze_model_n2(&layers);
 
-        // Composite gain should remain bounded
-        assert!(analysis.total_composite_gain < 1.5);
+        // For exact BvN doubly stochastic matrices, composite gain is bounded by 1.0
+        // (with floating-point tolerance)
+        assert!(
+            analysis.total_composite_gain < 1.0 + 1e-4,
+            "composite gain {} exceeds 1.0 + eps",
+            analysis.total_composite_gain
+        );
     }
 
     #[test]

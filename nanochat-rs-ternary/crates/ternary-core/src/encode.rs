@@ -12,6 +12,9 @@
 /// Encode a ternary value (-1, 0, or +1) to its 2-bit representation.
 ///
 /// Panics (debug) if `val` is not in {-1, 0, +1}.
+/// In release builds, invalid values are silently encoded as 0b00 (zero) with
+/// an eprintln warning. Callers processing untrusted data should validate
+/// inputs before calling this function.
 #[inline]
 pub fn encode_trit(val: i8) -> u8 {
     debug_assert!(

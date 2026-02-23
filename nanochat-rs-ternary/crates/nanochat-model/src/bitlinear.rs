@@ -141,6 +141,7 @@ pub fn quantize_activations_i8_into(x: &[f32], x_q_out: &mut [i8]) -> f32 {
     }
 
     let scale = absmax / 127.0;
+    // absmax >= 1e-8 guaranteed by guard above, so inv_scale <= 1.27e10 (within f32)
     let inv_scale = 127.0 / absmax;
     for (dst, &v) in x_q_out.iter_mut().zip(x.iter()) {
         let q = (v * inv_scale).round();
