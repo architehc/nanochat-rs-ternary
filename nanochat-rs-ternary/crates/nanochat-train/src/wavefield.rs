@@ -12,10 +12,25 @@
 //! cat butterflies). Ops stay on whatever device the input lives on (CPU or CUDA) —
 //! no device transfers needed. Autograd gradients come for free.
 
+use std::cell::RefCell;
+
 use candle_core::{Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 use crate::layers::BitLinearSTE;
+
+/// Cached scatter matrices for wavefield attention.
+/// Both the base and expanded versions are stored to avoid re-allocating
+/// ~24MB of GPU memory per forward pass per layer.
+struct ScatterCache {
+    seq_len: usize,
+    max_seq_len: usize,
+    batch_n_heads: usize,
+    /// [batch*n_heads, seq_len, field_size] — for gather step
+    scatter_exp: Tensor,
+    /// [batch*n_heads, field_size, seq_len] — for scatter step
+    scatter_t_exp: Tensor,
+}
 
 // Re-export from nanochat_model::config via the public type.
 // We define it locally to avoid adding nanochat-model as a dependency.
@@ -48,6 +63,12 @@ pub struct WaveFieldAttentionTrain {
     pub field_size: usize,
     pub convolve_mode: ConvolveMode,
     pub haar_levels: Option<usize>,
+    /// Cached t_tensor [field_size] — same every call, precomputed once.
+    t_tensor: Tensor,
+    /// Cached expanded scatter matrices keyed by (seq_len, max_seq_len, batch*n_heads).
+    /// Stores: scatter_mat_exp [BN, seq, field] and scatter_mat_t_exp [BN, field, seq]
+    /// These are the biggest per-call allocations (~24MB total).
+    scatter_cache: RefCell<Option<ScatterCache>>,
 }
 
 impl WaveFieldAttentionTrain {
@@ -102,6 +123,11 @@ impl WaveFieldAttentionTrain {
             None
         };
 
+        // Precompute t_tensor [0, 1, ..., field_size-1] — constant, detached.
+        let t_vals: Vec<f32> = (0..field_size).map(|t| t as f32).collect();
+        let device = omega.device();
+        let t_tensor = Tensor::from_vec(t_vals, field_size, device)?.detach();
+
         Ok(Self {
             scatter_proj,
             gate_proj,
@@ -115,6 +141,65 @@ impl WaveFieldAttentionTrain {
             field_size,
             convolve_mode,
             haar_levels,
+            t_tensor,
+            scatter_cache: RefCell::new(None),
+        })
+    }
+
+    /// Build expanded scatter matrices for the given dimensions.
+    /// Returns ScatterCache with both [BN, seq, field] and [BN, field, seq] variants.
+    /// All tensors are detached (constant data, no gradients needed).
+    fn build_scatter_cache(
+        &self,
+        seq_len: usize,
+        max_seq_len: usize,
+        batch_n_heads: usize,
+        device: &candle_core::Device,
+    ) -> Result<ScatterCache> {
+        let field_size = self.field_size;
+        let stride = if max_seq_len > 1 {
+            (field_size - 1) as f32 / (max_seq_len - 1) as f32
+        } else {
+            0.0
+        };
+        let max_pos = (field_size - 1) as f32;
+        let positions: Vec<f32> = (0..seq_len)
+            .map(|t| (t as f32 * stride).clamp(0.0, max_pos))
+            .collect();
+
+        let mut scatter_weights = vec![0.0f32; seq_len * field_size];
+        for t in 0..seq_len {
+            let pos = positions[t];
+            let idx_lo = (pos.floor() as usize).min(field_size - 1);
+            let idx_hi = (idx_lo + 1).min(field_size - 1);
+            let frac = pos - idx_lo as f32;
+            scatter_weights[t * field_size + idx_lo] += 1.0 - frac;
+            if idx_hi != idx_lo {
+                scatter_weights[t * field_size + idx_hi] += frac;
+            }
+        }
+        let mat = Tensor::from_vec(scatter_weights, (seq_len, field_size), device)?.detach();
+
+        // Pre-expand for batched matmul — avoids allocating these every forward pass
+        let scatter_exp = mat
+            .unsqueeze(0)?
+            .broadcast_as((batch_n_heads, seq_len, field_size))?
+            .contiguous()?
+            .detach();
+        let scatter_t_exp = mat
+            .t()?
+            .contiguous()?
+            .unsqueeze(0)?
+            .broadcast_as((batch_n_heads, field_size, seq_len))?
+            .contiguous()?
+            .detach();
+
+        Ok(ScatterCache {
+            seq_len,
+            max_seq_len,
+            batch_n_heads,
+            scatter_exp,
+            scatter_t_exp,
         })
     }
 
@@ -140,61 +225,42 @@ impl WaveFieldAttentionTrain {
         // 2. Reshape to [batch, seq, n_heads, head_dim]
         let scattered = scattered.reshape((batch, seq_len, n_heads, head_dim))?;
 
-        // 3. Build fields via bilinear scatter
-        let stride = if max_seq_len > 1 {
-            (field_size - 1) as f32 / (max_seq_len - 1) as f32
-        } else {
-            0.0
-        };
-
-        // Build scatter matrix: [seq_len, field_size]
-        // Clamp positions to [0, field_size - 1] to prevent OOB when seq_len > max_seq_len
-        let max_pos = (field_size - 1) as f32;
-        let positions: Vec<f32> = (0..seq_len)
-            .map(|t| (t as f32 * stride).clamp(0.0, max_pos))
-            .collect();
-
-        let mut scatter_weights = vec![0.0f32; seq_len * field_size];
-        for t in 0..seq_len {
-            let pos = positions[t];
-            let idx_lo = (pos.floor() as usize).min(field_size - 1);
-            let idx_hi = (idx_lo + 1).min(field_size - 1);
-            let frac = pos - idx_lo as f32;
-            scatter_weights[t * field_size + idx_lo] += 1.0 - frac;
-            if idx_hi != idx_lo {
-                scatter_weights[t * field_size + idx_hi] += frac;
+        // 3. Build fields via bilinear scatter (cached — same for given dims)
+        let bn = batch * n_heads;
+        let (scatter_exp, scatter_t_exp) = {
+            let cache = self.scatter_cache.borrow();
+            let hit = cache.as_ref().map_or(false, |c| {
+                c.seq_len == seq_len && c.max_seq_len == max_seq_len && c.batch_n_heads == bn
+            });
+            if hit {
+                let c = cache.as_ref().unwrap();
+                (c.scatter_exp.clone(), c.scatter_t_exp.clone())
+            } else {
+                drop(cache);
+                let new_cache = self.build_scatter_cache(seq_len, max_seq_len, bn, x.device())?;
+                let exp = new_cache.scatter_exp.clone();
+                let t_exp = new_cache.scatter_t_exp.clone();
+                *self.scatter_cache.borrow_mut() = Some(new_cache);
+                (exp, t_exp)
             }
-        }
-        let scatter_mat = Tensor::from_vec(
-            scatter_weights,
-            (seq_len, field_size),
-            x.device(),
-        )?;
+        };
 
         // scattered: [batch, seq, n_heads, head_dim]
         // -> fields [batch, n_heads, field_size, head_dim]
         // = scatter_mat^T @ scattered (per batch, per head)
         let scattered_t = scattered.transpose(1, 2)?; // [batch, n_heads, seq, head_dim]
-        let scattered_flat = scattered_t.reshape((batch * n_heads, seq_len, head_dim))?;
-        let scatter_mat_t = scatter_mat.t()?; // [field_size, seq_len]
-        // Expand scatter_mat_t for batched matmul
-        let scatter_mat_t_exp = scatter_mat_t
-            .unsqueeze(0)?
-            .broadcast_as((batch * n_heads, field_size, seq_len))?
-            .contiguous()?;
-        let fields = scatter_mat_t_exp.matmul(&scattered_flat)?;
+        let scattered_flat = scattered_t.reshape((bn, seq_len, head_dim))?;
+        // Use cached expanded transpose (detached — no graph accumulation)
+        let fields = scatter_t_exp.matmul(&scattered_flat)?;
 
         // 4. Generate wave kernel from physics params
         // kernel[h, t] = exp(-softplus(alpha_raw[h]) * t) * cos(omega[h] * t + phi[h])
         let alpha = softplus(&self.alpha_raw)?; // [n_heads], always positive
 
-        let t_vals: Vec<f32> = (0..field_size).map(|t| t as f32).collect();
-        let t_tensor = Tensor::from_vec(t_vals, field_size, x.device())?;
-
         let alpha_2d = alpha.unsqueeze(1)?;      // [n_heads, 1]
         let omega_2d = self.omega.unsqueeze(1)?;  // [n_heads, 1]
         let phi_2d = self.phi.unsqueeze(1)?;      // [n_heads, 1]
-        let t_2d = t_tensor.unsqueeze(0)?;        // [1, field_size]
+        let t_2d = self.t_tensor.unsqueeze(0)?;   // [1, field_size] (precomputed)
 
         // damping: exp(-alpha * t)
         let neg_alpha_t = alpha_2d.broadcast_mul(&t_2d)?.neg()?;
@@ -268,13 +334,9 @@ impl WaveFieldAttentionTrain {
             convolved
         };
 
-        // 7. Gather per-token values from convolved fields
-        let convolved_flat = convolved.reshape((batch * n_heads, field_size, head_dim))?;
-        let scatter_mat_exp = scatter_mat
-            .unsqueeze(0)?
-            .broadcast_as((batch * n_heads, seq_len, field_size))?
-            .contiguous()?;
-        let gathered = scatter_mat_exp.matmul(&convolved_flat)?;
+        // 7. Gather per-token values from convolved fields (using cached scatter_exp)
+        let convolved_flat = convolved.reshape((bn, field_size, head_dim))?;
+        let gathered = scatter_exp.matmul(&convolved_flat)?;
         let gathered = gathered.reshape((batch, n_heads, seq_len, head_dim))?;
         let gathered = gathered.transpose(1, 2)?; // [batch, seq_len, n_heads, head_dim]
         let gathered = gathered.reshape((batch, seq_len, total_proj))?;
@@ -328,8 +390,8 @@ fn softplus(x: &Tensor) -> Result<Tensor> {
     let abs_x = x.abs()?;
     let neg_abs = abs_x.neg()?;
     let exp_neg = neg_abs.exp()?;
-    let ones = x.ones_like()?;
-    let log_term = (ones + exp_neg)?.log()?;
+    // Use affine(1.0, 1.0) instead of allocating ones_like + add
+    let log_term = exp_neg.affine(1.0, 1.0)?.log()?;
     let relu_x = x.relu()?;
     relu_x + log_term
 }

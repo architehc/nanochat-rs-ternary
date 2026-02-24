@@ -1082,12 +1082,12 @@ impl TrainConfig {
     /// 8-bit optimizer + MTP for memory/data efficiency.
     pub fn nano_500m_wave_haar() -> Self {
         Self {
-            dim: 1024,
-            n_layers: 24,
-            n_heads: 16,
-            n_kv_heads: 4, // GQA 4:1 — 75% KV memory reduction
-            ffn_mult: 2.6875, // ffn_dim = 2816, aligned to 128
-            vocab_size: 50257,
+            dim: 768,
+            n_layers: 16,
+            n_heads: 12,
+            n_kv_heads: 4, // GQA 3:1
+            ffn_mult: 2.6667, // ffn_dim = 2048, aligned to 128
+            vocab_size: 4096,
             max_seq_len: 2048,
             group_size: 128,
             mhc_n_streams: 2,
@@ -1098,10 +1098,10 @@ impl TrainConfig {
             lr: 0.015, // slightly lower for larger model
             mhc_lr: 1e-4,
             weight_decay: 0.0,
-            batch_size: 4,
-            grad_accum_steps: 8, // effective batch = 32
-            warmup_steps: 2000,
-            total_steps: 100_000,
+            batch_size: 2,
+            grad_accum_steps: 1, // no accumulation — Candle autograd leaks with accumulation
+            warmup_steps: 500,
+            total_steps: 10_000,
             decay_start_frac: 0.8,
             grad_clip: 1.0,
             ns_steps: 5,
@@ -1109,18 +1109,18 @@ impl TrainConfig {
             lion_betas: (0.9, 0.99),
 
             // Memory optimizations for 23GB VRAM
-            use_8bit_optim: true,
+            use_8bit_optim: false,
             use_galore: false,
             galore_rank: 256,
             galore_update_freq: 200,
 
             // Data efficiency
-            use_mtp: true,
+            use_mtp: false,
             mtp_n_tokens: 3,
             mtp_weight: 0.2,
 
             // Training speedups
-            use_collider: true,
+            use_collider: false,
             collider_threshold: 0.3,
             collider_sparsity: 0.35,
             use_async_loader: true,
@@ -1137,12 +1137,12 @@ impl TrainConfig {
 
             // Wave field: 75% Haar, 25% standard attention
             use_wave_field: true,
-            wavefield_field_size: 1024, // power-of-2, required for Haar
-            wavefield_n_heads: 0, // use n_heads (16)
+            wavefield_field_size: 256, // power-of-2, reduced for VRAM
+            wavefield_n_heads: 0, // use n_heads (12)
             wavefield_head_coupling: true,
-            wavefield_ratio: 0.75, // 18 wavefield + 6 standard layers
+            wavefield_ratio: 0.5, // 8 wavefield + 8 standard layers
             wavefield_convolve_mode: Some("haar".to_string()),
-            wavefield_haar_levels: Some(10), // log2(1024) = 10, full decomposition
+            wavefield_haar_levels: Some(8), // log2(256) = 8, full decomposition
         }
     }
 
