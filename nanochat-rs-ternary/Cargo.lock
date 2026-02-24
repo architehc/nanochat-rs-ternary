@@ -1902,11 +1902,15 @@ name = "nanochat-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "candle-core",
+ "candle-nn",
  "clap",
  "colored",
  "nanochat-core",
  "nanochat-model",
+ "nanochat-train",
  "rustyline",
+ "tempfile",
  "ternary-core",
  "tokenizers",
 ]

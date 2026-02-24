@@ -16,3 +16,9 @@ colored = { workspace = true }
 rustyline = { workspace = true }
 anyhow = "1.0"
 tokenizers = "0.20"
+
+[dev-dependencies]
+nanochat-train = { path = "../nanochat-train" }
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+tempfile = "3"

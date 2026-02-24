@@ -399,15 +399,85 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    fn reference_model_paths() -> (PathBuf, PathBuf) {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..");
-        let gguf = root.join("training").join("ref.gguf");
-        let mhc = root.join("training").join("ref.mhc");
-        assert!(gguf.exists(), "missing test gguf at {}", gguf.display());
-        assert!(mhc.exists(), "missing test mhc at {}", mhc.display());
-        (gguf, mhc)
+    /// Generate a tiny GGUF + mHC fixture on the fly (no external files needed).
+    fn generate_test_model() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        use candle_core::{DType, Device};
+        use candle_nn::VarMap;
+        use nanochat_train::config::TrainConfig;
+
+        let cfg = TrainConfig {
+            dim: 64,
+            n_layers: 2,
+            n_heads: 4,
+            n_kv_heads: 4,
+            ffn_mult: 2.0,
+            vocab_size: 256,
+            max_seq_len: 32,
+            group_size: 64,
+            mhc_n_streams: 2,
+            weight_tied: false,
+            rope_theta: 10000.0,
+            loop_config: None,
+            lr: 0.02,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 1,
+            warmup_steps: 10,
+            total_steps: 100,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 3,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+            use_mtp: false,
+            mtp_n_tokens: 2,
+            mtp_weight: 0.1,
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: false,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
+            use_fp4: false,
+            fp4_stochastic_rounding: false,
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 1.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
+        };
+
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let train_model = nanochat_train::model::NanochatTrainModel::new(&cfg, vb)
+            .expect("create train model");
+
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let gguf_path = dir.path().join("test.gguf");
+        let mhc_path = dir.path().join("test.mhc");
+
+        nanochat_train::export::export_model(
+            &train_model,
+            &cfg,
+            gguf_path.to_str().unwrap(),
+            mhc_path.to_str().unwrap(),
+        )
+        .expect("export model");
+
+        (dir, gguf_path, mhc_path)
     }
 
     #[test]
@@ -465,7 +535,7 @@ mod tests {
 
     #[test]
     fn test_load_model_and_info_path() -> anyhow::Result<()> {
-        let (gguf, mhc) = reference_model_paths();
+        let (_dir, gguf, mhc) = generate_test_model();
         let model = load_model(&gguf, &mhc)?;
         assert_eq!(model.config.vocab_size, 256);
         show_model_info(&gguf, &mhc)?;
@@ -474,14 +544,14 @@ mod tests {
 
     #[test]
     fn test_generate_code_executes() -> anyhow::Result<()> {
-        let (gguf, mhc) = reference_model_paths();
+        let (_dir, gguf, mhc) = generate_test_model();
         generate_code(&gguf, &mhc, "fn add(a:i32,b:i32)->i32{a+b}", 4, 0.7)?;
         Ok(())
     }
 
     #[test]
     fn test_run_benchmark_executes() -> anyhow::Result<()> {
-        let (gguf, mhc) = reference_model_paths();
+        let (_dir, gguf, mhc) = generate_test_model();
         run_benchmark(&gguf, &mhc, 2, 8)?;
         Ok(())
     }
