@@ -1077,6 +1077,75 @@ impl TrainConfig {
         cfg
     }
 
+    /// ~500M parameter hybrid: 75% Haar wave field + 25% standard attention.
+    /// Optimized for dual RTX 4090 (23GB each). Uses GQA 4:1 to reduce KV memory,
+    /// 8-bit optimizer + MTP for memory/data efficiency.
+    pub fn nano_500m_wave_haar() -> Self {
+        Self {
+            dim: 1024,
+            n_layers: 24,
+            n_heads: 16,
+            n_kv_heads: 4, // GQA 4:1 — 75% KV memory reduction
+            ffn_mult: 2.6875, // ffn_dim = 2816, aligned to 128
+            vocab_size: 50257,
+            max_seq_len: 2048,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: None,
+
+            lr: 0.015, // slightly lower for larger model
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 4,
+            grad_accum_steps: 8, // effective batch = 32
+            warmup_steps: 2000,
+            total_steps: 100_000,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+
+            // Memory optimizations for 23GB VRAM
+            use_8bit_optim: true,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+
+            // Data efficiency
+            use_mtp: true,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+
+            // Training speedups
+            use_collider: true,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: true,
+            async_n_workers: 4, // 4 workers for 8C/16T CPU
+            async_prefetch_size: 8,
+
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+
+            // Wave field: 75% Haar, 25% standard attention
+            use_wave_field: true,
+            wavefield_field_size: 1024, // power-of-2, required for Haar
+            wavefield_n_heads: 0, // use n_heads (16)
+            wavefield_head_coupling: true,
+            wavefield_ratio: 0.75, // 18 wavefield + 6 standard layers
+            wavefield_convolve_mode: Some("haar".to_string()),
+            wavefield_haar_levels: Some(10), // log2(1024) = 10, full decomposition
+        }
+    }
+
     /// 125M hybrid: 50% standard attention + 50% wave field (interleaved).
     pub fn nano_125m_hybrid() -> Self {
         let mut cfg = Self::nano_125m();

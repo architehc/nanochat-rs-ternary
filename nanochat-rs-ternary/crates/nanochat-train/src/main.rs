@@ -35,6 +35,9 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
             Some(TrainConfig::nano_125m_wavefield_haar())
         }
         "nano-125m-hybrid" | "nano_125m_hybrid" => Some(TrainConfig::nano_125m_hybrid()),
+        "nano-500m-wave-haar" | "nano_500m_wave_haar" | "nano-500m" | "nano_500m" => {
+            Some(TrainConfig::nano_500m_wave_haar())
+        }
         _ => None,
     }
 }
@@ -224,7 +227,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(cfg) => cfg,
                 None => {
                     tracing::error!(
-                        "Unknown config: {}. Use d20, d20-loop, d20-mtp, d20-e3-full, d20-e3-fp4, d20-wave, nano-125m, nano-125m-wave, nano-125m-hybrid, nano-1b, medium-3b, large-7b, large-7b-6day, tiny-cpu, or test-8bit.",
+                        "Unknown config: {}. Use d20, d20-loop, d20-mtp, d20-e3-full, d20-e3-fp4, d20-wave, nano-125m, nano-125m-wave, nano-125m-hybrid, nano-500m-wave-haar, nano-1b, medium-3b, large-7b, large-7b-6day, tiny-cpu, or test-8bit.",
                         config
                     );
                     std::process::exit(1);
@@ -414,6 +417,10 @@ mod tests {
             "nano_125m_wavefield",
             "nano-125m-hybrid",
             "nano_125m_hybrid",
+            "nano-500m-wave-haar",
+            "nano_500m_wave_haar",
+            "nano-500m",
+            "nano_500m",
         ];
         for alias in aliases {
             assert!(
