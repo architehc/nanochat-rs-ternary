@@ -106,3 +106,7 @@ path = "examples/test_rust_small.rs"
 [[example]]
 name = "train_rust_fixed"
 path = "examples/train_rust_fixed.rs"
+
+[[example]]
+name = "test_generation"
+path = "examples/test_generation.rs"

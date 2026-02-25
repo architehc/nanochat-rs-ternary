@@ -89,6 +89,7 @@ impl TransformerBlockTrain {
                     }
                 },
                 config.wavefield_haar_levels,
+                config.wavefield_haar_direct, // per_elem_gate: new code uses per-element gating
                 vb.pp("wavefield"),
             )?),
             ffn: FeedForwardTrain::new(config.dim, ffn_dim, config.group_size, vb.pp("ffn"))?,

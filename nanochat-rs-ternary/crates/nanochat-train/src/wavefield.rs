@@ -68,6 +68,9 @@ pub struct WaveFieldAttentionTrain {
     pub field_size: usize,
     pub convolve_mode: ConvolveMode,
     pub haar_levels: Option<usize>,
+    /// When true, gate_proj outputs [n_heads * head_dim] (per-element gating).
+    /// When false (legacy), gate_proj outputs [n_heads] (per-head gating, broadcast across head_dim).
+    pub per_elem_gate: bool,
     /// Cached t_tensor [field_size] — same every call, precomputed once.
     t_tensor: Tensor,
     /// Cached expanded scatter matrices keyed by (seq_len, max_seq_len, batch*n_heads).
@@ -86,13 +89,16 @@ impl WaveFieldAttentionTrain {
         use_head_coupling: bool,
         convolve_mode: ConvolveMode,
         haar_levels: Option<usize>,
+        per_elem_gate: bool,
         vb: VarBuilder,
     ) -> Result<Self> {
         let total_proj = n_heads * head_dim;
 
         let scatter_proj = BitLinearSTE::new(dim, total_proj, group_size, vb.pp("scatter"))?;
-        // Per-head_dim gating: [batch, seq, n_heads * head_dim] for fine-grained control
-        let gate_proj = BitLinearSTE::new(dim, total_proj, group_size, vb.pp("gate"))?;
+        // per_elem_gate=true: [dim -> n_heads*head_dim] fine-grained gating (new)
+        // per_elem_gate=false: [dim -> n_heads] per-head gating, broadcast (legacy)
+        let gate_out = if per_elem_gate { total_proj } else { n_heads };
+        let gate_proj = BitLinearSTE::new(dim, gate_out, group_size, vb.pp("gate"))?;
         let out_proj = BitLinearSTE::new(total_proj, dim, group_size, vb.pp("out"))?;
 
         // Physics params created via VarBuilder so they're tracked in VarMap
@@ -131,11 +137,11 @@ impl WaveFieldAttentionTrain {
             None
         };
 
-        // For Haar mode: learn kernel coefficients directly in the Haar domain.
+        // For Haar mode with direct coefficients: learn kernel in the Haar domain.
         // This gives the model independent control over every wavelet scale,
         // bypassing the time-domain parameterization (omega/alpha/phi).
-        // Uniform [-0.5, 0.5] init provides symmetry breaking.
-        let kernel_haar_coeffs = if convolve_mode == ConvolveMode::Haar {
+        // Only enabled when per_elem_gate=true (wavefield_haar_direct config).
+        let kernel_haar_coeffs = if convolve_mode == ConvolveMode::Haar && per_elem_gate {
             let coeffs = vb.get_with_hints(
                 (n_heads, field_size),
                 "kernel_haar_coeffs",
@@ -165,6 +171,7 @@ impl WaveFieldAttentionTrain {
             field_size,
             convolve_mode,
             haar_levels,
+            per_elem_gate,
             t_tensor,
             scatter_cache: RefCell::new(None),
         })
@@ -423,11 +430,18 @@ impl WaveFieldAttentionTrain {
         let gathered = gathered.transpose(1, 2)?; // [batch, seq_len, n_heads, head_dim]
         let gathered = gathered.reshape((batch, seq_len, total_proj))?;
 
-        // 8. Per-head_dim content gate: sigmoid(gate_proj(x)) * gathered
-        //    gate_proj outputs [batch, seq_len, n_heads * head_dim], matching gathered shape.
-        let gate = self.gate_proj.forward(x)?; // [batch, seq_len, n_heads * head_dim]
+        // 8. Content gate: sigmoid(gate_proj(x)) * gathered
+        let gate = self.gate_proj.forward(x)?;
         // Manual sigmoid: 1 / (1 + exp(-x)) — avoids candle_nn CustomOp which lacks CUDA
         let gate = gate.neg()?.exp()?.affine(1.0, 1.0)?.recip()?;
+        // Legacy per-head gate [batch, seq, n_heads] needs broadcast to [batch, seq, n_heads*head_dim]
+        let gate = if !self.per_elem_gate {
+            let gate = gate.reshape((batch, seq_len, n_heads, 1))?;
+            gate.broadcast_as((batch, seq_len, n_heads, head_dim))?
+                .reshape((batch, seq_len, total_proj))?
+        } else {
+            gate
+        };
         let gated = gathered.mul(&gate)?;
 
         // 9. Output projection
@@ -500,6 +514,7 @@ mod tests {
             true, // use_head_coupling
             ConvolveMode::Fft,
             None,
+            true, // per_elem_gate
             vb.pp("wf"),
         )?;
         Ok((wf, varmap))
@@ -657,6 +672,7 @@ mod tests {
             true, // use_head_coupling
             ConvolveMode::Haar,
             Some(levels),
+            true, // per_elem_gate
             vb.pp("wf"),
         )?;
         Ok((wf, varmap))

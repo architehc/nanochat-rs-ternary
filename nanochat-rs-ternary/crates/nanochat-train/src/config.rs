@@ -250,7 +250,9 @@ pub struct TrainConfig {
     /// Use direct Haar-domain kernel coefficients instead of time-domain damped oscillator.
     /// Only applies when wavefield_convolve_mode="haar". Gives the model independent control
     /// over every wavelet scale and position. Recommended for Haar training.
-    #[serde(default = "default_true")]
+    /// Also enables per-element gate (n_heads*head_dim) vs legacy per-head gate (n_heads).
+    /// Default false for backward compat with old checkpoints.
+    #[serde(default)]
     pub wavefield_haar_direct: bool,
 }
 

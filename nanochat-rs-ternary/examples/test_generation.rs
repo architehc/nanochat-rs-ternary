@@ -109,8 +109,13 @@ fn main() -> Result<()> {
     println!("Device: {:?}\n", device);
 
     // Load checkpoint
-    println!("Loading checkpoint from: checkpoints/production-supervised/step_15500");
-    let (varmap, config, step, loss) = load_checkpoint("checkpoints/production-supervised/step_15500", &device)
+    let ckpt_dir = std::env::args().nth(1)
+        .unwrap_or_else(|| "checkpoints/nano-500m-haar/step_10000".to_string());
+    let tokenizer_path = std::env::args().nth(2)
+        .unwrap_or_else(|| "data/rust_prepared/tokenizer.json".to_string());
+
+    println!("Loading checkpoint from: {}", ckpt_dir);
+    let (varmap, config, step, loss) = load_checkpoint(&ckpt_dir, &device)
         .map_err(|e| anyhow::anyhow!("Failed to load checkpoint: {}", e))?;
     println!("✓ Checkpoint loaded (step {}, loss {:.4})\n", step, loss);
 
@@ -120,9 +125,9 @@ fn main() -> Result<()> {
     println!("✓ Model initialized ({:.1}M params)\n", model.param_count() as f32 / 1_000_000.0);
 
     // Load tokenizer
-    let tokenizer = Tokenizer::from_file("models/gpt2-tokenizer.json")
+    let tokenizer = Tokenizer::from_file(&tokenizer_path)
         .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
-    println!("✓ Tokenizer loaded\n");
+    println!("✓ Tokenizer loaded ({})\n", tokenizer_path);
 
     println!("═══════════════════════════════════════════════════════════");
     println!("  Generating Rust Code");
@@ -142,7 +147,7 @@ fn main() -> Result<()> {
         println!("Test {}/{}:", i + 1, prompts.len());
         println!("─────────────────────────────────────────────────────────\n");
 
-        match generate(&model, &tokenizer, prompt, 150, 0.7, 50, &device) {
+        match generate(&model, &tokenizer, prompt, 150, 0.3, 10, &device) {
             Ok(_) => {},
             Err(e) => eprintln!("Error generating: {}", e),
         }
