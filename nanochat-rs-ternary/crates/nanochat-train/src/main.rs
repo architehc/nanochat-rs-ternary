@@ -140,6 +140,10 @@ enum Commands {
         #[arg(long, default_value = "3")]
         keep_last_checkpoints: usize,
 
+        /// Override total training steps from config
+        #[arg(long)]
+        total_steps: Option<usize>,
+
         /// Number of CPU threads (default: all available)
         #[arg(long)]
         threads: Option<usize>,
@@ -199,6 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             log_interval,
             checkpoint_interval,
             keep_last_checkpoints,
+            total_steps,
             threads,
             n_samples,
             device,
@@ -260,6 +265,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 nanochat_train::train::Trainer::new(cfg.clone(), device)?
             };
+
+            // Apply --total-steps override (useful for chunked training)
+            if let Some(ts) = total_steps {
+                cfg.total_steps = ts;
+                trainer.config.total_steps = ts;
+                tracing::info!("Overriding total_steps to {}", ts);
+            }
 
             let effective_seq_len = match effective_seq_len(seq_len, &cfg) {
                 Ok(v) => v,

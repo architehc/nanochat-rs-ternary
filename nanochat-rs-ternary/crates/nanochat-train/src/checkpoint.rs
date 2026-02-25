@@ -1,5 +1,6 @@
 //! Training checkpoint save/load.
 
+use candle_core::Var;
 use candle_nn::VarMap;
 use serde::{Deserialize, Serialize};
 
@@ -55,9 +56,10 @@ pub fn save_checkpoint(
 /// Load training checkpoint from directory.
 ///
 /// Returns (VarMap, config, step) — VarMap can be used to reconstruct the model.
+/// Loads weights directly onto `device` (VarMap::load hardcodes CPU).
 pub fn load_checkpoint(
     dir: &str,
-    _device: &candle_core::Device,
+    device: &candle_core::Device,
 ) -> Result<(VarMap, TrainConfig, usize, f64), Box<dyn std::error::Error>> {
     // Load metadata
     let meta_json = std::fs::read_to_string(format!("{}/meta.json", dir))?;
@@ -70,10 +72,20 @@ pub fn load_checkpoint(
         .into());
     }
 
-    // Load weights
-    let mut varmap = VarMap::new();
+    // Load weights directly to the target device.
+    // NOTE: VarMap::load() hardcodes Device::Cpu, which causes checkpoint
+    // resume on CUDA to silently produce CPU tensors — the model then creates
+    // fresh random CUDA weights instead of using the loaded ones.
     let weights_path = format!("{}/model.safetensors", dir);
-    varmap.load(&weights_path)?;
+    let tensors = candle_core::safetensors::load(&weights_path, device)?;
+    let varmap = VarMap::new();
+    {
+        let mut data = varmap.data().lock().unwrap();
+        for (name, tensor) in tensors {
+            let var = Var::from_tensor(&tensor)?;
+            data.insert(name, var);
+        }
+    }
 
     Ok((varmap, meta.config, meta.step, meta.loss))
 }
