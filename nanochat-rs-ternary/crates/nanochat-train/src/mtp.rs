@@ -19,7 +19,7 @@ pub struct MultiTokenPrediction {
     /// Independent output heads for each future position
     output_heads: Vec<Linear>,
 
-    /// Loss weights for each position [1.0, 0.5, 0.25, 0.125, ...]
+    /// Loss weights for each position [1.0, 0.5, 0.25, 0.125, ...] with min floor 0.01
     loss_weights: Vec<f32>,
 }
 
@@ -39,8 +39,9 @@ impl MultiTokenPrediction {
             let head = linear(dim, vocab_size, vb.pp(format!("mtp_head_{}", i)))?;
             heads.push(head);
 
-            // Geometric decay: 1.0, 0.5, 0.25, 0.125, ...
-            let weight = 0.5_f32.powi(i as i32);
+            // Geometric decay: 1.0, 0.5, 0.25, 0.125, ... with minimum floor of 0.01
+            // to prevent negligible contribution at depth 5+ (0.5^5 = 0.03125).
+            let weight = (0.5_f32.powi(i as i32)).max(0.01);
             weights.push(weight);
         }
 

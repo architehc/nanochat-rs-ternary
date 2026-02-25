@@ -275,9 +275,20 @@ impl NanochatModel {
                 let phi = Self::load_f32_vec(&gguf, &format!("{prefix}.wavefield.phi"))?;
 
                 // Convert alpha_raw through softplus to get positive damping.
-                // Numerically stable: softplus(x) = max(x,0) + log(1 + exp(-|x|))
+                // Numerically stable softplus: for large positive x -> x, for
+                // large negative x -> 0 (not underflow/NaN). Short-circuit
+                // extreme values to avoid any floating-point edge cases.
                 let alpha: Vec<f32> = alpha_raw.iter().map(|&a| {
-                    a.max(0.0) + (1.0 + (-a.abs()).exp()).ln()
+                    if a > 20.0 {
+                        // softplus(x) ≈ x for large positive x
+                        a
+                    } else if a < -20.0 {
+                        // softplus(x) ≈ exp(x) ≈ 0 for large negative x
+                        0.0
+                    } else {
+                        // Standard stable form: max(x,0) + ln(1 + exp(-|x|))
+                        a.max(0.0) + (1.0 + (-a.abs()).exp()).ln()
+                    }
                 }).collect();
 
                 let physics = WavePhysicsParams { omega, alpha, phi };
@@ -1293,7 +1304,10 @@ impl NanochatModel {
         } else {
             // Standard path: all blocks sequentially
             for (i, block) in self.blocks.iter().enumerate() {
-                block.forward(&mut x_exp, &mut self.attn_states[i], &self.rope, pos);
+                if let Err(e) = block.forward(&mut x_exp, &mut self.attn_states[i], &self.rope, pos) {
+                    self.mark_forward_degraded(format!("block {} forward failed: {}", i, e));
+                    break;
+                }
             }
         }
 
@@ -1338,12 +1352,15 @@ impl NanochatModel {
 
         // 1. Local layers before loop
         for (i, block) in self.local_blocks_before.iter().enumerate() {
-            block.forward(
+            if let Err(e) = block.forward(
                 &mut x_exp,
                 &mut self.local_states_before[i],
                 &self.rope,
                 pos,
-            );
+            ) {
+                self.mark_forward_degraded(format!("local_before block {} forward failed: {}", i, e));
+                return x_exp;
+            }
         }
 
         // 2. Shared loop layer (iterated loop_count times)
@@ -1391,7 +1408,10 @@ impl NanochatModel {
 
         // 3. Local layers after loop
         for (i, block) in self.local_blocks_after.iter().enumerate() {
-            block.forward(&mut x_exp, &mut self.local_states_after[i], &self.rope, pos);
+            if let Err(e) = block.forward(&mut x_exp, &mut self.local_states_after[i], &self.rope, pos) {
+                self.mark_forward_degraded(format!("local_after block {} forward failed: {}", i, e));
+                break;
+            }
         }
 
         x_exp
@@ -1466,13 +1486,16 @@ impl NanochatModel {
             // LoopLM architecture
             // 3a. Local blocks before
             for (i, block) in self.local_blocks_before.iter_mut().enumerate() {
-                block.forward_batch(
+                if let Err(e) = block.forward_batch(
                     &mut x_exp_all,
                     &mut self.local_states_before[i],
                     &self.rope,
                     start_pos,
                     seq_len,
-                );
+                ) {
+                    self.mark_forward_degraded(format!("local_before block {} batch forward failed: {}", i, e));
+                    break;
+                }
             }
 
             // 3b. Shared loop block (N iterations)
@@ -1524,24 +1547,30 @@ impl NanochatModel {
 
             // 3c. Local blocks after
             for (i, block) in self.local_blocks_after.iter_mut().enumerate() {
-                block.forward_batch(
+                if let Err(e) = block.forward_batch(
                     &mut x_exp_all,
                     &mut self.local_states_after[i],
                     &self.rope,
                     start_pos,
                     seq_len,
-                );
+                ) {
+                    self.mark_forward_degraded(format!("local_after block {} batch forward failed: {}", i, e));
+                    break;
+                }
             }
         } else {
             // Standard architecture
             for (i, block) in self.blocks.iter_mut().enumerate() {
-                block.forward_batch(
+                if let Err(e) = block.forward_batch(
                     &mut x_exp_all,
                     &mut self.attn_states[i],
                     &self.rope,
                     start_pos,
                     seq_len,
-                );
+                ) {
+                    self.mark_forward_degraded(format!("block {} batch forward failed: {}", i, e));
+                    break;
+                }
             }
         }
 
@@ -2110,7 +2139,7 @@ mod tests {
 
         // N blocks
         for (i, block) in model.blocks.iter().enumerate() {
-            block.forward(&mut x_exp, &mut model.attn_states[i], &model.rope, 0);
+            block.forward(&mut x_exp, &mut model.attn_states[i], &model.rope, 0).unwrap();
             assert_eq!(x_exp.len(), exp_len, "shape changed after block {i}");
         }
 

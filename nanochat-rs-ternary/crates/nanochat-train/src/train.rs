@@ -624,8 +624,21 @@ impl Trainer {
         let data = self.varmap.data().lock().unwrap();
         for (name, var) in data.iter() {
             if name.ends_with("alpha_logit") {
-                let clamped = var.as_tensor().clamp(-3f32, 3f32)?;
-                var.set(&clamped)?;
+                let t = var.as_tensor();
+                // Check for NaN/Inf before clamping — clamp(NaN) = NaN propagates silently.
+                // Reset non-finite values to 0.0 (balanced mixing) to prevent silent corruption.
+                let vals = t.flatten_all()?.to_vec1::<f32>()?;
+                if vals.iter().any(|v| !v.is_finite()) {
+                    tracing::warn!(
+                        "Non-finite value detected in {}, resetting to 0.0",
+                        name
+                    );
+                    let zeros = Tensor::zeros_like(t)?;
+                    var.set(&zeros)?;
+                } else {
+                    let clamped = t.clamp(-3f32, 3f32)?;
+                    var.set(&clamped)?;
+                }
             }
         }
         Ok(())

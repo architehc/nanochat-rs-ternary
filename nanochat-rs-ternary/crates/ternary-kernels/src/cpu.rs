@@ -48,95 +48,120 @@ fn to_c_struct(pw: &PlanarWeights) -> PlanarWeightsC {
     }
 }
 
-fn validate_planar_for_ffi(pw: &PlanarWeights, x_len: usize, y_len: usize) {
-    assert_eq!(x_len, pw.cols, "x.len() != cols");
-    assert_eq!(y_len, pw.rows, "y.len() != rows");
-    assert!(pw.rows > 0, "rows must be > 0");
-    assert!(pw.cols > 0, "cols must be > 0");
-    assert!(pw.group_size > 0, "group_size must be > 0");
-    assert!(pw.cols.is_multiple_of(4), "cols must be divisible by 4");
-    assert!(
-        pw.group_size.is_multiple_of(4),
-        "group_size must be divisible by 4"
-    );
-    assert!(
-        pw.cols.is_multiple_of(pw.group_size),
-        "cols must be divisible by group_size"
-    );
-    assert!(
-        (pw.group_size / 4) <= 32,
-        "group_size={} exceeds kernel stack LUT limit (max 128)",
-        pw.group_size
-    );
-    assert!(
-        pw.rows_padded >= pw.rows,
-        "rows_padded must be >= rows ({} < {})",
-        pw.rows_padded,
-        pw.rows
-    );
-    assert!(
-        pw.rows <= i32::MAX as usize,
-        "rows ({}) exceed i32::MAX for C FFI",
-        pw.rows
-    );
-    assert!(
-        pw.cols <= i32::MAX as usize,
-        "cols ({}) exceed i32::MAX for C FFI",
-        pw.cols
-    );
-    assert!(
-        pw.group_size <= i32::MAX as usize,
-        "group_size ({}) exceed i32::MAX for C FFI",
-        pw.group_size
-    );
-    assert!(
-        pw.rows_padded <= i32::MAX as usize,
-        "rows_padded ({}) exceed i32::MAX for C FFI",
-        pw.rows_padded
-    );
+fn validate_planar_for_ffi(pw: &PlanarWeights, x_len: usize, y_len: usize) -> Result<(), String> {
+    if x_len != pw.cols {
+        return Err(format!("x.len() ({}) != cols ({})", x_len, pw.cols));
+    }
+    if y_len != pw.rows {
+        return Err(format!("y.len() ({}) != rows ({})", y_len, pw.rows));
+    }
+    if pw.rows == 0 {
+        return Err("rows must be > 0".to_string());
+    }
+    if pw.cols == 0 {
+        return Err("cols must be > 0".to_string());
+    }
+    if pw.group_size == 0 {
+        return Err("group_size must be > 0".to_string());
+    }
+    if !pw.cols.is_multiple_of(4) {
+        return Err("cols must be divisible by 4".to_string());
+    }
+    if !pw.group_size.is_multiple_of(4) {
+        return Err("group_size must be divisible by 4".to_string());
+    }
+    if !pw.cols.is_multiple_of(pw.group_size) {
+        return Err("cols must be divisible by group_size".to_string());
+    }
+    if (pw.group_size / 4) > 32 {
+        return Err(format!(
+            "group_size={} exceeds kernel stack LUT limit (max 128)",
+            pw.group_size
+        ));
+    }
+    if pw.rows_padded < pw.rows {
+        return Err(format!(
+            "rows_padded must be >= rows ({} < {})",
+            pw.rows_padded, pw.rows
+        ));
+    }
+    if pw.rows > i32::MAX as usize {
+        return Err(format!(
+            "rows ({}) exceed i32::MAX for C FFI",
+            pw.rows
+        ));
+    }
+    if pw.cols > i32::MAX as usize {
+        return Err(format!(
+            "cols ({}) exceed i32::MAX for C FFI",
+            pw.cols
+        ));
+    }
+    if pw.group_size > i32::MAX as usize {
+        return Err(format!(
+            "group_size ({}) exceed i32::MAX for C FFI",
+            pw.group_size
+        ));
+    }
+    if pw.rows_padded > i32::MAX as usize {
+        return Err(format!(
+            "rows_padded ({}) exceed i32::MAX for C FFI",
+            pw.rows_padded
+        ));
+    }
 
     let kp = pw.cols / 4;
     let gprow = pw.cols / pw.group_size;
     let rows_kp = pw
         .rows
         .checked_mul(kp)
-        .expect("rows*kp overflow during FFI validation");
+        .ok_or_else(|| format!("rows*kp overflow: {} * {}", pw.rows, kp))?;
     let rows_gprow = pw
         .rows
         .checked_mul(gprow)
-        .expect("rows*gprow overflow during FFI validation");
+        .ok_or_else(|| format!("rows*gprow overflow: {} * {}", pw.rows, gprow))?;
     let rows_padded_kp = pw
         .rows_padded
         .checked_mul(kp)
-        .expect("rows_padded*kp overflow during FFI validation");
+        .ok_or_else(|| format!("rows_padded*kp overflow: {} * {}", pw.rows_padded, kp))?;
     let rows_padded_gprow = pw
         .rows_padded
         .checked_mul(gprow)
-        .expect("rows_padded*gprow overflow during FFI validation");
-    assert!(
-        pw.data.len() >= rows_kp,
-        "row-major packed data too short: {} < {}",
-        pw.data.len(),
-        rows_kp
-    );
-    assert!(
-        pw.scales_rm.len() >= rows_gprow,
-        "row-major scales too short: {} < {}",
-        pw.scales_rm.len(),
-        rows_gprow
-    );
-    assert!(
-        pw.data_colmaj.len() >= rows_padded_kp,
-        "col-major packed data too short: {} < {}",
-        pw.data_colmaj.len(),
-        rows_padded_kp
-    );
-    assert!(
-        pw.scales_gm.len() >= rows_padded_gprow,
-        "group-major scales too short: {} < {}",
-        pw.scales_gm.len(),
-        rows_padded_gprow
-    );
+        .ok_or_else(|| {
+            format!(
+                "rows_padded*gprow overflow: {} * {}",
+                pw.rows_padded, gprow
+            )
+        })?;
+    if pw.data.len() < rows_kp {
+        return Err(format!(
+            "row-major packed data too short: {} < {}",
+            pw.data.len(),
+            rows_kp
+        ));
+    }
+    if pw.scales_rm.len() < rows_gprow {
+        return Err(format!(
+            "row-major scales too short: {} < {}",
+            pw.scales_rm.len(),
+            rows_gprow
+        ));
+    }
+    if pw.data_colmaj.len() < rows_padded_kp {
+        return Err(format!(
+            "col-major packed data too short: {} < {}",
+            pw.data_colmaj.len(),
+            rows_padded_kp
+        ));
+    }
+    if pw.scales_gm.len() < rows_padded_gprow {
+        return Err(format!(
+            "group-major scales too short: {} < {}",
+            pw.scales_gm.len(),
+            rows_padded_gprow
+        ));
+    }
+    Ok(())
 }
 
 /// Check if AVX2 is available on this CPU.
@@ -207,7 +232,7 @@ pub fn selected_kernel_name() -> &'static str {
 /// # Panics
 /// Panics if dimensions don't match or alignment is wrong.
 pub fn gemv(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
-    validate_planar_for_ffi(pw, x.len(), y.len());
+    validate_planar_for_ffi(pw, x.len(), y.len()).expect("FFI validation failed");
     assert!(
         (pw.data.as_ptr() as usize).is_multiple_of(128),
         "data not 128B aligned"
@@ -236,7 +261,7 @@ pub fn gemv(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
 
 /// Scalar reference GEMV for verification.
 pub fn gemv_scalar_ref(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
-    validate_planar_for_ffi(pw, x.len(), y.len());
+    validate_planar_for_ffi(pw, x.len(), y.len()).expect("FFI validation failed");
 
     // SAFETY: All pointers come from validated PlanarWeights (AlignedVec, correct lengths).
     // x and y lengths are checked by validate_planar_for_ffi above.
@@ -273,7 +298,7 @@ pub fn gemv_scalar_ref(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f3
 /// * `act_scale` - Activation scale factor
 /// * `y` - Output buffer [rows], caller-allocated
 pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
-    validate_planar_for_ffi(pw, x.len(), y.len());
+    validate_planar_for_ffi(pw, x.len(), y.len()).expect("FFI validation failed");
 
     const PARALLEL_THRESHOLD: usize = 4096;
     const ROWS_PER_CHUNK: usize = 256;
@@ -285,47 +310,49 @@ pub fn gemv_parallel(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]
     let kp = pw.cols / 4; // packed bytes per row (row-major)
     let gprow = pw.cols / pw.group_size; // scale groups per row (row-major)
 
+    // Validate all bounds upfront (once) instead of redundantly in each parallel chunk.
+    // The worst-case access is at the end of the last chunk (row pw.rows - 1).
+    {
+        let data_end = pw.rows * kp;
+        assert!(
+            data_end <= pw.data.len(),
+            "row-major packed data out of bounds: {} > {}",
+            data_end,
+            pw.data.len()
+        );
+
+        let scales_rm_end = pw.rows * gprow;
+        assert!(
+            scales_rm_end <= pw.scales_rm.len(),
+            "row-major scales out of bounds: {} > {}",
+            scales_rm_end,
+            pw.scales_rm.len()
+        );
+
+        // Col-major last byte: column (kp-1) at stride rows_padded, plus last row
+        let data_colmaj_end = (pw.rows - 1) + (kp.saturating_sub(1)) * pw.rows_padded + 1;
+        assert!(
+            data_colmaj_end <= pw.data_colmaj.len(),
+            "col-major packed data out of bounds: {} > {}",
+            data_colmaj_end,
+            pw.data_colmaj.len()
+        );
+
+        // Group-major last byte: group (gprow-1) at stride rows_padded, plus last row
+        let scales_gm_end = (pw.rows - 1) + (gprow.saturating_sub(1)) * pw.rows_padded + 1;
+        assert!(
+            scales_gm_end <= pw.scales_gm.len(),
+            "group-major scales out of bounds: {} > {}",
+            scales_gm_end,
+            pw.scales_gm.len()
+        );
+    }
+
     y.par_chunks_mut(ROWS_PER_CHUNK)
         .enumerate()
         .for_each(|(chunk_idx, y_chunk)| {
             let row_start = chunk_idx * ROWS_PER_CHUNK;
             let chunk_rows = y_chunk.len();
-
-            let data_off = row_start * kp;
-            let data_end = data_off + chunk_rows * kp;
-            assert!(
-                data_end <= pw.data.len(),
-                "row-major packed slice out of bounds: {} > {}",
-                data_end,
-                pw.data.len()
-            );
-
-            let scales_rm_off = row_start * gprow;
-            let scales_rm_end = scales_rm_off + chunk_rows * gprow;
-            assert!(
-                scales_rm_end <= pw.scales_rm.len(),
-                "row-major scales slice out of bounds: {} > {}",
-                scales_rm_end,
-                pw.scales_rm.len()
-            );
-
-            // Col-major last byte: column (kp-1) at stride rows_padded, plus last row in chunk
-            let data_colmaj_end = row_start + (kp.saturating_sub(1)) * pw.rows_padded + chunk_rows;
-            assert!(
-                data_colmaj_end <= pw.data_colmaj.len(),
-                "col-major packed slice out of bounds: {} > {}",
-                data_colmaj_end,
-                pw.data_colmaj.len()
-            );
-
-            // Group-major last byte: group (gprow-1) at stride rows_padded, plus last row
-            let scales_gm_end = row_start + (gprow.saturating_sub(1)) * pw.rows_padded + chunk_rows;
-            assert!(
-                scales_gm_end <= pw.scales_gm.len(),
-                "group-major scales slice out of bounds: {} > {}",
-                scales_gm_end,
-                pw.scales_gm.len()
-            );
 
             // Construct sub-PlanarWeightsC pointing into the parent's arrays.
             // Column-major and group-major arrays use rows_padded as stride,

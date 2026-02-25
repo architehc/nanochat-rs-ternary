@@ -16,6 +16,24 @@ use crate::wavefield::{HeadCoupling, WaveFieldAttention, WaveFieldState, WaveKer
 use mhc_lite::MhcLiteN2;
 use std::sync::Mutex;
 
+/// Human-readable name for an AttentionLayer variant (for error messages).
+fn attention_layer_name(layer: &AttentionLayer) -> &'static str {
+    match layer {
+        AttentionLayer::Standard(_) => "Standard",
+        AttentionLayer::DeltaNet(_) => "DeltaNet",
+        AttentionLayer::WaveField(_) => "WaveField",
+    }
+}
+
+/// Human-readable name for an AttentionState variant (for error messages).
+fn attention_state_name(state: &AttentionState) -> &'static str {
+    match state {
+        AttentionState::Kv(_) => "Kv",
+        AttentionState::Recurrent(_) => "Recurrent",
+        AttentionState::WaveField(_) => "WaveField",
+    }
+}
+
 #[derive(Debug, Default)]
 struct BatchWorkspace {
     attn_in_batch: Vec<f32>,
@@ -180,11 +198,20 @@ impl TransformerBlock {
     }
 
     /// Create a block with wave field attention and random weights (for testing).
+    ///
+    /// Panics if `config.wavefield_config` is None. Prefer `try_new_random_wavefield`
+    /// when the caller can propagate errors.
     pub fn new_random_wavefield(config: &ModelConfig) -> Self {
+        Self::try_new_random_wavefield(config)
+            .expect("wavefield_config must be set for wave field layers")
+    }
+
+    /// Try to create a wave field block, returning an error if wavefield_config is missing.
+    pub fn try_new_random_wavefield(config: &ModelConfig) -> Result<Self, String> {
         let wf_cfg = config
             .wavefield_config
             .as_ref()
-            .expect("wavefield_config must be set for wave field layers");
+            .ok_or_else(|| "wavefield_config must be set for wave field layers".to_string())?;
 
         let ffn = if config.n_experts.is_some() {
             FfnLayer::Moe(Box::new(MoeExperts::new_random(config)))
@@ -192,7 +219,7 @@ impl TransformerBlock {
             FfnLayer::Dense(Box::new(FeedForward::new_random(config)))
         };
 
-        Self::from_parts(
+        Ok(Self::from_parts(
             MhcLiteN2::new_identity(),
             MhcLiteN2::new_identity(),
             RMSNorm::new(config.dim),
@@ -204,7 +231,7 @@ impl TransformerBlock {
             )),
             ffn,
             config.dim,
-        )
+        ))
     }
 
     /// Create the appropriate attention state for this block's attention type.
@@ -239,14 +266,15 @@ impl TransformerBlock {
     /// rope:       precomputed RoPE frequencies (used only for standard attention)
     /// pos:        current token position (used only for standard attention)
     ///
-    /// Modifies x_expanded in-place.
+    /// Modifies x_expanded in-place. Returns an error if the attention state
+    /// type does not match the attention layer type.
     pub fn forward(
         &self,
         x_expanded: &mut [f32],
         attn_state: &mut AttentionState,
         rope: &RopeFreqs,
         pos: usize,
-    ) {
+    ) -> Result<(), String> {
         let dim = self.dim;
         let n_streams = x_expanded.len() / dim;
         assert_eq!(x_expanded.len(), n_streams * dim);
@@ -288,7 +316,13 @@ impl TransformerBlock {
             (AttentionLayer::WaveField(wf), AttentionState::WaveField(state)) => {
                 wf.forward(normed, state, pos, attn_out);
             }
-            _ => unreachable!("attention layer type and state type mismatch"),
+            (layer, state) => {
+                return Err(format!(
+                    "attention layer/state type mismatch: layer={}, state={}",
+                    attention_layer_name(layer),
+                    attention_state_name(state),
+                ));
+            }
         }
 
         // 4. mHC residual update
@@ -308,6 +342,8 @@ impl TransformerBlock {
         // 4. mHC residual update
         self.mhc_ffn.apply_into(x_expanded, ffn_out, dim, residual_tmp);
         x_expanded.copy_from_slice(residual_tmp);
+
+        Ok(())
     }
 
     /// Batched forward pass for prefill: process `seq_len` tokens.
@@ -318,7 +354,8 @@ impl TransformerBlock {
     /// start_pos:   starting position offset
     /// seq_len:     number of tokens
     ///
-    /// Modifies x_exp_batch in-place.
+    /// Modifies x_exp_batch in-place. Returns an error if the attention state
+    /// type does not match the attention layer type.
     pub fn forward_batch(
         &self,
         x_exp_batch: &mut [f32],
@@ -326,9 +363,15 @@ impl TransformerBlock {
         rope: &RopeFreqs,
         start_pos: usize,
         seq_len: usize,
-    ) {
+    ) -> Result<(), String> {
         let dim = self.dim;
         let n_streams = x_exp_batch.len() / (seq_len * dim);
+        if n_streams != 2 {
+            return Err(format!(
+                "forward_batch requires n_streams=2 (got {}); N4 mHC is not yet supported in batched mode",
+                n_streams
+            ));
+        }
         let exp_dim = n_streams * dim;
         assert_eq!(x_exp_batch.len(), seq_len * exp_dim);
         let batch_len = seq_len * dim;
@@ -382,7 +425,13 @@ impl TransformerBlock {
             (AttentionLayer::WaveField(wf), AttentionState::WaveField(state)) => {
                 wf.forward_batch(normed_batch, state, start_pos, seq_len, attn_out_batch);
             }
-            _ => unreachable!("attention layer type and state type mismatch"),
+            (layer, state) => {
+                return Err(format!(
+                    "attention layer/state type mismatch: layer={}, state={}",
+                    attention_layer_name(layer),
+                    attention_state_name(state),
+                ));
+            }
         }
 
         // 4. mHC residual update for each token
@@ -415,6 +464,8 @@ impl TransformerBlock {
             self.mhc_ffn.apply_into(x_exp, ffn_out, dim, residual_tmp);
             x_exp_batch[t * exp_dim..(t + 1) * exp_dim].copy_from_slice(residual_tmp);
         }
+
+        Ok(())
     }
 
     /// Clone the block and place weight allocations on a specific NUMA node.
@@ -614,7 +665,7 @@ mod tests {
         // Expanded input (2 streams)
         let mut x_exp = vec![0.1f32; config.mhc_n_streams * config.dim];
 
-        block.forward(&mut x_exp, &mut state, &rope, 0);
+        block.forward(&mut x_exp, &mut state, &rope, 0).unwrap();
 
         assert!(
             x_exp.iter().all(|v| v.is_finite()),
@@ -651,7 +702,7 @@ mod tests {
         let expanded_dim = config.mhc_n_streams * config.dim;
         let mut x_exp = vec![0.5f32; expanded_dim];
 
-        block.forward(&mut x_exp, &mut state, &rope, 0);
+        block.forward(&mut x_exp, &mut state, &rope, 0).unwrap();
 
         assert_eq!(
             x_exp.len(),
@@ -676,7 +727,7 @@ mod tests {
 
         // Process 3 tokens
         for pos in 0..3 {
-            block.forward(&mut x_exp, &mut state, &rope, pos);
+            block.forward(&mut x_exp, &mut state, &rope, pos).unwrap();
             assert!(
                 x_exp.iter().all(|v| v.is_finite()),
                 "non-finite at pos {}",
@@ -710,7 +761,7 @@ mod tests {
         );
 
         let mut x_exp = vec![0.1f32; config.mhc_n_streams * config.dim];
-        block.forward(&mut x_exp, &mut state, &rope, 0);
+        block.forward(&mut x_exp, &mut state, &rope, 0).unwrap();
 
         assert!(
             x_exp.iter().all(|v| v.is_finite()),
@@ -733,7 +784,7 @@ mod tests {
 
         let mut x_exp = vec![0.1f32; config.mhc_n_streams * config.dim];
 
-        block.forward(&mut x_exp, &mut state, &rope, 0);
+        block.forward(&mut x_exp, &mut state, &rope, 0).unwrap();
 
         assert!(
             x_exp.iter().all(|v| v.is_finite()),

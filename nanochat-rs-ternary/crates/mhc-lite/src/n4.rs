@@ -153,6 +153,35 @@ impl MhcLiteN4 {
                 mat[i][perm[i]] += w;
             }
         }
+
+        // Verify doubly stochastic invariants in debug builds.
+        // Compiled out in release; catches bugs during development.
+        debug_assert!(
+            mat.iter().flatten().all(|&v| v >= -1e-7),
+            "h_res has negative entries: {:?}",
+            mat
+        );
+        debug_assert!(
+            (0..4).all(|i| {
+                let row_sum: f32 = mat[i].iter().sum();
+                (row_sum - 1.0).abs() < 1e-5
+            }),
+            "h_res row sums != 1.0: {:?}",
+            (0..4)
+                .map(|i| mat[i].iter().sum::<f32>())
+                .collect::<Vec<_>>()
+        );
+        debug_assert!(
+            (0..4).all(|j| {
+                let col_sum: f32 = (0..4).map(|i| mat[i][j]).sum();
+                (col_sum - 1.0).abs() < 1e-5
+            }),
+            "h_res col sums != 1.0: {:?}",
+            (0..4)
+                .map(|j| (0..4).map(|i| mat[i][j]).sum::<f32>())
+                .collect::<Vec<_>>()
+        );
+
         mat
     }
 

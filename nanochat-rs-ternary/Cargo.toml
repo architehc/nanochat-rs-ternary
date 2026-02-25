@@ -55,8 +55,8 @@ rand = "0.8"
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = "3"
-candle-core = "0.9"
-candle-nn = "0.9"
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
 
 [[bench]]
 name = "gemv_bench"

@@ -133,7 +133,7 @@ mod tests {
 
         for i in 0..n {
             assert!(
-                (direct[i] - precomputed[i]).abs() < 1e-3,
+                (direct[i] - precomputed[i]).abs() < 1e-6,
                 "Haar precomputed mismatch at {}: {} vs {}",
                 i, direct[i], precomputed[i]
             );

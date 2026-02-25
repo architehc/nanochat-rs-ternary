@@ -31,11 +31,13 @@ pub struct StreamingDecoder {
     last_text: String,
 }
 
-/// Maximum tokens before warning about StreamingDecoder buffer growth.
+/// Hard limit on StreamingDecoder token buffer size.
 /// BPE decoding requires full token history for correctness (merges can
-/// change earlier decoded text), so we can't truncate. This limit only
-/// triggers a warning for debugging memory-related issues.
-const MAX_STREAMING_TOKENS_WARN: usize = 64 * 1024;
+/// change earlier decoded text), so we can't truncate. When this limit
+/// is reached, `decode_next` returns `None` to signal the caller to stop
+/// generation gracefully, preventing unbounded memory growth from long
+/// or runaway requests.
+const MAX_STREAMING_TOKENS: usize = 64 * 1024;
 
 impl StreamingDecoder {
     pub fn new() -> Self {
@@ -46,15 +48,21 @@ impl StreamingDecoder {
     }
 
     /// Add a token and return any newly decoded complete UTF-8 string part.
-    pub fn decode_next(&mut self, token_id: u32, tokenizer: &tokenizers::Tokenizer) -> String {
-        self.tokens.push(token_id);
-        if self.tokens.len() == MAX_STREAMING_TOKENS_WARN {
+    ///
+    /// Returns `None` if the token buffer has reached its capacity limit,
+    /// signaling the caller to stop generation gracefully.
+    /// Returns `Some(text)` with the newly decoded text (may be empty if
+    /// no new complete UTF-8 characters are available yet).
+    pub fn decode_next(&mut self, token_id: u32, tokenizer: &tokenizers::Tokenizer) -> Option<String> {
+        if self.tokens.len() >= MAX_STREAMING_TOKENS {
             eprintln!(
-                "WARNING: StreamingDecoder token buffer reached {} tokens — \
-                 consider shorter max_tokens to bound memory usage",
-                MAX_STREAMING_TOKENS_WARN
+                "WARNING: StreamingDecoder hit hard limit of {} tokens, stopping generation",
+                MAX_STREAMING_TOKENS
             );
+            return None;
         }
+
+        self.tokens.push(token_id);
 
         // Decode the full sequence of tokens. skip_special_tokens=true is standard for SSE.
         let current_text = tokenizer.decode(&self.tokens, true).unwrap_or_default();
@@ -70,21 +78,41 @@ impl StreamingDecoder {
                 current_text.clone()
             };
             self.last_text = current_text;
-            diff
+            Some(diff)
         } else if current_text.len() > self.last_text.len() {
             // If it doesn't start with last_text (rare for BPE), we reset and send the whole thing.
             self.last_text = current_text.clone();
-            current_text
+            Some(current_text)
         } else {
             // No new complete UTF-8 characters yet.
-            String::new()
+            Some(String::new())
         }
+    }
+
+    /// Returns the number of tokens currently buffered.
+    pub fn token_count(&self) -> usize {
+        self.tokens.len()
     }
 }
 
 impl Default for StreamingDecoder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// RAII guard that sets a cancellation flag on drop.
+///
+/// Used to ensure that when a client disconnects or the request future is
+/// dropped, the background `spawn_blocking` task is signaled to stop
+/// generating tokens promptly, releasing the engine mutex.
+struct CancelOnDrop {
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.flag.store(true, Ordering::Release);
     }
 }
 
@@ -288,13 +316,17 @@ async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest)
             return error_json(StatusCode::BAD_REQUEST, &err).into_response();
         }
     };
-    let params = req.to_sampling_params();
+    let mut params = req.to_sampling_params();
     let max_seq_len = state.max_seq_len;
     let request_timeout = state.request_timeout;
 
-    // Cancellation flag: set when timeout fires so the blocking task stops generating.
+    // Cancellation flag: set when timeout fires or client disconnects
+    // so the blocking task stops generating and releases the engine mutex.
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_inner = cancel.clone();
+    // CancelOnDrop ensures the flag is set if this future is dropped
+    // (e.g., client disconnect), not just on explicit timeout.
+    let _cancel_guard = CancelOnDrop { flag: cancel.clone() };
 
     let result = tokio::time::timeout(
         request_timeout,
@@ -330,6 +362,10 @@ async fn non_stream_completion(state: Arc<AppState>, req: ChatCompletionRequest)
                     ),
                 ));
             }
+
+            // Clamp max_tokens to remaining model capacity after prompt
+            let remaining = max_seq_len.saturating_sub(prompt_len);
+            params.max_tokens = params.max_tokens.min(remaining);
 
             let vs = state.vocab_size;
             if prompt_ids.iter().any(|&t| t >= vs) {
@@ -515,7 +551,7 @@ async fn stream_completion(
     let request_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
     let max_seq_len = state.max_seq_len;
     let request_timeout = state.request_timeout;
-    let params = req.to_sampling_params();
+    let mut params = req.to_sampling_params();
 
     let stream_capacity = state.stream_channel_capacity.max(1);
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(stream_capacity);
@@ -554,17 +590,50 @@ async fn stream_completion(
         let _active_guard = metrics::ActiveRequestGuard::new();
         let _timer = metrics::LatencyTimer::new();
 
+        /// Timeout for channel sends to slow readers. If the channel is full
+        /// for longer than this, the connection is considered dead and generation
+        /// stops to avoid wasting compute.
+        const CHANNEL_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+
+        let channel_dead = std::cell::Cell::new(false);
+
         let send_event = |tx: &mpsc::Sender<Result<Event, Infallible>>, data: String| -> bool {
+            if channel_dead.get() {
+                return false;
+            }
+            // First try a non-blocking send.
             match tx.try_send(Ok(Event::default().data(data))) {
                 Ok(()) => true,
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    eprintln!("WARN: streaming channel full (slow client), dropping connection");
-                    metrics::INFERENCE_ERRORS.inc();
-                    false
-                }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     metrics::INFERENCE_ERRORS.inc();
+                    channel_dead.set(true);
                     false
+                }
+                Err(mpsc::error::TrySendError::Full(event)) => {
+                    // Channel is full — retry with a deadline before giving up.
+                    let deadline = Instant::now() + CHANNEL_SEND_TIMEOUT;
+                    let mut pending = event;
+                    loop {
+                        std::thread::sleep(Duration::from_millis(50));
+                        match tx.try_send(pending) {
+                            Ok(()) => return true,
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                metrics::INFERENCE_ERRORS.inc();
+                                channel_dead.set(true);
+                                return false;
+                            }
+                            Err(mpsc::error::TrySendError::Full(again)) => {
+                                pending = again;
+                                if Instant::now() >= deadline {
+                                    eprintln!("WARN: streaming channel full for >{}s (slow client), dropping connection",
+                                              CHANNEL_SEND_TIMEOUT.as_secs());
+                                    metrics::INFERENCE_ERRORS.inc();
+                                    channel_dead.set(true);
+                                    return false;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         };
@@ -613,6 +682,10 @@ async fn stream_completion(
             ));
             return;
         }
+
+        // Clamp max_tokens to remaining model capacity after prompt
+        let remaining = max_seq_len.saturating_sub(prompt_ids.len());
+        params.max_tokens = params.max_tokens.min(remaining);
 
         let vs = state.vocab_size;
         if prompt_ids.iter().any(|&t| t >= vs) {
@@ -681,6 +754,12 @@ async fn stream_completion(
         let mut decoder = StreamingDecoder::new();
 
         engine.generate_streaming(&token_ids, &params, |tok| {
+            // Check if a prior send failed (slow/disconnected client).
+            // Bail immediately to avoid wasting compute on another forward pass.
+            if channel_dead.get() {
+                return false;
+            }
+
             if started.elapsed() >= request_timeout {
                 timed_out = true;
                 metrics::INFERENCE_ERRORS.inc();
@@ -715,7 +794,31 @@ async fn stream_completion(
                 had_degraded = true;
             }
 
-            let text = decoder.decode_next(tok.token_id, &state.tokenizer);
+            let text = match decoder.decode_next(tok.token_id, &state.tokenizer) {
+                Some(t) => t,
+                None => {
+                    // StreamingDecoder hit its hard token limit — stop generation gracefully.
+                    let limit_chunk = ChatCompletionChunk {
+                        id: req_id.clone(),
+                        object: "chat.completion.chunk".to_string(),
+                        created: now,
+                        model: model.clone(),
+                        choices: vec![ChunkChoice {
+                            index: 0,
+                            delta: ChunkDelta {
+                                role: None,
+                                content: None,
+                            },
+                            finish_reason: Some("length".to_string()),
+                        }],
+                    };
+                    if let Ok(json) = serde_json::to_string(&limit_chunk) {
+                        let _ = send_event(&tx, json);
+                    }
+                    let _ = send_event(&tx, "[DONE]".to_string());
+                    return false;
+                }
+            };
 
             if text.is_empty() && tok.finish_reason.is_none() {
                 // Skip sending empty chunks unless it's the final token with a finish reason.

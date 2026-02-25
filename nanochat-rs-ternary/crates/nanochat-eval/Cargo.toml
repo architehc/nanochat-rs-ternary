@@ -20,8 +20,8 @@ regex = "1"
 tempfile = "3"
 chrono = "0.4"
 tokenizers = "0.20"
-candle-core = { version = "0.9" }
-candle-nn = { version = "0.9" }
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
 rand = "0.8"
 syn = { version = "2", features = ["full", "parsing"] }
 flate2 = "1"

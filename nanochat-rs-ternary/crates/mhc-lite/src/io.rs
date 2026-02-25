@@ -1,9 +1,13 @@
 // io.rs — Binary serialization for mHC parameters
 //
+// Wire format is explicitly **little-endian** for cross-platform correctness.
+// All u32 and f32 fields use {to,from}_le_bytes().
+//
 // File format:
-//   Header: [magic:u32 = 0x6D484321][version:u32 = 2][n_layers:u32][n_streams:u32]
-//   Per layer (N=2): 36 bytes
-//   Per layer (N=4): 160 bytes
+//   Header (16 bytes, all LE u32):
+//     [magic:u32 = 0x6D484321][version:u32 = 2][n_layers:u32][n_streams:u32]
+//   Per layer (N=2): 36 bytes (9 × LE f32)
+//   Per layer (N=4): 160 bytes (40 × LE f32)
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -39,7 +43,7 @@ pub fn load_mhc_file<P: AsRef<Path>>(path: P) -> io::Result<(MhcFileHeader, Vec<
     let mut file = File::open(path)?;
     let mut buf4 = [0u8; 4];
 
-    // Read header
+    // Read header — all fields are little-endian u32.
     file.read_exact(&mut buf4)?;
     let magic = u32::from_le_bytes(buf4);
     if magic != MHC_MAGIC {
@@ -138,7 +142,7 @@ pub fn save_mhc_file<P: AsRef<Path>>(
 
     let mut file = File::create(path)?;
 
-    // Write header
+    // Write header — all fields are little-endian u32.
     file.write_all(&MHC_MAGIC.to_le_bytes())?;
     file.write_all(&MHC_VERSION.to_le_bytes())?;
     file.write_all(&(layers.len() as u32).to_le_bytes())?;

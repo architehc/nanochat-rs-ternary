@@ -50,13 +50,18 @@ fn make_hybrid_config() -> ModelConfig {
 fn wavefield_causality_future_tokens_dont_affect_past() {
     let config = make_wavefield_config();
 
-    // Run with tokens [1, 2, 3]
-    let mut model_a = NanochatModel::new_random(config.clone());
-    let logits_a_0 = model_a.forward_token(1, 0);
+    // Use the SAME model for both runs to make the test meaningful.
+    // Different random models would always differ, making the test self-validating.
+    let mut model = NanochatModel::new_random(config.clone());
 
-    // Run with token [1] only
-    let mut model_b = NanochatModel::new_random(config.clone());
-    let logits_b_0 = model_b.forward_token(1, 0);
+    // Run with tokens [1, 2, 3]
+    let logits_a_0 = model.forward_token(1, 0);
+    let _logits_a_1 = model.forward_token(2, 1);
+    let _logits_a_2 = model.forward_token(3, 2);
+
+    // Reset caches and run with token [1] only
+    model.reset_caches();
+    let logits_b_0 = model.forward_token(1, 0);
 
     // First token's logits should be identical regardless of future tokens
     // (since we're calling forward_token which is autoregressive)
@@ -79,17 +84,19 @@ fn wavefield_causality_future_tokens_dont_affect_past() {
 fn wavefield_causality_multi_token_divergent_futures() {
     let config = make_wavefield_config();
 
-    // Sequence A: [1, 2, 3]
-    let mut model_a = NanochatModel::new_random(config.clone());
-    let logits_a_0 = model_a.forward_token(1, 0);
-    let logits_a_1 = model_a.forward_token(2, 1);
-    let _logits_a_2 = model_a.forward_token(3, 2);
+    // Use the SAME model for both runs, resetting caches between them.
+    let mut model = NanochatModel::new_random(config.clone());
 
-    // Sequence B: [1, 99, 99]
-    let mut model_b = NanochatModel::new_random(config.clone());
-    let logits_b_0 = model_b.forward_token(1, 0);
-    let logits_b_1 = model_b.forward_token(99, 1);
-    let _logits_b_2 = model_b.forward_token(99, 2);
+    // Sequence A: [1, 2, 3]
+    let logits_a_0 = model.forward_token(1, 0);
+    let logits_a_1 = model.forward_token(2, 1);
+    let _logits_a_2 = model.forward_token(3, 2);
+
+    // Sequence B: [1, 99, 99] — same model, reset caches
+    model.reset_caches();
+    let logits_b_0 = model.forward_token(1, 0);
+    let logits_b_1 = model.forward_token(99, 1);
+    let _logits_b_2 = model.forward_token(99, 2);
 
     // Position 0: same token, no future info yet → must match exactly
     for i in 0..logits_a_0.len() {
@@ -119,13 +126,14 @@ fn wavefield_causality_multi_token_divergent_futures() {
 fn wavefield_fwht_causality_divergent_futures() {
     let config = make_wavefield_config_mode(ConvolveMode::Fwht);
 
-    let mut model_a = NanochatModel::new_random(config.clone());
-    let logits_a_0 = model_a.forward_token(10, 0);
-    let _logits_a_1 = model_a.forward_token(20, 1);
+    // Use the SAME model for both runs, resetting caches between them.
+    let mut model = NanochatModel::new_random(config.clone());
+    let logits_a_0 = model.forward_token(10, 0);
+    let _logits_a_1 = model.forward_token(20, 1);
 
-    let mut model_b = NanochatModel::new_random(config.clone());
-    let logits_b_0 = model_b.forward_token(10, 0);
-    let _logits_b_1 = model_b.forward_token(200, 1);
+    model.reset_caches();
+    let logits_b_0 = model.forward_token(10, 0);
+    let _logits_b_1 = model.forward_token(200, 1);
 
     for i in 0..logits_a_0.len() {
         assert!(
@@ -141,13 +149,14 @@ fn wavefield_fwht_causality_divergent_futures() {
 fn wavefield_haar_causality_divergent_futures() {
     let config = make_wavefield_config_mode(ConvolveMode::Haar);
 
-    let mut model_a = NanochatModel::new_random(config.clone());
-    let logits_a_0 = model_a.forward_token(10, 0);
-    let _logits_a_1 = model_a.forward_token(20, 1);
+    // Use the SAME model for both runs, resetting caches between them.
+    let mut model = NanochatModel::new_random(config.clone());
+    let logits_a_0 = model.forward_token(10, 0);
+    let _logits_a_1 = model.forward_token(20, 1);
 
-    let mut model_b = NanochatModel::new_random(config.clone());
-    let logits_b_0 = model_b.forward_token(10, 0);
-    let _logits_b_1 = model_b.forward_token(200, 1);
+    model.reset_caches();
+    let logits_b_0 = model.forward_token(10, 0);
+    let _logits_b_1 = model.forward_token(200, 1);
 
     for i in 0..logits_a_0.len() {
         assert!(
@@ -164,9 +173,8 @@ fn wavefield_haar_causality_divergent_futures() {
 // in suffix must produce identical logits at ALL prefix positions.
 // This exercises multi-step state accumulation in the wave field.
 
-/// Helper: run autoregressive sequence, return logits at every position.
-fn run_sequence_collect_all(config: &ModelConfig, tokens: &[u32]) -> Vec<Vec<f32>> {
-    let mut model = NanochatModel::new_random(config.clone());
+/// Helper: run autoregressive sequence on an existing model, return logits at every position.
+fn run_sequence_collect_all(model: &mut NanochatModel, tokens: &[u32]) -> Vec<Vec<f32>> {
     tokens
         .iter()
         .enumerate()
@@ -184,8 +192,11 @@ fn check_prefix_invariance(mode: ConvolveMode) {
     let seq_b: Vec<u32> = vec![10, 20, 30, 99, 99];
     let prefix_len = 3; // first 3 tokens identical
 
-    let logits_a = run_sequence_collect_all(&config, &seq_a);
-    let logits_b = run_sequence_collect_all(&config, &seq_b);
+    // Use the SAME model for both runs, resetting caches between them.
+    let mut model = NanochatModel::new_random(config.clone());
+    let logits_a = run_sequence_collect_all(&mut model, &seq_a);
+    model.reset_caches();
+    let logits_b = run_sequence_collect_all(&mut model, &seq_b);
 
     // Prefix positions must match exactly
     for pos in 0..prefix_len {
@@ -502,11 +513,12 @@ fn wavefield_fwht_sequence_produces_valid_logits() {
 fn wavefield_fwht_causality() {
     let config = make_wavefield_config_mode(ConvolveMode::Fwht);
 
-    let mut model_a = NanochatModel::new_random(config.clone());
-    let logits_a = model_a.forward_token(1, 0);
+    // Use the SAME model for both runs, resetting caches between them.
+    let mut model = NanochatModel::new_random(config.clone());
+    let logits_a = model.forward_token(1, 0);
 
-    let mut model_b = NanochatModel::new_random(config.clone());
-    let logits_b = model_b.forward_token(1, 0);
+    model.reset_caches();
+    let logits_b = model.forward_token(1, 0);
 
     for i in 0..logits_a.len() {
         assert!(
@@ -574,11 +586,12 @@ fn wavefield_haar_sequence_produces_valid_logits() {
 fn wavefield_haar_causality() {
     let config = make_wavefield_config_mode(ConvolveMode::Haar);
 
-    let mut model_a = NanochatModel::new_random(config.clone());
-    let logits_a = model_a.forward_token(1, 0);
+    // Use the SAME model for both runs, resetting caches between them.
+    let mut model = NanochatModel::new_random(config.clone());
+    let logits_a = model.forward_token(1, 0);
 
-    let mut model_b = NanochatModel::new_random(config.clone());
-    let logits_b = model_b.forward_token(1, 0);
+    model.reset_caches();
+    let logits_b = model.forward_token(1, 0);
 
     for i in 0..logits_a.len() {
         assert!(
@@ -662,8 +675,8 @@ fn check_batched_vs_sequential(mode: ConvolveMode) {
     // Tolerance: ternary quantization + different accumulation order
     // allows small numerical differences
     assert!(
-        max_diff < 0.1,
-        "{:?} batched vs sequential max_diff={} (should be < 0.1)",
+        max_diff < 1e-4,
+        "{:?} batched vs sequential max_diff={} (should be < 1e-4)",
         mode, max_diff
     );
 }

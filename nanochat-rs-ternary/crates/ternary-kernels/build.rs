@@ -86,7 +86,10 @@ fn main() {
     let lib_path = format!("{}/libternary_dp4a.a", out_dir);
 
     // Compile CUDA kernel to object file
-    let cuda_arch = std::env::var("CUDA_ARCH").unwrap_or_else(|_| "sm_89".to_string());
+    let cuda_arch = std::env::var("CUDA_ARCH").unwrap_or_else(|_| {
+        println!("cargo:warning=CUDA_ARCH not set, defaulting to sm_89 (Ada Lovelace). Set CUDA_ARCH env var to target a different GPU architecture (e.g. sm_80 for Ampere, sm_90 for Hopper, sm_100 for Blackwell).");
+        "sm_89".to_string()
+    });
     let status = match Command::new(&nvcc)
         .args([
             "-c",

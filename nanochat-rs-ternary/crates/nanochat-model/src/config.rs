@@ -535,11 +535,26 @@ impl ModelConfig {
 
     /// Validate model config for consistency.
     pub fn validate(&self) -> Result<(), String> {
+        if self.n_heads == 0 {
+            return Err("n_heads must be > 0".into());
+        }
+        if self.n_kv_heads == 0 {
+            return Err("n_kv_heads must be > 0".into());
+        }
         if self.n_kv_heads > self.n_heads {
             return Err("n_kv_heads must be <= n_heads".into());
         }
+        if !self.n_heads.is_multiple_of(self.n_kv_heads) {
+            return Err(format!(
+                "n_heads ({}) must be divisible by n_kv_heads ({})",
+                self.n_heads, self.n_kv_heads
+            ));
+        }
         if !self.dim.is_multiple_of(self.n_heads) {
-            return Err("dim must be divisible by n_heads".into());
+            return Err(format!(
+                "dim ({}) must be divisible by n_heads ({}) for head_dim",
+                self.dim, self.n_heads
+            ));
         }
         if self.group_size == 0 {
             return Err("group_size must be > 0".into());
@@ -568,6 +583,17 @@ impl ModelConfig {
                 "Only mhc_n_streams=2 is currently supported; got {}. N4 integration is not yet implemented",
                 self.mhc_n_streams
             ));
+        }
+        if let (Some(n_active), Some(n_total)) = (self.n_active_experts, self.n_experts) {
+            if n_active > n_total {
+                return Err(format!(
+                    "n_active_experts ({}) must be <= n_experts ({})",
+                    n_active, n_total
+                ));
+            }
+        }
+        if self.n_active_experts.is_some() && self.n_experts.is_none() {
+            return Err("n_active_experts is set but n_experts is not".into());
         }
         Ok(())
     }

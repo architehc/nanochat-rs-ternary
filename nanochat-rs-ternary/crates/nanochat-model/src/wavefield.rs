@@ -152,7 +152,17 @@ impl WaveKernelCache {
     }
 
     /// Convolve a single column buffer using the cached kernel for the given head.
+    ///
+    /// # Panics
+    /// Panics if `head >= self.n_heads()`.
     pub fn convolve_column(&self, col_buf: &[f32], head: usize) -> Vec<f32> {
+        let n_heads = self.n_heads();
+        assert!(
+            head < n_heads,
+            "convolve_column: head index {} out of bounds (n_heads={})",
+            head,
+            n_heads
+        );
         let field_size = self.field_size();
         match self {
             WaveKernelCache::Fft { kernels_freq, fft_size, .. } => {

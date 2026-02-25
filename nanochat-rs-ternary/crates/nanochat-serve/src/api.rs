@@ -106,6 +106,22 @@ impl ChatCompletionRequest {
         }
     }
 
+    /// Build sampling params with max_tokens clamped to what the model can
+    /// actually produce given the prompt length and model's max sequence length.
+    ///
+    /// `remaining_capacity` = max_seq_len - prompt_len.
+    /// This prevents the engine from attempting to generate past the model's
+    /// position embedding limit, which would cause a panic or silent truncation.
+    pub fn to_sampling_params_clamped(&self, remaining_capacity: usize) -> SamplingParams {
+        let mut params = self.to_sampling_params();
+        if remaining_capacity > 0 {
+            params.max_tokens = params.max_tokens.min(remaining_capacity);
+        } else {
+            params.max_tokens = 0;
+        }
+        params
+    }
+
     pub fn validate_messages(&self) -> Result<(), String> {
         if self.messages.is_empty() {
             return Err("messages must contain at least one item".to_string());

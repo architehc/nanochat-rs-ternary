@@ -61,6 +61,11 @@ pub(crate) fn softmax_24(logits: &[f32; 24]) -> [f32; 24] {
         sum += *o;
     }
 
+    // Guard against division by zero or near-zero denominator.
+    // An epsilon of 1e-30 prevents inf from extremely small positive sums
+    // while being small enough to not affect normal softmax precision.
+    const SOFTMAX_EPS: f32 = 1e-30;
+
     if !sum.is_finite() || sum <= 0.0 {
         eprintln!(
             "WARNING: softmax_24 exp sum is degenerate (sum={:.6}), returning uniform distribution",
@@ -69,7 +74,7 @@ pub(crate) fn softmax_24(logits: &[f32; 24]) -> [f32; 24] {
         return [1.0 / 24.0; 24];
     }
 
-    let inv_sum = 1.0 / sum;
+    let inv_sum = 1.0 / (sum + SOFTMAX_EPS);
     for o in out.iter_mut() {
         *o *= inv_sum;
     }

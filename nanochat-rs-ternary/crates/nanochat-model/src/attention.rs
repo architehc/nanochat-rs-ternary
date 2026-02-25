@@ -176,14 +176,16 @@ impl Attention {
         let scale = 1.0 / (self.head_dim as f32).sqrt();
 
         let mut attn_out = vec![0.0f32; dim];
+        // Pre-allocate scores buffer outside head loop to avoid per-head allocation
+        let mut scores = vec![0.0f32; seq_len];
 
         for h in 0..self.n_heads {
             let kv_h = h / self.n_rep; // GQA: multiple Q heads share one KV head
             let q_offset = h * self.head_dim;
             let kv_offset = kv_h * self.head_dim;
 
-            // Compute attention scores
-            let mut scores = vec![0.0f32; seq_len];
+            // Compute attention scores (reuse pre-allocated buffer)
+            scores.fill(0.0);
             for (t, score) in scores.iter_mut().enumerate() {
                 let k_base = t * kv_dim + kv_offset;
                 let mut dot = 0.0f32;
@@ -277,7 +279,10 @@ impl Attention {
 
             for h in 0..self.n_heads {
                 let kv_h = h / self.n_rep;
+                // q_offset indexes into all_q[seq_len * dim]: token t, head h
+                // all_q layout: [t0_h0, t0_h1, ..., t1_h0, t1_h1, ...]
                 let q_offset = q_base + h * self.head_dim;
+                // kv_offset indexes within a single KV cache row (one position)
                 let kv_offset = kv_h * self.head_dim;
 
                 // Compute attention scores (reuse pre-allocated buffer)

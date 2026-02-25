@@ -152,9 +152,22 @@ impl GpuWeights {
         init()?;
 
         let kp = pw.cols / 4;
-        let data_bytes = pw.rows * kp;
+        let data_bytes = pw.rows
+            .checked_mul(kp)
+            .ok_or_else(|| format!("data_bytes overflow: {} * {}", pw.rows, kp))?;
         let n_groups = pw.cols / pw.group_size;
-        let scales_bytes = pw.rows * n_groups * std::mem::size_of::<f32>();
+        let scales_bytes = pw
+            .rows
+            .checked_mul(n_groups)
+            .and_then(|v| v.checked_mul(std::mem::size_of::<f32>()))
+            .ok_or_else(|| {
+                format!(
+                    "scales_bytes overflow: {} * {} * {}",
+                    pw.rows,
+                    n_groups,
+                    std::mem::size_of::<f32>()
+                )
+            })?;
 
         let d_data = DeviceAlloc::alloc(data_bytes, "data")?;
         let d_scales = DeviceAlloc::alloc(scales_bytes, "scales")?;

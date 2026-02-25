@@ -374,9 +374,48 @@ impl GgufWriter {
     }
 
     /// Add a ternary tensor (packed weights + scales).
+    ///
+    /// # Panics
+    /// Panics if the `PlanarWeights` dimensions are inconsistent with its data:
+    /// - `pw.data.len()` must be at least `rows * (cols / 4)`
+    /// - `pw.scales_rm.len()` must be at least `rows * (cols / group_size)`
+    /// - `cols` must be divisible by 4 and by `group_size`
     pub fn add_ternary_tensor(&mut self, name: &str, pw: &PlanarWeights) {
+        assert!(
+            pw.cols % 4 == 0,
+            "add_ternary_tensor '{}': cols ({}) must be divisible by 4",
+            name,
+            pw.cols
+        );
+        assert!(
+            pw.group_size > 0 && pw.cols % pw.group_size == 0,
+            "add_ternary_tensor '{}': cols ({}) must be divisible by group_size ({})",
+            name,
+            pw.cols,
+            pw.group_size
+        );
+
         let kp = pw.cols / 4;
         let gprow = pw.cols / pw.group_size;
+
+        assert!(
+            pw.data.len() >= pw.rows * kp,
+            "add_ternary_tensor '{}': packed data length ({}) < expected rows * cols/4 ({} * {} = {})",
+            name,
+            pw.data.len(),
+            pw.rows,
+            kp,
+            pw.rows * kp
+        );
+        assert!(
+            pw.scales_rm.len() >= pw.rows * gprow,
+            "add_ternary_tensor '{}': scales length ({}) < expected rows * groups_per_row ({} * {} = {})",
+            name,
+            pw.scales_rm.len(),
+            pw.rows,
+            gprow,
+            pw.rows * gprow
+        );
 
         let mut data = Vec::with_capacity(pw.rows * kp + pw.rows * gprow * 4);
 

@@ -245,7 +245,11 @@ fn fft_correlate_tensor(a: &Tensor, b: &Tensor, n: usize) -> Result<Tensor> {
 /// # Returns
 /// Convolution result with same shape as `signal`
 pub fn fft_convolve(signal: &Tensor, kernel: &Tensor, field_size: usize) -> Result<Tensor> {
-    signal.apply_op2_no_bwd(kernel, &FftConvolveOp { field_size })
+    // Ensure contiguous layout — tensors from broadcast_as or transpose may
+    // have non-trivial strides that break the linear offset arithmetic in cpu_fwd.
+    let signal = signal.contiguous()?;
+    let kernel = kernel.contiguous()?;
+    signal.apply_op2_no_bwd(&kernel, &FftConvolveOp { field_size })
 }
 
 /// Same as `fft_convolve` but preserves autograd graph for backward pass.
@@ -254,7 +258,11 @@ pub fn fft_convolve_with_grad(
     kernel: &Tensor,
     field_size: usize,
 ) -> Result<Tensor> {
-    signal.apply_op2(kernel, FftConvolveOp { field_size })
+    // Ensure contiguous layout — tensors from broadcast_as or transpose may
+    // have non-trivial strides that break the linear offset arithmetic in cpu_fwd.
+    let signal = signal.contiguous()?;
+    let kernel = kernel.contiguous()?;
+    signal.apply_op2(&kernel, FftConvolveOp { field_size })
 }
 
 #[cfg(test)]

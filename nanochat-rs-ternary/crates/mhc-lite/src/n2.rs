@@ -56,15 +56,53 @@ pub struct MhcLiteN2 {
 }
 
 impl MhcLiteN2 {
-    /// Create with neutral initialization.
+    /// Create with balanced initialization (50/50 identity/swap mixing).
     ///
-    /// NOTE: despite the historical name, this intentionally uses
-    /// `alpha_logit=0.0` (balanced residual) to avoid identity-bypass behavior.
+    /// **WARNING — Misleading legacy name.** This does NOT produce a near-identity
+    /// matrix. It uses `alpha_logit=0.0` which gives `sigmoid(0)=0.5`, resulting
+    /// in `H_res = [[0.5, 0.5], [0.5, 0.5]]` — a 50/50 mix of identity and swap.
+    /// This is intentional to avoid identity-bypass behavior during training.
+    ///
+    /// For near-identity behavior (H_res close to I), use [`new_near_identity`].
+    /// For an explicit balanced init, prefer [`new_balanced`] for clarity.
+    ///
+    /// [`new_near_identity`]: MhcLiteN2::new_near_identity
+    /// [`new_balanced`]: MhcLiteN2::new_balanced
+    #[doc(alias = "new_balanced")]
     pub fn new_identity() -> Self {
+        Self::new_balanced()
+    }
+
+    /// Create with balanced initialization (50/50 identity/swap mixing).
+    ///
+    /// Uses `alpha_logit=0.0` so `sigmoid(0)=0.5`, giving
+    /// `H_res = [[0.5, 0.5], [0.5, 0.5]]`. This avoids identity-bypass
+    /// behavior where input embeddings pass through all layers unchanged.
+    pub fn new_balanced() -> Self {
         Self {
-            // Balanced residual mixing at initialization.
             alpha_logit: 0.0,
-            // Equal mixing for pre/post, biased toward identity-like behavior
+            pre_logits: [0.0, 0.0],
+            pre_bias: [0.5, 0.5],
+            post_logits: [0.0, 0.0],
+            post_bias: [0.5, 0.5],
+        }
+    }
+
+    /// Create with near-identity initialization.
+    ///
+    /// Uses `alpha_logit=5.0` so `sigmoid(5)~=0.993`, giving
+    /// `H_res ~= [[0.993, 0.007], [0.007, 0.993]]` — very close to the
+    /// identity matrix. Useful when you want the residual connection to
+    /// strongly preserve each stream independently.
+    ///
+    /// **Caution:** near-identity init can cause identity-bypass where the model
+    /// learns to pass input embeddings through unchanged. Prefer [`new_balanced`]
+    /// for training unless you have a specific reason to use near-identity.
+    ///
+    /// [`new_balanced`]: MhcLiteN2::new_balanced
+    pub fn new_near_identity() -> Self {
+        Self {
+            alpha_logit: 5.0,
             pre_logits: [0.0, 0.0],
             pre_bias: [0.5, 0.5],
             post_logits: [0.0, 0.0],
@@ -112,7 +150,37 @@ impl MhcLiteN2 {
     pub fn h_res(&self) -> [[f32; 2]; 2] {
         let alpha = sigmoid(self.alpha_logit);
         let beta = 1.0 - alpha;
-        [[alpha, beta], [beta, alpha]]
+        let mat = [[alpha, beta], [beta, alpha]];
+
+        // Verify doubly stochastic invariants in debug builds.
+        // Compiled out in release; catches bugs during development.
+        debug_assert!(
+            mat.iter().flatten().all(|&v| v >= 0.0),
+            "h_res has negative entries: {:?}",
+            mat
+        );
+        debug_assert!(
+            {
+                let r0 = mat[0][0] + mat[0][1];
+                let r1 = mat[1][0] + mat[1][1];
+                (r0 - 1.0).abs() < 1e-5 && (r1 - 1.0).abs() < 1e-5
+            },
+            "h_res row sums != 1.0: [{}, {}]",
+            mat[0][0] + mat[0][1],
+            mat[1][0] + mat[1][1]
+        );
+        debug_assert!(
+            {
+                let c0 = mat[0][0] + mat[1][0];
+                let c1 = mat[0][1] + mat[1][1];
+                (c0 - 1.0).abs() < 1e-5 && (c1 - 1.0).abs() < 1e-5
+            },
+            "h_res col sums != 1.0: [{}, {}]",
+            mat[0][0] + mat[1][0],
+            mat[0][1] + mat[1][1]
+        );
+
+        mat
     }
 
     /// Compute H_pre (2-element non-negative vector)
@@ -461,6 +529,40 @@ mod tests {
                 collapsed[i]
             );
         }
+    }
+
+    #[test]
+    fn test_n2_new_balanced() {
+        let mhc = MhcLiteN2::new_balanced();
+        let h = mhc.h_res();
+        // Should be 50/50 mix
+        assert!((h[0][0] - 0.5).abs() < 1e-6);
+        assert!((h[0][1] - 0.5).abs() < 1e-6);
+        verify_doubly_stochastic_2x2(&h, 1e-6).unwrap();
+    }
+
+    #[test]
+    fn test_n2_new_near_identity() {
+        let mhc = MhcLiteN2::new_near_identity();
+        let h = mhc.h_res();
+        // Should be near-identity: diagonal > 0.99
+        assert!(h[0][0] > 0.99, "diagonal should be > 0.99, got {}", h[0][0]);
+        assert!(h[1][1] > 0.99, "diagonal should be > 0.99, got {}", h[1][1]);
+        // Off-diagonal should be near zero
+        assert!(h[0][1] < 0.01, "off-diagonal should be < 0.01, got {}", h[0][1]);
+        verify_doubly_stochastic_2x2(&h, 1e-6).unwrap();
+    }
+
+    #[test]
+    fn test_n2_new_identity_is_new_balanced() {
+        // Verify that new_identity() delegates to new_balanced()
+        let identity = MhcLiteN2::new_identity();
+        let balanced = MhcLiteN2::new_balanced();
+        assert_eq!(identity.alpha_logit, balanced.alpha_logit);
+        assert_eq!(identity.pre_logits, balanced.pre_logits);
+        assert_eq!(identity.pre_bias, balanced.pre_bias);
+        assert_eq!(identity.post_logits, balanced.post_logits);
+        assert_eq!(identity.post_bias, balanced.post_bias);
     }
 
     #[test]

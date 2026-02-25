@@ -158,23 +158,29 @@ impl InferenceEngine {
         }
 
         // Prefix caching logic: find common prefix with last processed prompt
-        let mut common_prefix_len = 0;
         let cache_len = self.model.get_cache_len();
-        for (a, b) in self.last_prompt.iter().zip(prompt_ids.iter()) {
-            if a == b {
-                common_prefix_len += 1;
-            } else {
-                break;
+        let mut common_prefix_len = 0;
+
+        // Only attempt prefix reuse if the cache state is consistent:
+        // cache_len must be <= last_prompt length (otherwise the cache has
+        // entries we can't verify against our token history).
+        if cache_len > 0 && cache_len <= self.last_prompt.len() {
+            for (a, b) in self.last_prompt.iter().zip(prompt_ids.iter()) {
+                if a == b {
+                    common_prefix_len += 1;
+                } else {
+                    break;
+                }
             }
+            // Cannot reuse more than what's currently in the model's cache
+            common_prefix_len = common_prefix_len.min(cache_len);
         }
-        // Cannot reuse more than what's currently in the model's cache
-        common_prefix_len = common_prefix_len.min(cache_len);
 
         if common_prefix_len > 0 {
             // Rewind model state to the end of the common prefix
             self.model.rewind_caches(common_prefix_len);
         } else {
-            // No usable prefix, full reset
+            // No usable prefix or inconsistent cache state — full reset
             self.model.reset_caches();
         }
 
@@ -594,20 +600,27 @@ impl NumaInferenceEngine {
         }
 
         // Prefix caching: find common prefix with last processed prompt
-        let mut common_prefix_len = 0;
         let cache_len = self.model.get_cache_len();
-        for (a, b) in self.last_prompt.iter().zip(prompt_ids.iter()) {
-            if a == b {
-                common_prefix_len += 1;
-            } else {
-                break;
+        let mut common_prefix_len = 0;
+
+        // Only attempt prefix reuse if the cache state is consistent:
+        // cache_len must be <= last_prompt length (otherwise the cache has
+        // entries we can't verify against our token history).
+        if cache_len > 0 && cache_len <= self.last_prompt.len() {
+            for (a, b) in self.last_prompt.iter().zip(prompt_ids.iter()) {
+                if a == b {
+                    common_prefix_len += 1;
+                } else {
+                    break;
+                }
             }
+            common_prefix_len = common_prefix_len.min(cache_len);
         }
-        common_prefix_len = common_prefix_len.min(cache_len);
 
         if common_prefix_len > 0 {
             self.model.rewind_caches(common_prefix_len);
         } else {
+            // No usable prefix or inconsistent cache state — full reset
             self.model.reset_caches();
         }
 

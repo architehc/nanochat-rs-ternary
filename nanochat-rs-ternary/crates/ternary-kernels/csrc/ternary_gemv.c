@@ -228,6 +228,11 @@ void gemv_lut_grouped(const uint8_t * restrict data, const float * restrict scal
                       float * restrict y, int M, int K, int gs) {
     int kp = K / 4, gprow = K / gs, gpp = gs / 4;
     int16_t *luts = (int16_t *)malloc((size_t)kp * 256 * sizeof(int16_t));
+    if (!luts) {
+        fprintf(stderr, "FATAL: malloc failed for LUT buffer (%zu bytes)\n",
+                (size_t)kp * 256 * sizeof(int16_t));
+        abort();
+    }
     for (int cg = 0; cg < kp; cg++) {
         int b = cg * 4;
         int16_t a0 = x[b], a1 = x[b+1], a2 = x[b+2], a3 = x[b+3];
