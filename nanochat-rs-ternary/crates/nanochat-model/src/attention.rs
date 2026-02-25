@@ -371,6 +371,7 @@ mod tests {
             config.rope_scale,
         );
         let dim = config.dim;
+        let kv_dim = config.n_kv_heads * config.head_dim();
         let seq_len = 4;
 
         // Create input: seq_len tokens
@@ -381,26 +382,55 @@ mod tests {
             }
         }
 
+        // Workspace buffers for single-token forward
+        let mut q_ws = vec![0.0f32; dim];
+        let mut k_ws = vec![0.0f32; kv_dim];
+        let mut v_ws = vec![0.0f32; kv_dim];
+        let mut attn_out_ws = vec![0.0f32; dim];
+        let max_cols = dim.max(kv_dim);
+        let mut x_q_ws = vec![0i8; max_cols];
+
         // Sequential forward (reference)
         let mut cache_seq = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
         let mut out_seq_all = vec![0.0f32; seq_len * dim];
         for t in 0..seq_len {
             let x = &x_batch[t * dim..(t + 1) * dim];
             let out = &mut out_seq_all[t * dim..(t + 1) * dim];
-            attn.forward(x, &mut cache_seq, &rope, t, out);
+            let mut scores_ws = vec![0.0f32; cache_seq.len + 1];
+            attn.forward_with_workspace(
+                x, &mut cache_seq, &rope, t, out,
+                &mut q_ws, &mut k_ws, &mut v_ws, &mut attn_out_ws, &mut scores_ws, &mut x_q_ws,
+            );
         }
+
+        // Workspace buffers for batch forward (separate from single-token workspaces)
+        let mut all_q_ws = vec![0.0f32; seq_len * dim];
+        let mut all_k_ws = vec![0.0f32; seq_len * kv_dim];
+        let mut all_v_ws = vec![0.0f32; seq_len * kv_dim];
+        let mut batch_attn_out_ws = vec![0.0f32; seq_len * dim];
+        let mut scores_batch_ws = vec![0.0f32; seq_len];
+        let mut scales_ws = vec![0.0f32; seq_len];
+        // Batch x_q workspace: sized for seq_len tokens at max_cols each
+        let mut x_q_batch_ws = vec![0i8; seq_len * max_cols];
 
         // Batched forward
         let mut cache_batch =
             KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
         let mut out_batch = vec![0.0f32; seq_len * dim];
-        attn.forward_batch(
+        attn.forward_batch_with_workspaces(
             &x_batch,
             seq_len,
             &mut cache_batch,
             &rope,
             0,
             &mut out_batch,
+            &mut all_q_ws,
+            &mut all_k_ws,
+            &mut all_v_ws,
+            &mut batch_attn_out_ws,
+            &mut scores_batch_ws,
+            &mut x_q_batch_ws,
+            &mut scales_ws,
         );
 
         // Compare: each token's output should match
@@ -430,13 +460,25 @@ mod tests {
             config.rope_theta,
             config.rope_scale,
         );
+        let dim = config.dim;
+        let kv_dim = config.n_kv_heads * config.head_dim();
         let mut cache = KvCache::new(config.max_seq_len, config.n_kv_heads, config.head_dim());
 
-        let x = vec![0.1f32; config.dim];
-        let mut out = vec![0.0f32; config.dim];
+        let x = vec![0.1f32; dim];
+        let mut out = vec![0.0f32; dim];
+        let mut q_ws = vec![0.0f32; dim];
+        let mut k_ws = vec![0.0f32; kv_dim];
+        let mut v_ws = vec![0.0f32; kv_dim];
+        let mut attn_out_ws = vec![0.0f32; dim];
+        let mut scores_ws = vec![0.0f32; 1]; // cache.len + 1 = 0 + 1
+        let max_cols = dim.max(kv_dim);
+        let mut x_q_ws = vec![0i8; max_cols];
 
         // Single token at position 0
-        attn.forward(&x, &mut cache, &rope, 0, &mut out);
+        attn.forward_with_workspace(
+            &x, &mut cache, &rope, 0, &mut out,
+            &mut q_ws, &mut k_ws, &mut v_ws, &mut attn_out_ws, &mut scores_ws, &mut x_q_ws,
+        );
         assert!(
             out.iter().all(|v| v.is_finite()),
             "non-finite attention output"

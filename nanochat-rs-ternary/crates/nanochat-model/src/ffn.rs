@@ -42,7 +42,9 @@ impl FeedForward {
     pub fn forward(&self, x: &[f32], out: &mut [f32]) {
         let mut gate = vec![0.0f32; self.ffn_dim];
         let mut up = vec![0.0f32; self.ffn_dim];
-        let mut x_q = vec![0i8; self.w_gate.cols];
+        // Workspace must be large enough for both w_gate/w_up (cols=dim) and w_down (cols=ffn_dim)
+        let max_cols = self.w_gate.cols.max(self.w_down.cols);
+        let mut x_q = vec![0i8; max_cols];
         self.forward_with_workspace(x, out, &mut gate, &mut up, &mut x_q);
     }
 
@@ -258,7 +260,8 @@ impl FfnLayer {
             FfnLayer::Dense(ffn) => {
                 let mut gate = vec![0.0f32; ffn.ffn_dim];
                 let mut up = vec![0.0f32; ffn.ffn_dim];
-                let mut x_q = vec![0i8; ffn.w_gate.cols];
+                let max_cols = ffn.w_gate.cols.max(ffn.w_down.cols);
+                let mut x_q = vec![0i8; max_cols];
                 ffn.forward_with_workspace(x, out, &mut gate, &mut up, &mut x_q)
             }
             FfnLayer::Moe(moe) => moe.forward(x, out),

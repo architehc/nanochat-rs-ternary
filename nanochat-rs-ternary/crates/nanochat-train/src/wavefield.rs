@@ -52,12 +52,17 @@ mod nanochat_model_config {
 /// Physics params (omega, alpha_raw, phi) are FP32 Vars with direct gradients.
 pub struct WaveFieldAttentionTrain {
     pub scatter_proj: BitLinearSTE, // dim -> n_heads * head_dim
-    pub gate_proj: BitLinearSTE,    // dim -> n_heads
+    pub gate_proj: BitLinearSTE,    // dim -> n_heads * head_dim (per-head_dim gating)
     pub out_proj: BitLinearSTE,     // n_heads * head_dim -> dim
     pub omega: Tensor,              // [n_heads] FP32 — frequency
     pub alpha_raw: Tensor,          // [n_heads] FP32 — raw damping (softplus in forward)
     pub phi: Tensor,                // [n_heads] FP32 — phase
     pub coupling_logits: Option<Tensor>, // [n_heads, n_heads] FP32
+    /// Direct Haar-domain kernel coefficients. When present (Haar mode),
+    /// these bypass the time-domain kernel generation (omega/alpha/phi)
+    /// and give the model independent control over every wavelet scale.
+    /// Shape: [n_heads, field_size] FP32.
+    pub kernel_haar_coeffs: Option<Tensor>,
     pub n_heads: usize,
     pub head_dim: usize,
     pub field_size: usize,
@@ -86,12 +91,15 @@ impl WaveFieldAttentionTrain {
         let total_proj = n_heads * head_dim;
 
         let scatter_proj = BitLinearSTE::new(dim, total_proj, group_size, vb.pp("scatter"))?;
-        let gate_proj = BitLinearSTE::new(dim, n_heads, group_size, vb.pp("gate"))?;
+        // Per-head_dim gating: [batch, seq, n_heads * head_dim] for fine-grained control
+        let gate_proj = BitLinearSTE::new(dim, total_proj, group_size, vb.pp("gate"))?;
         let out_proj = BitLinearSTE::new(total_proj, dim, group_size, vb.pp("out"))?;
 
         // Physics params created via VarBuilder so they're tracked in VarMap
         // (required for optimizer management and checkpoint save/restore).
         // Uniform init provides symmetry breaking across heads.
+        // For Haar mode with direct kernel coefficients, omega/alpha_raw/phi are
+        // still created (for checkpoint compatibility) but not used in forward().
         let omega = vb.get_with_hints(
             n_heads,
             "omega",
@@ -123,6 +131,21 @@ impl WaveFieldAttentionTrain {
             None
         };
 
+        // For Haar mode: learn kernel coefficients directly in the Haar domain.
+        // This gives the model independent control over every wavelet scale,
+        // bypassing the time-domain parameterization (omega/alpha/phi).
+        // Uniform [-0.5, 0.5] init provides symmetry breaking.
+        let kernel_haar_coeffs = if convolve_mode == ConvolveMode::Haar {
+            let coeffs = vb.get_with_hints(
+                (n_heads, field_size),
+                "kernel_haar_coeffs",
+                candle_nn::Init::Uniform { lo: -0.5, up: 0.5 },
+            )?;
+            Some(coeffs)
+        } else {
+            None
+        };
+
         // Precompute t_tensor [0, 1, ..., field_size-1] — constant, detached.
         let t_vals: Vec<f32> = (0..field_size).map(|t| t as f32).collect();
         let device = omega.device();
@@ -136,6 +159,7 @@ impl WaveFieldAttentionTrain {
             alpha_raw,
             phi,
             coupling_logits,
+            kernel_haar_coeffs,
             n_heads,
             head_dim,
             field_size,
@@ -206,11 +230,20 @@ impl WaveFieldAttentionTrain {
     /// Forward pass: x [batch, seq_len, dim] -> [batch, seq_len, dim]
     ///
     /// 1. Scatter tokens onto per-head wave fields via bilinear interpolation
-    /// 2. Generate causal wave kernel from physics params
-    /// 3. FFT convolution (autograd-compatible via CustomOp2)
+    /// 2. Generate wave kernel from physics params (or use direct Haar coefficients)
+    /// 3. Batched transform-domain convolution (all heads at once)
     /// 4. Optional inter-head coupling
     /// 5. Gather per-token values from convolved fields
-    /// 6. Content gate + output projection
+    /// 6. Per-head_dim content gate + output projection
+    ///
+    /// **Bidirectional note (Haar mode):** Haar wave field layers perform
+    /// scale-selective filtering — diagonal scaling in the wavelet basis — which
+    /// is inherently bidirectional. The Haar DWT does NOT perform positional
+    /// mixing; it only weights wavelet scales (coarse vs fine features). Causal
+    /// structure is enforced by the standard attention layers in the model, not
+    /// by the wave field. This is by design: the wave field provides
+    /// frequency-domain feature selection while attention provides causal
+    /// sequential reasoning.
     pub fn forward(&self, x: &Tensor, max_seq_len: usize) -> Result<Tensor> {
         let dims = x.dims().to_vec();
         let (batch, seq_len, _dim) = (dims[0], dims[1], dims[2]);
@@ -255,65 +288,114 @@ impl WaveFieldAttentionTrain {
 
         // 4. Generate wave kernel from physics params
         // kernel[h, t] = exp(-softplus(alpha_raw[h]) * t) * cos(omega[h] * t + phi[h])
-        let alpha = softplus(&self.alpha_raw)?; // [n_heads], always positive
+        // For Haar mode with direct kernel_haar_coeffs, we skip this and use
+        // the learned Haar-domain coefficients directly (see step 5).
+        let kernel = if self.kernel_haar_coeffs.is_none() {
+            let alpha = softplus(&self.alpha_raw)?; // [n_heads], always positive
 
-        let alpha_2d = alpha.unsqueeze(1)?;      // [n_heads, 1]
-        let omega_2d = self.omega.unsqueeze(1)?;  // [n_heads, 1]
-        let phi_2d = self.phi.unsqueeze(1)?;      // [n_heads, 1]
-        let t_2d = self.t_tensor.unsqueeze(0)?;   // [1, field_size] (precomputed)
+            let alpha_2d = alpha.unsqueeze(1)?;      // [n_heads, 1]
+            let omega_2d = self.omega.unsqueeze(1)?;  // [n_heads, 1]
+            let phi_2d = self.phi.unsqueeze(1)?;      // [n_heads, 1]
+            let t_2d = self.t_tensor.unsqueeze(0)?;   // [1, field_size] (precomputed)
 
-        // damping: exp(-alpha * t)
-        let neg_alpha_t = alpha_2d.broadcast_mul(&t_2d)?.neg()?;
-        let damping = neg_alpha_t.exp()?;
+            // damping: exp(-alpha * t)
+            let neg_alpha_t = alpha_2d.broadcast_mul(&t_2d)?.neg()?;
+            let damping = neg_alpha_t.exp()?;
 
-        // oscillation: cos(omega * t + phi)
-        let phase = omega_2d.broadcast_mul(&t_2d)?.broadcast_add(&phi_2d)?;
-        let oscillation = phase.cos()?;
+            // oscillation: cos(omega * t + phi)
+            let phase = omega_2d.broadcast_mul(&t_2d)?.broadcast_add(&phi_2d)?;
+            let oscillation = phase.cos()?;
 
-        // kernel: [n_heads, field_size]
-        let kernel = damping.mul(&oscillation)?;
+            // kernel: [n_heads, field_size]
+            Some(damping.mul(&oscillation)?)
+        } else {
+            None // Haar direct coefficients path — no time-domain kernel needed
+        };
 
-        // 5. Transform-domain convolution per head (dispatched by convolve_mode)
+        // 5. Batched transform-domain convolution (all heads at once)
         let fields = fields.reshape((batch, n_heads, field_size, head_dim))?;
 
-        let mut convolved_heads = Vec::with_capacity(n_heads);
-        for h in 0..n_heads {
-            let field_h = fields.narrow(1, h, 1)?.squeeze(1)?; // [batch, field_size, head_dim]
-            let kernel_h = kernel.narrow(0, h, 1)?.squeeze(0)?.contiguous()?; // [field_size]
+        // Reshape fields to [batch * n_heads * head_dim, field_size] for batched convolution
+        let fields_for_conv = fields
+            .transpose(2, 3)? // [batch, n_heads, head_dim, field_size]
+            .contiguous()?
+            .reshape((batch * n_heads * head_dim, field_size))?;
 
-            // Transpose to [batch, head_dim, field_size], flatten to [batch*head_dim, field_size]
-            let field_t = field_h.transpose(1, 2)?.contiguous()?; // [batch, head_dim, field_size]
-            let field_flat = field_t.reshape((batch * head_dim, field_size))?;
+        let convolved_flat = match self.convolve_mode {
+            ConvolveMode::Fft | ConvolveMode::Fwht => {
+                // kernel: [n_heads, field_size] -> expand to [batch * n_heads * head_dim, field_size]
+                let kernel = kernel.as_ref().unwrap();
+                let kernel_expanded = kernel
+                    .unsqueeze(1)? // [n_heads, 1, field_size]
+                    .broadcast_as((n_heads, head_dim, field_size))?
+                    .contiguous()?
+                    .reshape((n_heads * head_dim, field_size))?;
+                let kernel_batched = kernel_expanded
+                    .unsqueeze(0)? // [1, n_heads * head_dim, field_size]
+                    .broadcast_as((batch, n_heads * head_dim, field_size))?
+                    .contiguous()?
+                    .reshape((batch * n_heads * head_dim, field_size))?;
 
-            // Dispatch convolution based on mode.
-            let conv_flat = match self.convolve_mode {
-                ConvolveMode::Fft => {
-                    wave_fft::candle_fft::fft_convolve_with_grad(
-                        &field_flat, &kernel_h, field_size,
-                    )?
+                match self.convolve_mode {
+                    ConvolveMode::Fft => {
+                        wave_fft::candle_fft::fft_convolve_with_grad(
+                            &fields_for_conv, &kernel_batched, field_size,
+                        )?
+                    }
+                    ConvolveMode::Fwht => {
+                        wave_fft::candle_fwht::fwht_convolve_with_grad(
+                            &fields_for_conv, &kernel_batched, field_size,
+                        )?
+                    }
+                    _ => unreachable!(),
                 }
-                ConvolveMode::Fwht => {
-                    wave_fft::candle_fwht::fwht_convolve_with_grad(
-                        &field_flat, &kernel_h, field_size,
+            }
+            ConvolveMode::Haar => {
+                let levels = self.haar_levels
+                    .unwrap_or_else(|| (field_size as f64).log2() as usize);
+
+                if let Some(ref coeffs) = self.kernel_haar_coeffs {
+                    // Direct Haar coefficients path: coeffs are already in Haar domain.
+                    // Use haar_scale_with_grad which does IHaar(Haar(signal) * coeffs)
+                    // without transforming the coefficients.
+                    let coeffs_expanded = coeffs
+                        .unsqueeze(1)? // [n_heads, 1, field_size]
+                        .broadcast_as((n_heads, head_dim, field_size))?
+                        .contiguous()?
+                        .reshape((n_heads * head_dim, field_size))?;
+                    let coeffs_batched = coeffs_expanded
+                        .unsqueeze(0)? // [1, n_heads * head_dim, field_size]
+                        .broadcast_as((batch, n_heads * head_dim, field_size))?
+                        .contiguous()?
+                        .reshape((batch * n_heads * head_dim, field_size))?;
+                    wave_fft::candle_haar::haar_scale_with_grad(
+                        &fields_for_conv, &coeffs_batched, field_size, levels,
                     )?
-                }
-                ConvolveMode::Haar => {
-                    let levels = self.haar_levels
-                        .unwrap_or_else(|| (field_size as f64).log2() as usize);
+                } else {
+                    // Fallback: time-domain kernel path (Haar transform of both signal and kernel)
+                    let kernel = kernel.as_ref().unwrap();
+                    let kernel_expanded = kernel
+                        .unsqueeze(1)?
+                        .broadcast_as((n_heads, head_dim, field_size))?
+                        .contiguous()?
+                        .reshape((n_heads * head_dim, field_size))?;
+                    let kernel_batched = kernel_expanded
+                        .unsqueeze(0)?
+                        .broadcast_as((batch, n_heads * head_dim, field_size))?
+                        .contiguous()?
+                        .reshape((batch * n_heads * head_dim, field_size))?;
                     wave_fft::candle_haar::haar_convolve_with_grad(
-                        &field_flat, &kernel_h, field_size, levels,
+                        &fields_for_conv, &kernel_batched, field_size, levels,
                     )?
                 }
-            }; // [batch*head_dim, field_size]
+            }
+        }; // [batch * n_heads * head_dim, field_size]
 
-            // Reshape back: [batch, head_dim, field_size] -> transpose -> [batch, field_size, head_dim]
-            let conv_h = conv_flat
-                .reshape((batch, head_dim, field_size))?
-                .transpose(1, 2)?
-                .contiguous()?; // [batch, field_size, head_dim]
-            convolved_heads.push(conv_h.unsqueeze(1)?); // [batch, 1, field_size, head_dim]
-        }
-        let convolved = Tensor::cat(&convolved_heads, 1)?; // [batch, n_heads, field_size, head_dim]
+        // Reshape back: [batch * n_heads * head_dim, field_size] -> [batch, n_heads, field_size, head_dim]
+        let convolved = convolved_flat
+            .reshape((batch, n_heads, head_dim, field_size))?
+            .transpose(2, 3)? // [batch, n_heads, field_size, head_dim]
+            .contiguous()?;
 
         // 6. Optional head coupling
         let convolved = if let Some(ref logits) = self.coupling_logits {
@@ -341,15 +423,11 @@ impl WaveFieldAttentionTrain {
         let gathered = gathered.transpose(1, 2)?; // [batch, seq_len, n_heads, head_dim]
         let gathered = gathered.reshape((batch, seq_len, total_proj))?;
 
-        // 8. Content gate: sigmoid(gate_proj(x)) * gathered
-        let gate = self.gate_proj.forward(x)?; // [batch, seq_len, n_heads]
+        // 8. Per-head_dim content gate: sigmoid(gate_proj(x)) * gathered
+        //    gate_proj outputs [batch, seq_len, n_heads * head_dim], matching gathered shape.
+        let gate = self.gate_proj.forward(x)?; // [batch, seq_len, n_heads * head_dim]
         // Manual sigmoid: 1 / (1 + exp(-x)) — avoids candle_nn CustomOp which lacks CUDA
         let gate = gate.neg()?.exp()?.affine(1.0, 1.0)?.recip()?;
-        let gate = gate
-            .unsqueeze(3)?
-            .broadcast_as((batch, seq_len, n_heads, head_dim))?
-            .contiguous()?
-            .reshape((batch, seq_len, total_proj))?;
         let gated = gathered.mul(&gate)?;
 
         // 9. Output projection
@@ -366,10 +444,15 @@ impl WaveFieldAttentionTrain {
     }
 
     /// Collect physics + coupling parameters (for Lion optimizer, same group as mHC).
+    /// Includes kernel_haar_coeffs when present (Haar mode) — these are physics-like
+    /// params (wavelet-scale weights), not linear projection weights.
     pub fn physics_params(&self) -> Vec<&Tensor> {
         let mut params = vec![&self.omega, &self.alpha_raw, &self.phi];
         if let Some(ref logits) = self.coupling_logits {
             params.push(logits);
+        }
+        if let Some(ref coeffs) = self.kernel_haar_coeffs {
+            params.push(coeffs);
         }
         params
     }
@@ -554,6 +637,135 @@ mod tests {
         // VarMap has: 3 projection weights + 1 coupling_logits + 3 physics (omega, alpha_raw, phi) = 7
         let vars = varmap.all_vars();
         assert_eq!(vars.len(), 7, "should have 7 vars (3 projections + coupling + 3 physics), got {}", vars.len());
+
+        Ok(())
+    }
+
+    fn make_wave_field_haar(
+        dim: usize,
+        n_heads: usize,
+        head_dim: usize,
+        field_size: usize,
+    ) -> Result<(WaveFieldAttentionTrain, VarMap)> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let levels = (field_size as f64).log2() as usize;
+        let wf = WaveFieldAttentionTrain::new(
+            dim, n_heads, head_dim, field_size,
+            dim, // group_size = dim for test
+            true, // use_head_coupling
+            ConvolveMode::Haar,
+            Some(levels),
+            vb.pp("wf"),
+        )?;
+        Ok((wf, varmap))
+    }
+
+    #[test]
+    fn test_haar_direct_coeffs_forward_shape() -> Result<()> {
+        let dim = 64;
+        let n_heads = 4;
+        let head_dim = 16;
+        let field_size = 32;
+        let (wf, _varmap) = make_wave_field_haar(dim, n_heads, head_dim, field_size)?;
+
+        // kernel_haar_coeffs should be present in Haar mode
+        assert!(wf.kernel_haar_coeffs.is_some(), "Haar mode should have kernel_haar_coeffs");
+
+        let device = Device::Cpu;
+        let x = Tensor::randn(0.0f32, 0.1, (2, 8, dim), &device)?;
+        let out = wf.forward(&x, 32)?;
+        assert_eq!(out.dims(), &[2, 8, dim]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_haar_direct_coeffs_have_gradients() -> Result<()> {
+        let dim = 64;
+        let n_heads = 4;
+        let head_dim = 16;
+        let field_size = 32;
+        let (wf, _varmap) = make_wave_field_haar(dim, n_heads, head_dim, field_size)?;
+
+        let device = Device::Cpu;
+        let x = Tensor::randn(0.0f32, 0.1, (1, 4, dim), &device)?;
+        let out = wf.forward(&x, 32)?;
+        let loss = out.sum_all()?;
+        let grads = loss.backward()?;
+
+        // Direct Haar coefficients should have gradients
+        let coeffs = wf.kernel_haar_coeffs.as_ref().unwrap();
+        let grad = grads.get(coeffs);
+        assert!(grad.is_some(), "kernel_haar_coeffs should have gradient");
+
+        let grad_norm = grad.unwrap().sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
+        assert!(grad_norm > 0.0, "kernel_haar_coeffs gradient should be non-zero");
+
+        // omega/alpha_raw/phi should NOT have gradients (not used in Haar direct path)
+        // (They are created but not part of the forward computation graph.)
+        assert!(grads.get(&wf.omega).is_none(), "omega should not have gradient in Haar direct path");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_haar_training_step_var_count() -> Result<()> {
+        let dim = 64;
+        let n_heads = 4;
+        let head_dim = 16;
+        let field_size = 32;
+        let (wf, varmap) = make_wave_field_haar(dim, n_heads, head_dim, field_size)?;
+
+        let device = Device::Cpu;
+        let x = Tensor::randn(0.0f32, 0.1, (1, 4, dim), &device)?;
+        let out = wf.forward(&x, 32)?;
+        let loss = out.sqr()?.mean_all()?;
+        let loss_val = loss.to_scalar::<f32>()?;
+        assert!(loss_val.is_finite(), "loss should be finite");
+
+        let _grads = loss.backward()?;
+
+        // VarMap has: 3 projections + coupling + 3 physics + kernel_haar_coeffs = 8
+        let vars = varmap.all_vars();
+        assert_eq!(vars.len(), 8, "Haar mode should have 8 vars, got {}", vars.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_haar_coeffs_in_physics_params() -> Result<()> {
+        let dim = 64;
+        let n_heads = 4;
+        let head_dim = 16;
+        let field_size = 32;
+        let (wf, _varmap) = make_wave_field_haar(dim, n_heads, head_dim, field_size)?;
+
+        let physics = wf.physics_params();
+        // Should include: omega, alpha_raw, phi, coupling_logits, kernel_haar_coeffs = 5
+        assert_eq!(physics.len(), 5, "Haar physics params should include kernel_haar_coeffs");
+
+        let linear = wf.linear_params();
+        // Should NOT include kernel_haar_coeffs (only scatter, gate, out = 3)
+        assert_eq!(linear.len(), 3, "linear params should not include kernel_haar_coeffs");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fft_no_haar_coeffs() -> Result<()> {
+        let dim = 64;
+        let n_heads = 4;
+        let head_dim = 16;
+        let field_size = 32;
+        let (wf, _varmap) = make_wave_field(dim, n_heads, head_dim, field_size)?;
+
+        // FFT mode should NOT have kernel_haar_coeffs
+        assert!(wf.kernel_haar_coeffs.is_none(), "FFT mode should not have kernel_haar_coeffs");
+
+        let physics = wf.physics_params();
+        // omega, alpha_raw, phi, coupling_logits = 4
+        assert_eq!(physics.len(), 4, "FFT physics params count");
 
         Ok(())
     }

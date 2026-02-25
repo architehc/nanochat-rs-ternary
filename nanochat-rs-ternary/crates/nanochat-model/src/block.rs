@@ -324,7 +324,13 @@ impl TransformerBlock {
         ffn_in.resize(dim, 0.0);
         ffn_out.resize(dim, 0.0);
         residual_tmp.resize(x_expanded.len(), 0.0);
-        x_q_token.resize(dim, 0);
+        // x_q_token is shared between attention (cols=dim) and FFN (cols=ffn_dim).
+        // Resize to the maximum required to avoid workspace size mismatch.
+        let ffn_max_cols = match &self.ffn {
+            FfnLayer::Dense(ffn) => ffn.w_gate.cols.max(ffn.w_down.cols),
+            FfnLayer::Moe(_) => dim, // MoE doesn't use shared workspace
+        };
+        x_q_token.resize(dim.max(ffn_max_cols), 0);
 
         // === Attention sub-layer ===
         // 1. Prepare input: mix streams -> single
@@ -449,7 +455,13 @@ impl TransformerBlock {
         ffn_out_batch.resize(batch_len, 0.0);
         residual_tmp.resize(exp_dim, 0.0);
         
-        let x_q_len = seq_len * dim;
+        // x_q_batch is shared between attention (cols=dim) and FFN (cols=ffn_dim).
+        // Size to the maximum required to avoid workspace mismatch.
+        let ffn_max_cols = match &self.ffn {
+            FfnLayer::Dense(ffn) => ffn.w_gate.cols.max(ffn.w_down.cols),
+            FfnLayer::Moe(_) => dim,
+        };
+        let x_q_len = seq_len * dim.max(ffn_max_cols);
         x_q_batch.resize(x_q_len, 0);
         scales_batch.resize(seq_len, 0.0);
 
@@ -615,6 +627,12 @@ impl TransformerBlock {
                             field_size: *field_size,
                             levels: *levels,
                         },
+                        WaveKernelCache::HaarDirect { kernels_haar, n_heads, field_size, levels } => WaveKernelCache::HaarDirect {
+                            kernels_haar: kernels_haar.clone(),
+                            n_heads: *n_heads,
+                            field_size: *field_size,
+                            levels: *levels,
+                        },
                     },
                     a.n_heads,
                     a.head_dim,
@@ -704,6 +722,12 @@ impl Clone for TransformerBlock {
                             field_size: *field_size,
                         },
                         WaveKernelCache::Haar { kernels_haar, n_heads, field_size, levels } => WaveKernelCache::Haar {
+                            kernels_haar: kernels_haar.clone(),
+                            n_heads: *n_heads,
+                            field_size: *field_size,
+                            levels: *levels,
+                        },
+                        WaveKernelCache::HaarDirect { kernels_haar, n_heads, field_size, levels } => WaveKernelCache::HaarDirect {
                             kernels_haar: kernels_haar.clone(),
                             n_heads: *n_heads,
                             field_size: *field_size,

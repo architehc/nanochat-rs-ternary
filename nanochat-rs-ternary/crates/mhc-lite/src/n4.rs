@@ -683,13 +683,13 @@ mod tests {
         let mhc = MhcLiteN4::new_identity();
         let h_post = mhc.h_post();
         assert_eq!(h_post.len(), 4);
-        // With default logits=0, bias=0.5: 2*sigmoid(0.5) ≈ 1.245
+        // With default logits=0, bias=0.5: 4*sigmoid(0.5) ≈ 2.49 (N=4 scale factor)
         for &v in &h_post {
             assert!(v > 0.0, "h_post should be positive, got {}", v);
-            assert!(v < 2.0, "h_post should be < 2.0, got {}", v);
+            assert!(v < 4.0, "h_post should be < 4.0, got {}", v);
             assert!(
-                (v - 1.245).abs() < 0.01,
-                "h_post ≈ 2*sigmoid(0.5) ≈ 1.245, got {}",
+                (v - 2.49).abs() < 0.01,
+                "h_post ≈ 4*sigmoid(0.5) ≈ 2.49, got {}",
                 v
             );
         }

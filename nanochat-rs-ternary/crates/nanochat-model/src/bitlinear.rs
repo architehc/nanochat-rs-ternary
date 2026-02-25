@@ -43,15 +43,23 @@ impl BitLinear {
     /// Forward pass with caller-provided INT8 workspace.
     ///
     /// Reuses `x_q_workspace` for activation quantization to avoid per-call
-    /// heap allocations in hot inference paths.
+    /// heap allocations in hot inference paths. The workspace may be larger than
+    /// `self.cols` (when shared across layers with different input dimensions);
+    /// only the first `self.cols` elements are used.
     pub fn forward_with_workspace(&self, x: &[f32], x_q_workspace: &mut [i8], out: &mut [f32]) {
         assert_eq!(x.len(), self.cols);
         assert_eq!(out.len(), self.rows);
-        assert_eq!(x_q_workspace.len(), self.cols);
+        assert!(
+            x_q_workspace.len() >= self.cols,
+            "x_q_workspace too small: {} < {}",
+            x_q_workspace.len(),
+            self.cols
+        );
 
-        // Per-token absmax quantization to INT8
-        let act_scale = quantize_activations_i8_into(x, x_q_workspace);
-        self.forward_quantized(x_q_workspace, act_scale, out);
+        // Per-token absmax quantization to INT8 (use only the needed prefix)
+        let x_q = &mut x_q_workspace[..self.cols];
+        let act_scale = quantize_activations_i8_into(x, x_q);
+        self.forward_quantized(x_q, act_scale, out);
     }
 
     /// Forward pass for already-quantized activations.
@@ -69,6 +77,11 @@ impl BitLinear {
     }
 
     /// Batched forward pass with caller-provided quantization and scale workspaces.
+    ///
+    /// The `x_q_batch` workspace may be larger than `seq_len * self.cols` when
+    /// shared across layers with different input dimensions (e.g., attention
+    /// projections with cols=dim and FFN w_down with cols=ffn_dim). Only the
+    /// first `seq_len * self.cols` elements are used.
     pub fn forward_batch_with_workspaces(
         &self,
         x_batch: &[f32],
@@ -79,17 +92,24 @@ impl BitLinear {
     ) {
         assert_eq!(x_batch.len(), seq_len * self.cols);
         assert_eq!(out_batch.len(), seq_len * self.rows);
-        assert_eq!(x_q_batch.len(), seq_len * self.cols);
+        assert!(
+            x_q_batch.len() >= seq_len * self.cols,
+            "x_q_batch too small: {} < {}",
+            x_q_batch.len(),
+            seq_len * self.cols
+        );
         assert_eq!(scales_batch.len(), seq_len);
 
+        let needed = seq_len * self.cols;
+        let x_q_slice = &mut x_q_batch[..needed];
         for t in 0..seq_len {
             let x = &x_batch[t * self.cols..(t + 1) * self.cols];
-            let x_q = &mut x_q_batch[t * self.cols..(t + 1) * self.cols];
+            let x_q = &mut x_q_slice[t * self.cols..(t + 1) * self.cols];
             scales_batch[t] = quantize_activations_i8_into(x, x_q);
         }
 
-        // Call parallel GEMM kernel
-        cpu::gemm(&self.pw, x_q_batch, scales_batch, out_batch);
+        // Call parallel GEMM kernel (use only the needed prefix of x_q_batch)
+        cpu::gemm(&self.pw, x_q_slice, scales_batch, out_batch);
     }
 
     /// Clone the layer and place the weight allocations on a specific NUMA node.

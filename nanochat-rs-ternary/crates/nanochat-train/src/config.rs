@@ -54,6 +54,14 @@ fn default_wavefield_ratio() -> f32 {
     1.0
 }
 
+fn default_wavefield_physics_lr() -> f64 {
+    5e-4 // Higher than mhc_lr (1e-4) — physics params need faster learning
+}
+
+fn default_wavefield_warmup_delay() -> usize {
+    0 // No delay by default; set >0 to freeze physics params during warmup
+}
+
 fn default_true() -> bool {
     true
 }
@@ -227,6 +235,23 @@ pub struct TrainConfig {
     /// Number of Haar decomposition levels (only for haar mode, None = max)
     #[serde(default)]
     pub wavefield_haar_levels: Option<usize>,
+
+    /// Separate learning rate for wavefield physics params (omega, alpha, phi, haar_coeffs).
+    /// Higher than mhc_lr because these params start random and need to find spectral profile quickly.
+    #[serde(default = "default_wavefield_physics_lr")]
+    pub wavefield_physics_lr: f64,
+
+    /// Delay (in steps) before wavefield physics params start learning.
+    /// During this period, physics params are frozen (LR=0) while scatter/gate/out projections
+    /// stabilize. Prevents kernel chasing a moving target during early training.
+    #[serde(default = "default_wavefield_warmup_delay")]
+    pub wavefield_warmup_delay: usize,
+
+    /// Use direct Haar-domain kernel coefficients instead of time-domain damped oscillator.
+    /// Only applies when wavefield_convolve_mode="haar". Gives the model independent control
+    /// over every wavelet scale and position. Recommended for Haar training.
+    #[serde(default = "default_true")]
+    pub wavefield_haar_direct: bool,
 }
 
 impl TrainConfig {
@@ -510,6 +535,9 @@ impl TrainConfig {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         }
     }
 
@@ -568,6 +596,9 @@ impl TrainConfig {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         }
     }
 
@@ -648,6 +679,9 @@ impl TrainConfig {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         }
     }
 
@@ -706,6 +740,9 @@ impl TrainConfig {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         }
     }
 
@@ -773,6 +810,9 @@ impl TrainConfig {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         }
     }
 
@@ -832,6 +872,9 @@ impl TrainConfig {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         }
     }
 
@@ -890,6 +933,9 @@ impl TrainConfig {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         }
     }
 
@@ -948,6 +994,9 @@ impl TrainConfig {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         }
     }
 
@@ -1006,6 +1055,9 @@ impl TrainConfig {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         }
     }
 
@@ -1068,18 +1120,22 @@ impl TrainConfig {
     }
 
     /// 125M with wave field attention using Haar (wavelet-basis scaling, integer-only).
+    /// Uses direct Haar-domain coefficients for maximum expressiveness.
     pub fn nano_125m_wavefield_haar() -> Self {
         let mut cfg = Self::nano_125m_wavefield();
         cfg.wavefield_convolve_mode = Some("haar".to_string());
-        // Use ~2/3 of max levels for a balance of local and global context
+        // Partial decomposition — drops uninformative global DC levels
         let max_levels = (cfg.wavefield_field_size as f64).log2() as usize;
-        cfg.wavefield_haar_levels = Some(max_levels.max(1));
+        cfg.wavefield_haar_levels = Some((max_levels - 2).max(1));
+        cfg.wavefield_haar_direct = true;
+        cfg.wavefield_physics_lr = 5e-4;
+        cfg.wavefield_warmup_delay = 100;
         cfg
     }
 
-    /// ~500M parameter hybrid: 75% Haar wave field + 25% standard attention.
-    /// Optimized for dual RTX 4090 (23GB each). Uses GQA 4:1 to reduce KV memory,
-    /// 8-bit optimizer + MTP for memory/data efficiency.
+    /// ~500M parameter hybrid: 50% Haar wave field + 50% standard attention (interleaved).
+    /// Optimized for RTX 4090 (23GB). Uses GQA 3:1 to reduce KV memory.
+    /// Haar layers provide bidirectional multi-scale context; standard attention handles causality.
     pub fn nano_500m_wave_haar() -> Self {
         Self {
             dim: 768,
@@ -1099,7 +1155,7 @@ impl TrainConfig {
             mhc_lr: 1e-4,
             weight_decay: 0.0,
             batch_size: 2,
-            grad_accum_steps: 1, // no accumulation — Candle autograd leaks with accumulation
+            grad_accum_steps: 4, // effective batch 8 — autograd leak fixed by detach_grad_store_inplace
             warmup_steps: 500,
             total_steps: 10_000,
             decay_start_frac: 0.8,
@@ -1114,8 +1170,8 @@ impl TrainConfig {
             galore_rank: 256,
             galore_update_freq: 200,
 
-            // Data efficiency
-            use_mtp: false,
+            // Data efficiency — MTP gives 15-20% boost for free
+            use_mtp: true,
             mtp_n_tokens: 3,
             mtp_weight: 0.2,
 
@@ -1135,14 +1191,17 @@ impl TrainConfig {
             distill_kl_weight: 0.0,
             loop_scale_penalty: 0.0,
 
-            // Wave field: 75% Haar, 25% standard attention
+            // Wave field: 50% Haar + 50% standard attention (interleaved)
             use_wave_field: true,
             wavefield_field_size: 256, // power-of-2, reduced for VRAM
             wavefield_n_heads: 0, // use n_heads (12)
             wavefield_head_coupling: true,
             wavefield_ratio: 0.5, // 8 wavefield + 8 standard layers
             wavefield_convolve_mode: Some("haar".to_string()),
-            wavefield_haar_levels: Some(8), // log2(256) = 8, full decomposition
+            wavefield_haar_levels: Some(6), // partial decomposition — drops uninformative global DC levels
+            wavefield_physics_lr: 5e-4, // faster than mhc_lr for spectral profile learning
+            wavefield_warmup_delay: 200, // freeze physics params for first 200 steps
+            wavefield_haar_direct: true, // direct Haar-domain coefficients (not time-domain kernel)
         }
     }
 

@@ -51,6 +51,14 @@ pub enum WaveKernelCache {
         field_size: usize,
         levels: usize,
     },
+    /// HaarDirect: Learned Haar-domain coefficients (no physics params needed).
+    /// [n_heads * field_size] — already in Haar basis.
+    HaarDirect {
+        kernels_haar: Vec<f32>,
+        n_heads: usize,
+        field_size: usize,
+        levels: usize,
+    },
 }
 
 impl WaveKernelCache {
@@ -122,6 +130,28 @@ impl WaveKernelCache {
         }
     }
 
+    /// Build Haar kernel cache from direct Haar-domain coefficients.
+    ///
+    /// Used when the model stores learned wavelet coefficients directly (no
+    /// physics params needed). The coefficients are already in the Haar basis.
+    pub fn from_haar_coeffs(coeffs: &[f32], n_heads: usize, field_size: usize, levels: usize) -> Self {
+        assert_eq!(
+            coeffs.len(),
+            n_heads * field_size,
+            "from_haar_coeffs: expected {} coeffs (n_heads={} * field_size={}), got {}",
+            n_heads * field_size,
+            n_heads,
+            field_size,
+            coeffs.len()
+        );
+        WaveKernelCache::HaarDirect {
+            kernels_haar: coeffs.to_vec(),
+            n_heads,
+            field_size,
+            levels,
+        }
+    }
+
     /// Build kernel cache from physics params, dispatching on convolve mode.
     pub fn from_physics(physics: &WavePhysicsParams, config: &WaveFieldConfig) -> Self {
         match config.convolve_mode {
@@ -140,6 +170,7 @@ impl WaveKernelCache {
             WaveKernelCache::Fft { n_heads, .. } => *n_heads,
             WaveKernelCache::Fwht { n_heads, .. } => *n_heads,
             WaveKernelCache::Haar { n_heads, .. } => *n_heads,
+            WaveKernelCache::HaarDirect { n_heads, .. } => *n_heads,
         }
     }
 
@@ -148,6 +179,7 @@ impl WaveKernelCache {
             WaveKernelCache::Fft { field_size, .. } => *field_size,
             WaveKernelCache::Fwht { field_size, .. } => *field_size,
             WaveKernelCache::Haar { field_size, .. } => *field_size,
+            WaveKernelCache::HaarDirect { field_size, .. } => *field_size,
         }
     }
 
@@ -176,6 +208,13 @@ impl WaveKernelCache {
                 wave_fft::cpu_fwht::fwht_convolve_precomputed(col_buf, kf, field_size)
             }
             WaveKernelCache::Haar { kernels_haar, levels, .. } => {
+                let kh_start = head * field_size;
+                let kh = &kernels_haar[kh_start..kh_start + field_size];
+                wave_fft::cpu_haar::haar_convolve_precomputed(col_buf, kh, field_size, *levels)
+            }
+            WaveKernelCache::HaarDirect { kernels_haar, levels, .. } => {
+                // HaarDirect coefficients are already in Haar domain — same
+                // convolution path as physics-derived Haar kernels.
                 let kh_start = head * field_size;
                 let kh = &kernels_haar[kh_start..kh_start + field_size];
                 wave_fft::cpu_haar::haar_convolve_precomputed(col_buf, kh, field_size, *levels)
@@ -307,7 +346,7 @@ struct WaveFieldWorkspace {
 #[derive(Debug)]
 pub struct WaveFieldAttention {
     pub scatter_proj: BitLinear, // dim -> n_heads * head_dim
-    pub gate_proj: BitLinear,    // dim -> n_heads
+    pub gate_proj: BitLinear,    // dim -> n_heads (legacy) or dim -> n_heads * head_dim (new)
     pub out_proj: BitLinear,     // n_heads * head_dim -> dim
     pub physics: WavePhysicsParams,
     pub coupling: Option<HeadCoupling>,
@@ -367,14 +406,14 @@ impl WaveFieldAttention {
             .collect();
         let scatter_proj = BitLinear::from_float(&scatter_weights, total_proj, dim, 128);
 
-        // Random gate proj: dim -> n_heads
-        let gate_weights: Vec<f32> = (0..n_heads * dim)
+        // Random gate proj: dim -> n_heads * head_dim (per-element gating)
+        let gate_weights: Vec<f32> = (0..total_proj * dim)
             .map(|i| {
                 let v = ((i as u32).wrapping_mul(1664525).wrapping_add(1013904223) >> 16) % 200;
                 v as f32 / 100.0 - 1.0
             })
             .collect();
-        let gate_proj = BitLinear::from_float(&gate_weights, n_heads, dim, 128);
+        let gate_proj = BitLinear::from_float(&gate_weights, total_proj, dim, 128);
 
         // Random output proj: n_heads * head_dim -> dim
         let out_weights: Vec<f32> = (0..dim * total_proj)
@@ -477,9 +516,11 @@ impl WaveFieldAttention {
         let field_size = self.field_size;
         let total_proj = n_heads * head_dim;
 
+        let gate_dim = self.gate_proj.rows; // n_heads (legacy) or total_proj (new)
+
         let mut ws = self.workspace.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         ws.scattered.resize(total_proj, 0.0);
-        ws.gate_out.resize(n_heads, 0.0);
+        ws.gate_out.resize(gate_dim, 0.0);
         ws.gathered.resize(total_proj, 0.0);
         ws.proj_out.resize(dim, 0.0);
 
@@ -539,11 +580,20 @@ impl WaveFieldAttention {
         }
 
         // 6. Content gate: sigmoid(gate_proj(x)) * gathered
+        // Flexible gate: supports both per-head (legacy) and per-element (new) gating
         self.gate_proj.forward(x, &mut ws.gate_out);
-        for h in 0..n_heads {
-            let g = sigmoid(ws.gate_out[h]);
-            for d in 0..head_dim {
-                ws.gathered[h * head_dim + d] *= g;
+        if ws.gate_out.len() == n_heads {
+            // Per-head gating (legacy): one gate value broadcast across head_dim
+            for h in 0..n_heads {
+                let g = sigmoid(ws.gate_out[h]);
+                for d in 0..head_dim {
+                    ws.gathered[h * head_dim + d] *= g;
+                }
+            }
+        } else {
+            // Per-element gating (new): gate_proj output matches total_proj
+            for i in 0..total_proj {
+                ws.gathered[i] *= sigmoid(ws.gate_out[i]);
             }
         }
 
@@ -626,8 +676,9 @@ impl WaveFieldAttention {
         }
 
         // 4. Gather per-token results from convolved buffer, apply gate, output projection
+        let gate_dim = self.gate_proj.rows; // n_heads (legacy) or total_proj (new)
         ws.gathered.resize(total_proj, 0.0);
-        ws.gate_out.resize(n_heads, 0.0);
+        ws.gate_out.resize(gate_dim, 0.0);
         for t in 0..seq_len {
             let x = &x_batch[t * dim..(t + 1) * dim];
             let out = &mut out_batch[t * dim..(t + 1) * dim];
@@ -643,12 +694,20 @@ impl WaveFieldAttention {
                 bilinear_gather(field, pos, field_size, head_dim, g);
             }
 
-            // Gate
+            // Gate — flexible: per-head (legacy) or per-element (new)
             self.gate_proj.forward(x, &mut ws.gate_out);
-            for h in 0..n_heads {
-                let g = sigmoid(ws.gate_out[h]);
-                for d in 0..head_dim {
-                    ws.gathered[h * head_dim + d] *= g;
+            if ws.gate_out.len() == n_heads {
+                // Per-head gating (legacy): one gate value broadcast across head_dim
+                for h in 0..n_heads {
+                    let g = sigmoid(ws.gate_out[h]);
+                    for d in 0..head_dim {
+                        ws.gathered[h * head_dim + d] *= g;
+                    }
+                }
+            } else {
+                // Per-element gating (new): gate_proj output matches total_proj
+                for i in 0..total_proj {
+                    ws.gathered[i] *= sigmoid(ws.gate_out[i]);
                 }
             }
 

@@ -159,6 +159,30 @@ pub fn haar_convolve_with_grad(
     haar_convolve_impl(signal, kernel, field_size, levels)
 }
 
+/// Haar domain scaling: `IHaar(Haar(signal) * haar_coeffs)`.
+///
+/// Unlike `haar_convolve_with_grad`, the `haar_coeffs` tensor is already in the
+/// Haar (wavelet) domain — no forward transform is applied to it. This allows
+/// learning kernel coefficients directly in the Haar basis, giving the model
+/// independent control over every wavelet scale without going through the
+/// time-domain parameterization (omega/alpha/phi).
+///
+/// Input shapes:
+/// - `signal`: `(batch, field_size)` — time-domain signal
+/// - `haar_coeffs`: `(batch, field_size)` — already in Haar domain (learnable)
+///
+/// Output: `(batch, field_size)` — time-domain result
+pub fn haar_scale_with_grad(
+    signal: &Tensor,
+    haar_coeffs: &Tensor,
+    field_size: usize,
+    levels: usize,
+) -> Result<Tensor> {
+    let s_haar = haar_forward_tensor(signal, field_size, levels)?;
+    let product = s_haar.broadcast_mul(haar_coeffs)?.contiguous()?;
+    haar_inverse_tensor(&product, field_size, levels)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +351,87 @@ mod tests {
                 i, numerical, analytic
             );
         }
+
+        Ok(())
+    }
+
+    /// Verify haar_scale_with_grad matches manual Haar(signal) * coeffs pipeline
+    /// and that it differs from haar_convolve_with_grad (which also transforms the kernel).
+    #[test]
+    fn test_haar_scale_with_grad_basic() -> Result<()> {
+        let device = Device::Cpu;
+        let n = 16;
+        let levels = (n as f64).log2() as usize;
+
+        let signal_data: Vec<f32> = (0..n).map(|i| (i as f32 * 0.3).sin()).collect();
+        // Coefficients already in Haar domain (not a time-domain kernel)
+        let haar_coeffs_data: Vec<f32> = (0..n).map(|i| 1.0 - 0.05 * i as f32).collect();
+
+        let signal = Tensor::from_vec(signal_data.clone(), (n,), &device)?;
+        let coeffs = Tensor::from_vec(haar_coeffs_data.clone(), (n,), &device)?;
+
+        // haar_scale_with_grad: IHaar(Haar(signal) * coeffs) — coeffs NOT transformed
+        let result = haar_scale_with_grad(&signal, &coeffs, n, levels)?;
+        let result_data = result.to_vec1::<f32>()?;
+
+        assert!(result_data.iter().all(|v| v.is_finite()), "non-finite in haar_scale output");
+        assert!(result_data.iter().any(|v| v.abs() > 1e-8), "haar_scale output all zeros");
+
+        // Manual computation should match: forward transform signal, multiply, inverse
+        let s_haar = haar_forward_tensor(&signal, n, levels)?;
+        let product = s_haar.broadcast_mul(&coeffs)?.contiguous()?;
+        let manual = haar_inverse_tensor(&product, n, levels)?;
+        let manual_data = manual.to_vec1::<f32>()?;
+
+        for i in 0..n {
+            assert!(
+                (result_data[i] - manual_data[i]).abs() < 1e-5,
+                "haar_scale vs manual at [{}]: {} vs {}",
+                i, result_data[i], manual_data[i]
+            );
+        }
+
+        // Should differ from haar_convolve_with_grad which transforms both signal AND kernel
+        let convolve_result = haar_convolve_with_grad(&signal, &coeffs, n, levels)?;
+        let convolve_data = convolve_result.to_vec1::<f32>()?;
+        let diff: f32 = result_data.iter().zip(convolve_data.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(diff > 1e-3, "haar_scale should differ from haar_convolve (diff={})", diff);
+
+        Ok(())
+    }
+
+    /// Verify haar_scale_with_grad supports autograd.
+    #[test]
+    fn test_haar_scale_with_grad_gradient() -> Result<()> {
+        let device = Device::Cpu;
+        let n = 8;
+        let levels = (n as f64).log2() as usize;
+
+        let signal_data: Vec<f32> = vec![1.0, 0.5, -0.3, 0.2, 0.0, -0.1, 0.4, -0.2];
+        let coeffs_data: Vec<f32> = vec![0.8, 0.5, 0.3, 0.1, 0.9, 0.4, 0.2, 0.0];
+
+        let signal = candle_core::Var::from_vec(signal_data, (n,), &device)?;
+        let coeffs = candle_core::Var::from_vec(coeffs_data, (n,), &device)?;
+
+        let result = haar_scale_with_grad(signal.as_tensor(), coeffs.as_tensor(), n, levels)?;
+        let loss = result.sqr()?.sum_all()?;
+        let grads = loss.backward()?;
+
+        let grad_signal = grads.get(signal.as_tensor());
+        let grad_coeffs = grads.get(coeffs.as_tensor());
+
+        assert!(grad_signal.is_some(), "signal should have gradient");
+        assert!(grad_coeffs.is_some(), "coeffs should have gradient");
+
+        let gs = grad_signal.unwrap().to_vec1::<f32>()?;
+        let gc = grad_coeffs.unwrap().to_vec1::<f32>()?;
+
+        assert!(gs.iter().all(|v| v.is_finite()), "non-finite signal grad");
+        assert!(gc.iter().all(|v| v.is_finite()), "non-finite coeffs grad");
+        assert!(gs.iter().any(|v| v.abs() > 1e-8), "signal grad all zeros");
+        assert!(gc.iter().any(|v| v.abs() > 1e-8), "coeffs grad all zeros");
 
         Ok(())
     }

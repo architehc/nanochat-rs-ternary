@@ -457,6 +457,9 @@ mod tests {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         };
 
         let device = Device::Cpu;

@@ -645,6 +645,83 @@ impl Trainer {
         Ok(())
     }
 
+    /// Log wavefield physics parameter diagnostics (omega, alpha, haar_coeffs stats).
+    fn log_wavefield_diagnostics(&self) {
+        let data = self.varmap.data().lock().unwrap();
+        let mut omega_stats = Vec::new();
+        let mut alpha_stats = Vec::new();
+        let mut haar_coeffs_norm = Vec::new();
+
+        for (name, var) in data.iter() {
+            if !name.contains("wavefield") {
+                continue;
+            }
+            if let Ok(vals) = var.as_tensor().flatten_all().and_then(|t| t.to_vec1::<f32>()) {
+                if name.contains("omega") {
+                    let (min, max) = vals.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &v| {
+                        (mn.min(v), mx.max(v))
+                    });
+                    omega_stats.push((name.clone(), min, max));
+                } else if name.contains("alpha_raw") {
+                    // Show softplus(alpha_raw) = actual damping coefficient
+                    let sp: Vec<f32> = vals
+                        .iter()
+                        .map(|&v| {
+                            let abs_v = v.abs();
+                            v.max(0.0) + (1.0 + (-abs_v).exp()).ln()
+                        })
+                        .collect();
+                    let (min, max) = sp.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &v| {
+                        (mn.min(v), mx.max(v))
+                    });
+                    alpha_stats.push((name.clone(), min, max));
+                } else if name.contains("kernel_haar_coeffs") {
+                    let norm: f32 = vals.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    let absmax = vals.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+                    haar_coeffs_norm.push((name.clone(), norm, absmax));
+                }
+            }
+        }
+
+        if !omega_stats.is_empty() || !haar_coeffs_norm.is_empty() {
+            print!("  [wave]");
+            for (name, min, max) in &omega_stats {
+                let short = name.rsplit('.').next().unwrap_or(name);
+                print!(" {}=[{:.2},{:.2}]", short, min, max);
+            }
+            for (name, min, max) in &alpha_stats {
+                let short = name.rsplit('.').next().unwrap_or(name);
+                print!(" {}=[{:.3},{:.3}]", short, min, max);
+            }
+            for (_name, norm, absmax) in &haar_coeffs_norm {
+                print!(" haar_coeffs(norm={:.2},max={:.2})", norm, absmax);
+            }
+            println!();
+        }
+    }
+
+    /// Zero wavefield physics param gradients (omega, alpha_raw, phi, kernel_haar_coeffs).
+    /// Used during warmup delay to let projection weights stabilize first.
+    fn zero_wavefield_physics_grads(&self, grads: &mut GradStore) {
+        let data = self.varmap.data().lock().unwrap();
+        for (name, var) in data.iter() {
+            let is_physics = name.contains("omega")
+                || name.contains("alpha_raw")
+                || name.contains("phi")
+                || name.contains("coupling_logits")
+                || name.contains("kernel_haar_coeffs");
+            // Only zero wavefield params, not all physics-like params
+            let is_wavefield = name.contains("wavefield");
+            if is_physics && is_wavefield {
+                if let Some(grad) = grads.get(var.as_tensor()) {
+                    if let Ok(zeros) = Tensor::zeros_like(&grad) {
+                        let _ = grads.insert(var.as_tensor(), zeros);
+                    }
+                }
+            }
+        }
+    }
+
     /// Execute a single training step.
     pub fn train_step(&mut self, input_ids: &Tensor, target_ids: &Tensor) -> Result<StepStats> {
         let step_start = Instant::now();
@@ -795,6 +872,16 @@ impl Trainer {
         // The current layout guarantees no fallible code between backward() and
         // detach — do not insert any `?` operations between these two lines.
         detach_grad_store_inplace(&mut grads, &self.varmap);
+
+        // Wavefield warmup delay: zero out physics param gradients during
+        // the first N steps to let projection weights stabilize before
+        // physics params start learning.
+        if self.config.wavefield_warmup_delay > 0
+            && self.global_step < self.config.wavefield_warmup_delay
+            && self.config.use_wave_field
+        {
+            self.zero_wavefield_physics_grads(&mut grads);
+        }
 
         if let Some(accum) = self.accum_grads.as_mut() {
             accumulate_grad_store(accum, &grads, &self.varmap)?;
@@ -1156,6 +1243,13 @@ impl Trainer {
                     running_gnorm = 0.0;
                     running_toks = 0.0;
                     interval_steps = 0;
+
+                    // Wavefield diagnostics: log physics params every 5x log_interval
+                    if self.config.use_wave_field
+                        && self.global_step % (log_interval * 5) == 0
+                    {
+                        self.log_wavefield_diagnostics();
+                    }
                 }
 
                 // Checkpoint with disk monitoring and cleanup
@@ -1387,6 +1481,9 @@ mod tests {
             wavefield_ratio: 1.0,
             wavefield_convolve_mode: None,
             wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
         }
     }
 
