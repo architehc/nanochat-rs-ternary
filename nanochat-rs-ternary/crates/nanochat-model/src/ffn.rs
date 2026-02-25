@@ -39,26 +39,74 @@ impl FeedForward {
     }
 
     /// Forward pass.
-    ///
-    /// x:   [dim] input
-    /// out: [dim] output
     pub fn forward(&self, x: &[f32], out: &mut [f32]) {
-        let dim = self.w_down.rows;
-
-        // Gate and Up projections
         let mut gate = vec![0.0f32; self.ffn_dim];
         let mut up = vec![0.0f32; self.ffn_dim];
-        self.w_gate.forward(x, &mut gate);
-        self.w_up.forward(x, &mut up);
+        let mut x_q = vec![0i8; self.w_gate.cols];
+        self.forward_with_workspace(x, out, &mut gate, &mut up, &mut x_q);
+    }
+
+    /// Forward pass with provided workspaces.
+    pub fn forward_with_workspace(
+        &self,
+        x: &[f32],
+        out: &mut [f32],
+        gate_ws: &mut [f32],
+        up_ws: &mut [f32],
+        x_q_ws: &mut [i8],
+    ) {
+        assert_eq!(gate_ws.len(), self.ffn_dim);
+        assert_eq!(up_ws.len(), self.ffn_dim);
+
+        // Gate and Up projections
+        self.w_gate.forward_with_workspace(x, x_q_ws, gate_ws);
+        self.w_up.forward_with_workspace(x, x_q_ws, up_ws);
 
         // SwiGLU: silu(gate) * up
         for i in 0..self.ffn_dim {
-            gate[i] = silu(gate[i]) * up[i];
+            gate_ws[i] = silu(gate_ws[i]) * up_ws[i];
         }
 
         // Down projection
-        self.w_down.forward(&gate, out);
-        let _ = dim; // silence unused
+        self.w_down.forward_with_workspace(gate_ws, x_q_ws, out);
+    }
+
+    /// Batched forward pass.
+    pub fn forward_batch(&self, x_batch: &[f32], seq_len: usize, out_batch: &mut [f32]) {
+        let mut gate = vec![0.0f32; seq_len * self.ffn_dim];
+        let mut up = vec![0.0f32; seq_len * self.ffn_dim];
+        let mut x_q = vec![0i8; seq_len * self.w_gate.cols];
+        let mut scales = vec![0.0f32; seq_len];
+        self.forward_batch_with_workspaces(x_batch, seq_len, out_batch, &mut gate, &mut up, &mut x_q, &mut scales);
+    }
+
+    /// Batched forward pass with provided workspaces.
+    pub fn forward_batch_with_workspaces(
+        &self,
+        x_batch: &[f32],
+        seq_len: usize,
+        out_batch: &mut [f32],
+        all_gate_ws: &mut [f32],
+        all_up_ws: &mut [f32],
+        x_q_ws: &mut [i8],
+        scales_ws: &mut [f32],
+    ) {
+        let ffn_dim = self.ffn_dim;
+
+        // Project gate and up
+        self.w_gate.forward_batch_with_workspaces(x_batch, seq_len, all_gate_ws, x_q_ws, scales_ws);
+        self.w_up.forward_batch_with_workspaces(x_batch, seq_len, all_up_ws, x_q_ws, scales_ws);
+
+        // SwiGLU
+        for t in 0..seq_len {
+            for i in 0..ffn_dim {
+                let idx = t * ffn_dim + i;
+                all_gate_ws[idx] = silu(all_gate_ws[idx]) * all_up_ws[idx];
+            }
+        }
+
+        // Project down
+        self.w_down.forward_batch_with_workspaces(all_gate_ws, seq_len, out_batch, x_q_ws, scales_ws);
     }
 }
 
@@ -169,6 +217,16 @@ impl MoeExperts {
             }
         }
     }
+
+    /// Batched forward for MoE (loops over tokens).
+    pub fn forward_batch(&self, x_batch: &[f32], seq_len: usize, out_batch: &mut [f32]) {
+        let dim = self.router.cols;
+        for t in 0..seq_len {
+            let x = &x_batch[t * dim..(t + 1) * dim];
+            let out = &mut out_batch[t * dim..(t + 1) * dim];
+            self.forward(x, out);
+        }
+    }
 }
 
 /// Unified FFN layer: either dense or MoE.
@@ -179,11 +237,56 @@ pub enum FfnLayer {
 }
 
 impl FfnLayer {
+    /// Forward pass through either dense FFN or MoE with workspaces.
+    pub fn forward_with_workspace(
+        &self,
+        x: &[f32],
+        out: &mut [f32],
+        gate_ws: &mut [f32],
+        up_ws: &mut [f32],
+        x_q_ws: &mut [i8],
+    ) {
+        match self {
+            FfnLayer::Dense(ffn) => ffn.forward_with_workspace(x, out, gate_ws, up_ws, x_q_ws),
+            FfnLayer::Moe(moe) => moe.forward(x, out), // MoE doesn't use workspaces yet
+        }
+    }
+
     /// Forward pass through either dense FFN or MoE.
     pub fn forward(&self, x: &[f32], out: &mut [f32]) {
         match self {
-            FfnLayer::Dense(ffn) => ffn.forward(x, out),
+            FfnLayer::Dense(ffn) => {
+                let mut gate = vec![0.0f32; ffn.ffn_dim];
+                let mut up = vec![0.0f32; ffn.ffn_dim];
+                let mut x_q = vec![0i8; ffn.w_gate.cols];
+                ffn.forward_with_workspace(x, out, &mut gate, &mut up, &mut x_q)
+            }
             FfnLayer::Moe(moe) => moe.forward(x, out),
+        }
+    }
+
+    /// Batched forward with provided workspaces.
+    pub fn forward_batch_with_workspaces(
+        &self,
+        x_batch: &[f32],
+        seq_len: usize,
+        out_batch: &mut [f32],
+        all_gate_ws: &mut [f32],
+        all_up_ws: &mut [f32],
+        x_q_ws: &mut [i8],
+        scales_ws: &mut [f32],
+    ) {
+        match self {
+            FfnLayer::Dense(ffn) => ffn.forward_batch_with_workspaces(
+                x_batch,
+                seq_len,
+                out_batch,
+                all_gate_ws,
+                all_up_ws,
+                x_q_ws,
+                scales_ws,
+            ),
+            FfnLayer::Moe(_) => self.forward_batch(x_batch, seq_len, out_batch),
         }
     }
 

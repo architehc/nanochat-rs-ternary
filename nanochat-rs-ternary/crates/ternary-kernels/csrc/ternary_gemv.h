@@ -27,3 +27,12 @@ void gemv_dp4a_ref(
 
 /* Returns the name of the selected kernel (self-initializing) */
 const char *ternary_kernel_name(void);
+
+/* Batched GEMM: B activation vectors against 1 weight matrix */
+void ternary_gemm(
+    const PlanarWeightsC *pw,
+    const int8_t  *x,           /* [batch_size * K] */
+    const float   *act_scales,  /* [batch_size] */
+    float *y,                   /* [batch_size * M] */
+    int batch_size
+);

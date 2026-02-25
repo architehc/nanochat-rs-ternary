@@ -1087,7 +1087,7 @@ impl TrainConfig {
             n_heads: 12,
             n_kv_heads: 4, // GQA 3:1
             ffn_mult: 2.6667, // ffn_dim = 2048, aligned to 128
-            vocab_size: 4096,
+            vocab_size: 50257, // GPT-2 tokenizer vocab size (matches rust_tokens_large.bin)
             max_seq_len: 2048,
             group_size: 128,
             mhc_n_streams: 2,

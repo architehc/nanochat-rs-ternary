@@ -799,6 +799,36 @@ const char *ternary_kernel_name(void) {
     }
 }
 
+// ── Batched Ternary GEMM ────────────
+// Processes B activation vectors against the same weight matrix.
+// Parallelizes across the batch dimension using OpenMP.
+void ternary_gemm(const PlanarWeights *pw, const int8_t * restrict x, 
+                  const float * restrict act_scales, float * restrict y, int batch_size) {
+    ensure_init();
+    
+    // Use OpenMP to parallelize over the batch dimension if batch_size is large enough
+    #pragma omp parallel for if(batch_size > 1)
+    for (int b = 0; b < batch_size; b++) {
+        const int8_t *xb = &x[b * pw->cols];
+        float *yb = &y[b * pw->rows];
+        float as = act_scales[b];
+        
+        switch (selected_kernel) {
+#if ARCH_X86_64
+        case KERN_VPERMW: gemv_vpermw(pw->data_colmaj, pw->scales_gm, xb, as, yb, pw->rows, pw->cols, pw->group_size, pw->rows_padded); break;
+        case KERN_VPERMB: gemv_dual_vpermb(pw->data_colmaj, pw->scales_gm, xb, as, yb, pw->rows, pw->cols, pw->group_size, pw->rows_padded); break;
+        case KERN_AVX2:   gemv_avx2_lut(pw->data_colmaj, pw->scales_gm, xb, as, yb, pw->rows, pw->cols, pw->group_size, pw->rows_padded); break;
+        case KERN_SSSE3:  gemv_ssse3_psignb(pw->data_colmaj, pw->scales_gm, xb, as, yb, pw->rows, pw->cols, pw->group_size, pw->rows_padded); break;
+#endif
+#if ARCH_ARM64
+        case KERN_NEON:   gemv_neon_lut(pw->data_colmaj, pw->scales_gm, xb, as, yb, pw->rows, pw->cols, pw->group_size, pw->rows_padded); break;
+#endif
+        case KERN_LUT:    gemv_lut_grouped(pw->data, pw->scales_rm, xb, as, yb, pw->rows, pw->cols, pw->group_size); break;
+        default:          gemv_dp4a_ref(pw->data, pw->scales_rm, xb, as, yb, pw->rows, pw->cols, pw->group_size); break;
+        }
+    }
+}
+
 // Keep internal kernel_name for benchmark output compatibility
 static const char *kernel_name(KernelType k) {
     switch (k) {

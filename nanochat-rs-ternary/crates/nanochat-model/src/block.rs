@@ -42,6 +42,16 @@ struct BatchWorkspace {
     ffn_in_batch: Vec<f32>,
     ffn_out_batch: Vec<f32>,
     residual_tmp: Vec<f32>,
+    x_q_batch: Vec<i8>,
+    scales_batch: Vec<f32>,
+    // Sub-layer buffers
+    q_batch: Vec<f32>,
+    k_batch: Vec<f32>,
+    v_batch: Vec<f32>,
+    scores_batch: Vec<f32>,
+    gate_batch: Vec<f32>,
+    up_batch: Vec<f32>,
+    attn_intermediate_batch: Vec<f32>,
 }
 
 #[derive(Debug, Default)]
@@ -52,6 +62,15 @@ struct TokenWorkspace {
     ffn_in: Vec<f32>,
     ffn_out: Vec<f32>,
     residual_tmp: Vec<f32>,
+    x_q_token: Vec<i8>,
+    // Sub-layer buffers
+    q: Vec<f32>,
+    k: Vec<f32>,
+    v: Vec<f32>,
+    scores: Vec<f32>,
+    gate: Vec<f32>,
+    up: Vec<f32>,
+    attn_intermediate: Vec<f32>,
 }
 
 /// Attention layer variant -- standard MHA/GQA, DeltaNet recurrent, or WaveField.
@@ -290,6 +309,14 @@ impl TransformerBlock {
             ffn_in,
             ffn_out,
             residual_tmp,
+            x_q_token,
+            q,
+            k,
+            v,
+            scores,
+            gate,
+            up,
+            attn_intermediate,
         } = &mut *ws;
         attn_in.resize(dim, 0.0);
         normed.resize(dim, 0.0);
@@ -297,6 +324,7 @@ impl TransformerBlock {
         ffn_in.resize(dim, 0.0);
         ffn_out.resize(dim, 0.0);
         residual_tmp.resize(x_expanded.len(), 0.0);
+        x_q_token.resize(dim, 0);
 
         // === Attention sub-layer ===
         // 1. Prepare input: mix streams -> single
@@ -308,7 +336,17 @@ impl TransformerBlock {
         // 3. Attention (dispatch based on layer type)
         match (&self.attention, attn_state) {
             (AttentionLayer::Standard(attn), AttentionState::Kv(cache)) => {
-                attn.forward(normed, cache, rope, pos, attn_out);
+                let kv_dim = attn.n_kv_heads * attn.head_dim;
+                q.resize(dim, 0.0);
+                k.resize(kv_dim, 0.0);
+                v.resize(kv_dim, 0.0);
+                scores.resize(cache.len + 1, 0.0);
+                attn_intermediate.resize(dim, 0.0);
+                
+                attn.forward_with_workspace(
+                    normed, cache, rope, pos, attn_out,
+                    q, k, v, attn_intermediate, scores, x_q_token
+                );
             }
             (AttentionLayer::DeltaNet(attn), AttentionState::Recurrent(state)) => {
                 attn.forward(normed, state, attn_out);
@@ -337,7 +375,14 @@ impl TransformerBlock {
         self.norm_ffn.forward(ffn_in, normed);
 
         // 3. FFN
-        self.ffn.forward(normed, ffn_out);
+        match &self.ffn {
+            FfnLayer::Dense(ffn) => {
+                gate.resize(ffn.ffn_dim, 0.0);
+                up.resize(ffn.ffn_dim, 0.0);
+                ffn.forward_with_workspace(normed, ffn_out, gate, up, x_q_token);
+            }
+            FfnLayer::Moe(moe) => moe.forward(normed, ffn_out),
+        }
 
         // 4. mHC residual update
         self.mhc_ffn.apply_into(x_expanded, ffn_out, dim, residual_tmp);
@@ -387,6 +432,15 @@ impl TransformerBlock {
             ffn_in_batch,
             ffn_out_batch,
             residual_tmp,
+            x_q_batch,
+            scales_batch,
+            q_batch,
+            k_batch,
+            v_batch,
+            scores_batch,
+            gate_batch,
+            up_batch,
+            attn_intermediate_batch,
         } = &mut *ws;
         attn_in_batch.resize(batch_len, 0.0);
         normed_batch.resize(batch_len, 0.0);
@@ -394,6 +448,10 @@ impl TransformerBlock {
         ffn_in_batch.resize(batch_len, 0.0);
         ffn_out_batch.resize(batch_len, 0.0);
         residual_tmp.resize(exp_dim, 0.0);
+        
+        let x_q_len = seq_len * dim;
+        x_q_batch.resize(x_q_len, 0);
+        scales_batch.resize(seq_len, 0.0);
 
         // === Attention sub-layer (batched) ===
         // 1. Prepare input for each token: mix streams -> single
@@ -410,13 +468,27 @@ impl TransformerBlock {
         // 3. Attention (dispatch based on layer type)
         match (&self.attention, attn_state) {
             (AttentionLayer::Standard(attn), AttentionState::Kv(cache)) => {
-                attn.forward_batch(
+                let kv_dim = attn.n_kv_heads * attn.head_dim;
+                q_batch.resize(seq_len * dim, 0.0);
+                k_batch.resize(seq_len * kv_dim, 0.0);
+                v_batch.resize(seq_len * kv_dim, 0.0);
+                scores_batch.resize(start_pos + seq_len, 0.0);
+                attn_intermediate_batch.resize(seq_len * dim, 0.0);
+
+                attn.forward_batch_with_workspaces(
                     normed_batch,
                     seq_len,
                     cache,
                     rope,
                     start_pos,
                     attn_out_batch,
+                    q_batch,
+                    k_batch,
+                    v_batch,
+                    attn_intermediate_batch,
+                    scores_batch,
+                    x_q_batch,
+                    scales_batch,
                 );
             }
             (AttentionLayer::DeltaNet(attn), AttentionState::Recurrent(state)) => {
@@ -455,7 +527,24 @@ impl TransformerBlock {
             .forward_batch(ffn_in_batch, seq_len, normed_batch);
 
         // 3. FFN batch
-        self.ffn.forward_batch(normed_batch, seq_len, ffn_out_batch);
+        match &self.ffn {
+            FfnLayer::Dense(ffn) => {
+                let ffn_dim = ffn.ffn_dim;
+                gate_batch.resize(seq_len * ffn_dim, 0.0);
+                up_batch.resize(seq_len * ffn_dim, 0.0);
+                
+                ffn.forward_batch_with_workspaces(
+                    normed_batch,
+                    seq_len,
+                    ffn_out_batch,
+                    gate_batch,
+                    up_batch,
+                    x_q_batch,
+                    scales_batch,
+                );
+            }
+            FfnLayer::Moe(moe) => moe.forward_batch(normed_batch, seq_len, ffn_out_batch),
+        }
 
         // 4. mHC residual update for each token
         for t in 0..seq_len {

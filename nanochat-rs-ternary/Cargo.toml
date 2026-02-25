@@ -98,3 +98,11 @@ path = "examples/train_diagnostic.rs"
 [[example]]
 name = "benchmark_memory"
 path = "examples/benchmark_memory.rs"
+
+[[example]]
+name = "test_rust_small"
+path = "examples/test_rust_small.rs"
+
+[[example]]
+name = "train_rust_fixed"
+path = "examples/train_rust_fixed.rs"

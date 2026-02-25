@@ -32,6 +32,14 @@ extern "C" {
     );
 
     fn ternary_kernel_name() -> *const std::ffi::c_char;
+
+    fn ternary_gemm(
+        pw: *const PlanarWeightsC,
+        x: *const i8,
+        act_scales: *const f32,
+        y: *mut f32,
+        batch_size: i32,
+    );
 }
 
 /// Convert PlanarWeights to the C struct for FFI.
@@ -256,6 +264,27 @@ pub fn gemv(pw: &PlanarWeights, x: &[i8], act_scale: f32, y: &mut [f32]) {
     // The C function reads exactly pw.cols bytes from x and writes exactly pw.rows floats to y.
     unsafe {
         ternary_gemv(&c_pw, x.as_ptr(), act_scale, y.as_mut_ptr());
+    }
+}
+
+/// Batched safe GEMM dispatch.
+///
+/// # Arguments
+/// * `pw` - Planar ternary weights
+/// * `x` - Quantized INT8 activations [batch_size * cols]
+/// * `act_scales` - Activation scale factors [batch_size]
+/// * `y` - Output buffer [batch_size * rows], caller-allocated
+pub fn gemm(pw: &PlanarWeights, x: &[i8], act_scales: &[f32], y: &mut [f32]) {
+    let batch_size = act_scales.len();
+    assert_eq!(x.len(), batch_size * pw.cols, "x.len() mismatch");
+    assert_eq!(y.len(), batch_size * pw.rows, "y.len() mismatch");
+    if batch_size == 0 {
+        return;
+    }
+
+    let c_pw = to_c_struct(pw);
+    unsafe {
+        ternary_gemm(&c_pw, x.as_ptr(), act_scales.as_ptr(), y.as_mut_ptr(), batch_size as i32);
     }
 }
 

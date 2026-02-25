@@ -148,6 +148,7 @@ mod checkpoint_manager {
 #[derive(Debug, Clone)]
 pub struct StepStats {
     pub loss: f64,
+    pub entropy: f64,
     pub grad_norm: f64,
     pub lr: f64,
     pub tokens_per_sec: f64,
@@ -707,18 +708,20 @@ impl Trainer {
         let uniform_scaled = (uniform_loss * label_smooth_eps)?;
         let mut loss = (ce_scaled + uniform_scaled)?;
 
+        // Compute entropy for diagnostics (even if weight is 0)
+        let probs = log_probs_for_smoothing.exp()?;
+        let neg_entropy = probs.mul(&log_probs_for_smoothing)?.sum(D::Minus1)?;
+        let entropy_val = neg_entropy.neg()?.mean_all()?.to_scalar::<f32>()? as f64;
+
         // Explicit entropy regularization: loss -= entropy_weight * H(p)
         // H(p) = -Σ p * log(p), maximized when predictions are spread out.
         // Prevents logit collapse in ternary models where weight quantization
         // can amplify distributional imbalance.
         let entropy_weight = self.config.entropy_weight;
         if entropy_weight > 0.0 {
-            // log_softmax guarantees finite outputs (softmax(x) > 0 for all finite x)
-            let probs = log_probs_for_smoothing.exp()?;
-            let neg_entropy = probs.mul(&log_probs_for_smoothing)?.sum(D::Minus1)?; // Σ p*log(p) < 0
-            let entropy = neg_entropy.neg()?.mean_all()?; // H = -Σ p*log(p) > 0
+            let device = loss.device().clone();
             // Subtract: encourages higher entropy (more diverse predictions)
-            loss = (loss - (entropy * entropy_weight)?)?;
+            loss = (loss - (Tensor::new(entropy_val as f32, &device)? * entropy_weight)?)?;
         }
 
         // E3: Multi-Token Prediction (15-20% data efficiency boost)
@@ -869,6 +872,7 @@ impl Trainer {
 
         Ok(StepStats {
             loss: loss_val,
+            entropy: entropy_val,
             grad_norm,
             lr: self.base_lr_muon * mult,
             tokens_per_sec,
@@ -1041,6 +1045,7 @@ impl Trainer {
     ) -> Result<()> {
         let train_start = Instant::now();
         let mut running_loss = 0.0;
+        let mut running_entropy = 0.0;
         let mut running_gnorm = 0.0;
         let mut running_toks = 0.0;
         let mut interval_steps = 0usize;
@@ -1123,6 +1128,7 @@ impl Trainer {
                 }
 
                 running_loss += stats.loss;
+                running_entropy += stats.entropy;
                 running_gnorm += stats.grad_norm;
                 running_toks += stats.tokens_per_sec;
                 interval_steps += 1;
@@ -1130,20 +1136,23 @@ impl Trainer {
 
                 if self.global_step.is_multiple_of(log_interval) && interval_steps > 0 {
                     let avg_loss = running_loss / interval_steps as f64;
+                    let avg_entropy = running_entropy / interval_steps as f64;
                     let avg_gnorm = running_gnorm / interval_steps as f64;
                     let avg_toks = running_toks / interval_steps as f64;
                     let elapsed = train_start.elapsed().as_secs_f64();
                     println!(
-                        "[{:>6}/{:<6}] loss={:.4} lr={:.6} gnorm={:.2} tok/s={:.0} elapsed={:.0}s",
+                        "[{:>6}/{:<6}] loss={:.4} H={:.2} lr={:.6} gnorm={:.2} tok/s={:.0} elapsed={:.0}s",
                         self.global_step,
                         self.config.total_steps,
                         avg_loss,
+                        avg_entropy,
                         stats.lr,
                         avg_gnorm,
                         avg_toks,
                         elapsed,
                     );
                     running_loss = 0.0;
+                    running_entropy = 0.0;
                     running_gnorm = 0.0;
                     running_toks = 0.0;
                     interval_steps = 0;

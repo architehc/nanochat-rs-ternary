@@ -137,90 +137,77 @@ impl Attention {
         }
     }
 
-    /// Forward pass for a single token at position `pos`.
-    ///
-    /// x:     [dim] input
-    /// cache: KV cache for this layer
-    /// rope:  precomputed RoPE frequencies
-    /// pos:   current position
-    /// out:   [dim] output
-    pub fn forward(
+    /// Forward pass for a single token at position `pos` with provided workspaces.
+    pub fn forward_with_workspace(
         &self,
         x: &[f32],
         cache: &mut KvCache,
         rope: &RopeFreqs,
         pos: usize,
         out: &mut [f32],
+        q_ws: &mut [f32],
+        k_ws: &mut [f32],
+        v_ws: &mut [f32],
+        attn_out_ws: &mut [f32],
+        scores_ws: &mut [f32],
+        x_q_ws: &mut [i8],
     ) {
-        let dim = self.wq.cols;
         let kv_dim = self.n_kv_heads * self.head_dim;
+        assert_eq!(q_ws.len(), self.wq.rows);
+        assert_eq!(k_ws.len(), kv_dim);
+        assert_eq!(v_ws.len(), kv_dim);
+        assert_eq!(attn_out_ws.len(), self.wq.rows);
+        assert_eq!(scores_ws.len(), cache.len + 1);
 
         // Project Q, K, V
-        let mut q = vec![0.0f32; dim];
-        let mut k = vec![0.0f32; kv_dim];
-        let mut v = vec![0.0f32; kv_dim];
-
-        self.wq.forward(x, &mut q);
-        self.wk.forward(x, &mut k);
-        self.wv.forward(x, &mut v);
+        self.wq.forward_with_workspace(x, x_q_ws, q_ws);
+        self.wk.forward_with_workspace(x, x_q_ws, k_ws);
+        self.wv.forward_with_workspace(x, x_q_ws, v_ws);
 
         // Apply RoPE to Q and K
-        rope.apply(&mut q, self.n_heads, self.head_dim, pos);
-        rope.apply(&mut k, self.n_kv_heads, self.head_dim, pos);
+        rope.apply(q_ws, self.n_heads, self.head_dim, pos);
+        rope.apply(k_ws, self.n_kv_heads, self.head_dim, pos);
 
         // Append to KV cache
-        cache.append_kv(&k, &v);
+        cache.append_kv(k_ws, v_ws);
 
-        // Attention: for each head, compute scaled dot-product over cached KV
+        // Attention
         let seq_len = cache.len;
         let scale = 1.0 / (self.head_dim as f32).sqrt();
-
-        let mut attn_out = vec![0.0f32; dim];
-        // Pre-allocate scores buffer outside head loop to avoid per-head allocation
-        let mut scores = vec![0.0f32; seq_len];
+        attn_out_ws.fill(0.0);
 
         for h in 0..self.n_heads {
-            let kv_h = h / self.n_rep; // GQA: multiple Q heads share one KV head
+            let kv_h = h / self.n_rep;
             let q_offset = h * self.head_dim;
             let kv_offset = kv_h * self.head_dim;
 
-            // Compute attention scores (reuse pre-allocated buffer)
-            scores.fill(0.0);
+            let scores = &mut scores_ws[..seq_len];
             for (t, score) in scores.iter_mut().enumerate() {
                 let k_base = t * kv_dim + kv_offset;
                 let mut dot = 0.0f32;
                 for d in 0..self.head_dim {
-                    dot += q[q_offset + d] * cache.k[k_base + d];
+                    dot += q_ws[q_offset + d] * cache.k[k_base + d];
                 }
                 *score = dot * scale;
             }
 
-            // Softmax
-            softmax_inplace(&mut scores);
+            softmax_inplace(scores);
 
-            // Weighted sum of values
             let out_offset = h * self.head_dim;
             for (t, &w) in scores.iter().enumerate() {
                 let v_base = t * kv_dim + kv_offset;
                 for d in 0..self.head_dim {
-                    attn_out[out_offset + d] += w * cache.v[v_base + d];
+                    attn_out_ws[out_offset + d] += w * cache.v[v_base + d];
                 }
             }
         }
 
         // Output projection
-        self.wo.forward(&attn_out, out);
+        self.wo.forward_with_workspace(attn_out_ws, x_q_ws, out);
     }
 
-    /// Batched forward pass for prefill: process `seq_len` tokens with causal attention.
-    ///
-    /// x_batch:   [seq_len * dim] — flattened input tokens
-    /// seq_len:   number of tokens to process
-    /// cache:     KV cache (will be filled with all seq_len positions)
-    /// rope:      RoPE frequencies
-    /// start_pos: starting position offset (0 for fresh prefill)
-    /// out_batch: [seq_len * dim] — flattened output
-    pub fn forward_batch(
+    /// Batched forward pass with provided workspaces.
+    pub fn forward_batch_with_workspaces(
         &self,
         x_batch: &[f32],
         seq_len: usize,
@@ -228,33 +215,28 @@ impl Attention {
         rope: &RopeFreqs,
         start_pos: usize,
         out_batch: &mut [f32],
+        all_q_ws: &mut [f32],
+        all_k_ws: &mut [f32],
+        all_v_ws: &mut [f32],
+        attn_out_ws: &mut [f32],
+        scores_ws: &mut [f32],
+        x_q_ws: &mut [i8],
+        scales_ws: &mut [f32],
     ) {
         let dim = self.wq.cols;
         let kv_dim = self.n_kv_heads * self.head_dim;
 
-        // Validate that all tokens will fit in the KV cache
-        let max_seq = cache.k.len() / kv_dim;
-        assert!(
-            start_pos + seq_len <= max_seq,
-            "Batch forward would overflow KV cache: start_pos={} + seq_len={} > max_seq_len={}",
-            start_pos, seq_len, max_seq
-        );
+        // 1. Project all Q, K, V
+        self.wq.forward_batch_with_workspaces(x_batch, seq_len, all_q_ws, x_q_ws, scales_ws);
+        self.wk.forward_batch_with_workspaces(x_batch, seq_len, all_k_ws, x_q_ws, scales_ws);
+        self.wv.forward_batch_with_workspaces(x_batch, seq_len, all_v_ws, x_q_ws, scales_ws);
 
-        // 1. Project all Q, K, V for all tokens
-        let mut all_q = vec![0.0f32; seq_len * dim];
-        let mut all_k = vec![0.0f32; seq_len * kv_dim];
-        let mut all_v = vec![0.0f32; seq_len * kv_dim];
-
-        self.wq.forward_batch(x_batch, seq_len, &mut all_q);
-        self.wk.forward_batch(x_batch, seq_len, &mut all_k);
-        self.wv.forward_batch(x_batch, seq_len, &mut all_v);
-
-        // 2. Apply RoPE and fill KV cache for each position
+        // 2. Apply RoPE and fill cache
         for t in 0..seq_len {
             let pos = start_pos + t;
-            let q_slice = &mut all_q[t * dim..(t + 1) * dim];
-            let k_slice = &mut all_k[t * kv_dim..(t + 1) * kv_dim];
-            let v_slice = &all_v[t * kv_dim..(t + 1) * kv_dim];
+            let q_slice = &mut all_q_ws[t * dim..(t + 1) * dim];
+            let k_slice = &mut all_k_ws[t * kv_dim..(t + 1) * kv_dim];
+            let v_slice = &all_v_ws[t * kv_dim..(t + 1) * kv_dim];
 
             rope.apply(q_slice, self.n_heads, self.head_dim, pos);
             rope.apply(k_slice, self.n_kv_heads, self.head_dim, pos);
@@ -262,57 +244,44 @@ impl Attention {
             cache.append_kv(k_slice, v_slice);
         }
 
-        // 3. Causal attention: query at position t attends to [0..start_pos+t+1]
+        // 3. Causal attention
         let scale = 1.0 / (self.head_dim as f32).sqrt();
 
-        // Pre-allocate buffers outside the token loop to avoid quadratic allocations
-        let max_causal_len = start_pos + seq_len; // max possible causal_len
-        let mut attn_out = vec![0.0f32; dim];
-        let mut scores = vec![0.0f32; max_causal_len];
-
         for t in 0..seq_len {
-            let causal_len = start_pos + t + 1; // number of KV positions visible
+            let causal_len = start_pos + t + 1;
             let q_base = t * dim;
             let out_base = t * dim;
 
-            attn_out.fill(0.0);
+            let single_attn_out = &mut attn_out_ws[t * dim..(t + 1) * dim];
+            single_attn_out.fill(0.0);
 
             for h in 0..self.n_heads {
                 let kv_h = h / self.n_rep;
-                // q_offset indexes into all_q[seq_len * dim]: token t, head h
-                // all_q layout: [t0_h0, t0_h1, ..., t1_h0, t1_h1, ...]
                 let q_offset = q_base + h * self.head_dim;
-                // kv_offset indexes within a single KV cache row (one position)
                 let kv_offset = kv_h * self.head_dim;
 
-                // Compute attention scores (reuse pre-allocated buffer)
-                let scores_slice = &mut scores[..causal_len];
-                scores_slice.fill(0.0);
-                for (s, score) in scores_slice.iter_mut().enumerate() {
+                let scores = &mut scores_ws[..causal_len];
+                for (s, score) in scores.iter_mut().enumerate() {
                     let k_base = s * kv_dim + kv_offset;
                     let mut dot = 0.0f32;
                     for d in 0..self.head_dim {
-                        dot += all_q[q_offset + d] * cache.k[k_base + d];
+                        dot += all_q_ws[q_offset + d] * cache.k[k_base + d];
                     }
                     *score = dot * scale;
                 }
 
-                // Softmax
-                softmax_inplace(scores_slice);
+                softmax_inplace(scores);
 
-                // Weighted sum of values
                 let h_out_offset = h * self.head_dim;
-                for (s, &w) in scores_slice.iter().enumerate() {
+                for (s, &w) in scores.iter().enumerate() {
                     let v_base = s * kv_dim + kv_offset;
                     for d in 0..self.head_dim {
-                        attn_out[h_out_offset + d] += w * cache.v[v_base + d];
+                        single_attn_out[h_out_offset + d] += w * cache.v[v_base + d];
                     }
                 }
             }
 
-            // Output projection for this token
-            self.wo
-                .forward(&attn_out, &mut out_batch[out_base..out_base + dim]);
+            self.wo.forward_with_workspace(single_attn_out, x_q_ws, &mut out_batch[out_base..out_base + dim]);
         }
     }
 }

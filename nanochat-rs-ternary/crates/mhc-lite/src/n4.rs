@@ -194,15 +194,15 @@ impl MhcLiteN4 {
         out
     }
 
-    /// Compute H_post: 4-element non-negative vector, 2x scaled.
+    /// Compute H_post: 4-element non-negative vector, 4x scaled.
     ///
-    /// Post-projection weights. The 2.0 factor compensates for the averaging
-    /// in collapse_output (which divides by n_streams), ensuring the layer
+    /// Post-projection weights. The 4.0 factor compensates for the averaging
+    /// in collapse_output (which divides by n_streams=4), ensuring the layer
     /// output contributes at unit scale to the residual.
     pub fn h_post(&self) -> [f32; 4] {
         let mut out = [0.0f32; 4];
         for (i, o) in out.iter_mut().enumerate() {
-            *o = 2.0 * sigmoid(self.post_logits[i] + self.post_bias[i]);
+            *o = 4.0 * sigmoid(self.post_logits[i] + self.post_bias[i]);
         }
         out
     }
