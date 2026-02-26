@@ -240,6 +240,11 @@ pub struct Trainer {
     accum_grads: Option<GradStore>,
     accum_micro_steps: usize,
     accum_loss_sum: f64,
+
+    /// Optional early stop step (set by --total-steps CLI override).
+    /// When set, training stops at this step instead of config.total_steps.
+    /// Does NOT affect LR schedule — config.total_steps still controls WSD decay.
+    pub stop_at_step: Option<usize>,
 }
 
 /// Result of attempting a training step with OOM recovery
@@ -468,6 +473,7 @@ impl Trainer {
             accum_grads: None,
             accum_micro_steps: 0,
             accum_loss_sum: 0.0,
+            stop_at_step: None,
         };
 
         trainer.load_optimizer_state(checkpoint_dir)?;
@@ -612,6 +618,7 @@ impl Trainer {
             accum_grads: None,
             accum_micro_steps: 0,
             accum_loss_sum: 0.0,
+            stop_at_step: None,
         })
     }
 
@@ -873,6 +880,26 @@ impl Trainer {
         // detach — do not insert any `?` operations between these two lines.
         detach_grad_store_inplace(&mut grads, &self.varmap);
 
+        // CRITICAL: Drop the entire forward-pass computation graph NOW, before
+        // the optimizer step allocates memory for Newton-Schulz orthogonalization.
+        // Without this, the forward graph (~10GB) stays alive during the optimizer
+        // step, causing CUDA OOM. The only values we still need are:
+        //   - grads (already detached above)
+        //   - loss_val_unscaled (f64 scalar, already extracted)
+        //   - entropy_val (f64 scalar, already extracted)
+        drop(scaled_loss);
+        drop(loss);
+        drop(hidden);
+        drop(hidden_for_lm);
+        drop(logits_flat);
+        drop(targets_flat);
+        drop(collider_mask);
+
+        // Trim CUDA memory pools to release cached (freed but not returned) blocks.
+        // Without this, cudarc's caching allocator causes monotonic VRAM growth (~280MB/step).
+        // Trims ALL devices because cudarc may cache on GPU 0 even when training on GPU N.
+        trim_all_cuda_memory_pools();
+
         // Wavefield warmup delay: zero out physics param gradients during
         // the first N steps to let projection weights stabilize before
         // physics params start learning.
@@ -906,6 +933,10 @@ impl Trainer {
 
             self.muon.step(&grads_to_apply, clip_scale)?;
             self.lion.step(&grads_to_apply, clip_scale)?;
+            drop(grads_to_apply);
+
+            // Trim again after optimizer step (Newton-Schulz creates temporary tensors).
+            trim_all_cuda_memory_pools();
 
             // Clamp mHC alpha_logit to [-3, 3] to prevent identity bypass.
             // sigmoid(-3)=0.05, sigmoid(3)=0.95 — ensures meaningful stream mixing.
@@ -951,11 +982,7 @@ impl Trainer {
             0.0
         };
 
-        // Explicitly drop intermediate tensors to free GPU memory
-        drop(loss);
-        drop(collider_mask);
-        drop(logits_flat);
-        drop(targets_flat);
+        // Forward-pass tensors already dropped above (after backward + detach).
 
         Ok(StepStats {
             loss: loss_val,
@@ -1318,17 +1345,19 @@ impl Trainer {
                 }
 
                 // Check if we've reached total_steps
-                if self.global_step >= self.config.total_steps {
+                let effective_stop = self.stop_at_step.unwrap_or(self.config.total_steps);
+                if self.global_step >= effective_stop {
                     println!(
                         "\n✓ Reached total_steps={}, stopping training",
-                        self.config.total_steps
+                        effective_stop
                     );
                     break;
                 }
             }
 
             // Check again after epoch
-            if self.global_step >= self.config.total_steps {
+            let effective_stop = self.stop_at_step.unwrap_or(self.config.total_steps);
+            if self.global_step >= effective_stop {
                 println!("✓ Training complete at step {}", self.global_step);
                 break;
             }
@@ -1383,12 +1412,108 @@ fn apply_collider_gradient_mask(logits: &Tensor, mask: &Tensor) -> Result<Tensor
     &kept + &dropped_no_grad
 }
 
-/// Detach all gradient tensors in a GradStore from the computation graph.
-/// This breaks references to forward-pass tensors so they can be freed.
+/// Trim the CUDA memory pool to release cached (freed but not returned) memory.
+///
+/// cudarc uses `cuMemFreeAsync` which returns memory to CUDA's default memory pool
+/// rather than the driver. Without trimming, nvidia-smi shows monotonically increasing
+/// usage even though tensors have been dropped. This causes OOM after ~100 steps.
+///
+/// Calling `cuMemPoolTrimTo(pool, 0)` after each optimizer step releases all cached
+/// blocks back to the driver, keeping VRAM usage stable.
+#[cfg(feature = "cuda")]
+fn trim_cuda_memory_pool(device: &Device) {
+    use candle_core::DeviceLocation;
+    if let DeviceLocation::Cuda { gpu_id } = device.location() {
+        if let Ok(cuda_dev) = device.as_cuda_device() {
+            let stream = cuda_dev.cuda_stream();
+            let cu_device = stream.context().cu_device();
+            unsafe {
+                use candle_core::cuda_backend::cudarc::driver::sys;
+                let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
+                let res = sys::cuDeviceGetDefaultMemPool(&mut pool, cu_device);
+                if res == sys::CUresult::CUDA_SUCCESS && !pool.is_null() {
+                    let trim_res = sys::cuMemPoolTrimTo(pool, 0);
+                    if trim_res != sys::CUresult::CUDA_SUCCESS {
+                        tracing::warn!(
+                            "cuMemPoolTrimTo failed on GPU {}: {:?}",
+                            gpu_id, trim_res
+                        );
+                    }
+                } else {
+                    tracing::warn!(
+                        "cuDeviceGetDefaultMemPool failed on GPU {}: {:?}",
+                        gpu_id, res
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+fn trim_cuda_memory_pool(_device: &Device) {
+    // No-op on CPU builds
+}
+
+/// Trim memory pools on ALL CUDA devices.
+///
+/// cudarc initializes a CUDA context on device 0 even when targeting device N>0,
+/// which allocates memory on device 0. If device 0 is nearly full from another
+/// training run, the device N initialization OOMs. Trimming all devices at startup
+/// and periodically prevents this.
+#[cfg(feature = "cuda")]
+pub fn trim_all_cuda_memory_pools() {
+    use candle_core::cuda_backend::cudarc::driver::sys;
+    unsafe {
+        let mut count: i32 = 0;
+        let res = sys::cuDeviceGetCount(&mut count);
+        if res != sys::CUresult::CUDA_SUCCESS || count <= 0 {
+            return;
+        }
+        for i in 0..count {
+            let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
+            let res = sys::cuDeviceGetDefaultMemPool(&mut pool, i);
+            if res == sys::CUresult::CUDA_SUCCESS && !pool.is_null() {
+                let _ = sys::cuMemPoolTrimTo(pool, 0);
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn trim_all_cuda_memory_pools() {}
+
+/// Detach leaf gradients and evict intermediate entries from the GradStore.
+///
+/// `backward()` populates the GradStore with gradients for ALL graph nodes, not just
+/// leaf variables. For this model: 616 total entries, only 338 are leaf vars. The 278
+/// intermediate entries hold:
+///   1. Computation graph (Op) references to forward-pass tensors (~6GB)
+///   2. Their own gradient data (~3GB)
+///
+/// Simply detaching intermediate entries only fixes (1) — the data stays because
+/// detach() shares storage via Arc. We must REPLACE intermediates with tiny scalars
+/// to actually free the CUDA memory.
 fn detach_grad_store_inplace(store: &mut GradStore, varmap: &VarMap) {
-    for var in sorted_vars(varmap) {
-        if let Some(g) = store.get(var.as_tensor()) {
-            store.insert(var.as_tensor(), g.detach());
+    // Build set of leaf variable IDs for O(1) lookup
+    let vars = sorted_vars(varmap);
+    let var_ids: std::collections::HashSet<candle_core::TensorId> =
+        vars.iter().map(|v| v.as_tensor().id()).collect();
+
+    let all_ids: Vec<candle_core::TensorId> = store.get_ids().copied().collect();
+    // Tiny CPU scalar — costs ~0 bytes, replaces multi-MB intermediate gradients.
+    let placeholder = Tensor::zeros((), DType::F32, &Device::Cpu).unwrap();
+
+    for id in all_ids {
+        if var_ids.contains(&id) {
+            // Leaf var: keep the gradient data, just sever the computation graph.
+            if let Some(g) = store.get_id(id) {
+                store.insert_id(id, g.detach());
+            }
+        } else {
+            // Intermediate: replace with tiny scalar. This drops the original tensor,
+            // freeing both its Op (forward-graph references) and its CUDA storage.
+            store.insert_id(id, placeholder.clone());
         }
     }
 }

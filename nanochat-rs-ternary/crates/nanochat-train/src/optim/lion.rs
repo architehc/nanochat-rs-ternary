@@ -53,12 +53,13 @@ impl Lion {
                 None => continue,
             };
 
-            let grad = (grad * clip_scale)?;
+            // Detach grad to sever backward-graph references.
+            let grad = (grad * clip_scale)?.detach();
             let m = &self.exp_avg[i];
 
             // 1. Weight decay (multiplicative)
             if self.weight_decay > 0.0 {
-                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?;
+                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?.detach();
                 var.set(&decayed)?;
             }
 
@@ -70,13 +71,10 @@ impl Lion {
 
             // 3. Apply: p -= lr * update
             let scaled_update = (&update * self.lr)?;
-            let new_val = var.as_tensor().sub(&scaled_update)?;
+            let new_val = var.as_tensor().sub(&scaled_update)?.detach();
             var.set(&new_val)?;
 
             // 4. Update momentum: m = beta2*m + (1-beta2)*grad
-            // CRITICAL: detach() breaks the computation graph chain.
-            // Without this, each step's EMA buffer retains references to
-            // the previous step's forward/backward graph, causing unbounded GPU memory growth.
             let m2_scaled = (m * self.beta2)?;
             let g2_scaled = (&grad * (1.0 - self.beta2))?;
             self.exp_avg[i] = (&m2_scaled + &g2_scaled)?.detach();

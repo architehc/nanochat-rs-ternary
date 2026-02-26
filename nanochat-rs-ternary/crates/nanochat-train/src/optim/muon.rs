@@ -11,7 +11,9 @@ use std::collections::HashMap;
 pub fn newton_schulz_orthogonalize(g: &Tensor, ns_steps: usize) -> Result<Tensor> {
     let (a, b, c) = (3.4445f64, -4.7750f64, 2.0315f64);
 
-    let mut x = g.to_dtype(DType::F32)?;
+    // Detach input — we don't need second-order gradients through the optimizer.
+    // This prevents the NS computation graph from chaining back to the backward pass.
+    let mut x = g.detach().to_dtype(DType::F32)?;
     let dims = x.dims();
     assert!(dims.len() >= 2);
     let rows = dims[dims.len() - 2];
@@ -19,7 +21,7 @@ pub fn newton_schulz_orthogonalize(g: &Tensor, ns_steps: usize) -> Result<Tensor
 
     let transposed = rows > cols;
     if transposed {
-        x = x.t()?;
+        x = x.t()?.contiguous()?;
     }
 
     // Normalize by Frobenius norm
@@ -28,8 +30,12 @@ pub fn newton_schulz_orthogonalize(g: &Tensor, ns_steps: usize) -> Result<Tensor
     if norm_val > 1e-7 {
         x = (&x / (norm_val as f64))?;
     }
+    // Detach after normalization to start iterations graph-free.
+    x = x.detach();
 
-    // Quintic NS iteration
+    // Quintic NS iteration — detach at each step to prevent graph accumulation.
+    // Without detach, each iteration's matmuls chain to all previous iterations,
+    // causing O(ns_steps * matrix_size) GPU memory retention.
     for _ in 0..ns_steps {
         let a_mat = x.matmul(&x.t()?)?; // X @ X^T
         let a_sq = a_mat.matmul(&a_mat)?;
@@ -38,15 +44,12 @@ pub fn newton_schulz_orthogonalize(g: &Tensor, ns_steps: usize) -> Result<Tensor
         let b_mat = (&term1 + &term2)?; // b*A + c*A²
         let term_a = (&x * a)?;
         let term_b = b_mat.matmul(&x)?;
-        x = (&term_a + &term_b)?; // a*X + B@X
+        x = (&term_a + &term_b)?.detach(); // a*X + B@X — detach breaks graph chain
     }
 
     if transposed {
-        x = x.t()?;
+        x = x.t()?.contiguous()?;
     }
-
-    // Keep the nearest orthogonal/polar factor as-is.
-    // Post-scaling by aspect ratio breaks orthonormality for rectangular matrices.
 
     Ok(x)
 }
@@ -99,27 +102,21 @@ impl Muon {
                 None => continue,
             };
 
-            let grad = (grad * clip_scale)?;
+            // Detach grad to sever any remaining backward-graph references.
+            let grad = (grad * clip_scale)?.detach();
 
             // EMA momentum: buf = beta * buf + (1 - beta) * grad
             let prev_buf = self.momentum_buffers[i].clone();
             let buf_scaled = (&prev_buf * self.beta)?;
             let grad_scaled = (&grad * (1.0 - self.beta))?;
             let new_buf = (&buf_scaled + &grad_scaled)?;
-            // CRITICAL: detach() breaks the computation graph chain.
-            // Without this, each step's momentum buffer retains references to
-            // the previous step's forward/backward graph, causing unbounded GPU memory growth.
             self.momentum_buffers[i] = new_buf.detach();
 
             let update = if var.as_tensor().dims().len() >= 2 {
                 // Nesterov look-ahead: extrapolate along momentum direction.
-                // nesterov = new_buf + β*(new_buf - prev_buf)
-                // This looks ahead in the direction momentum is moving,
-                // unlike plain momentum which just uses new_buf directly.
-                // Use the detached buffer for Nesterov to avoid graph retention.
                 let new_buf_d = &self.momentum_buffers[i];
                 let delta = (new_buf_d - &prev_buf)?;
-                let nesterov = (new_buf_d + (&delta * self.beta)?)?;
+                let nesterov = (new_buf_d + (&delta * self.beta)?)?.detach();
                 // Reshape to 2D for orthogonalization
                 let orig_shape = nesterov.dims().to_vec();
                 let rows = orig_shape[0];
@@ -134,13 +131,13 @@ impl Muon {
 
             // Weight decay (multiplicative)
             if self.weight_decay > 0.0 {
-                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?;
+                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?.detach();
                 var.set(&decayed)?;
             }
 
             // Apply update: w = w - lr * update
             let scaled_update = (&update * self.lr)?;
-            let new_val = var.as_tensor().sub(&scaled_update)?;
+            let new_val = var.as_tensor().sub(&scaled_update)?.detach();
             var.set(&new_val)?;
         }
         Ok(())
@@ -161,21 +158,20 @@ impl Muon {
                 None => continue,
             };
 
-            let grad = (grad * clip_scale)?;
+            let grad = (grad * clip_scale)?.detach();
 
             // EMA momentum: buf = beta * buf + (1 - beta) * grad
             let prev_buf = self.momentum_buffers[i].clone();
             let buf_scaled = (&prev_buf * self.beta)?;
             let grad_scaled = (&grad * (1.0 - self.beta))?;
             let new_buf = (&buf_scaled + &grad_scaled)?;
-            // CRITICAL: detach to break computation graph chain (see step() comment)
             self.momentum_buffers[i] = new_buf.detach();
 
             let update = if var.as_tensor().dims().len() >= 2 {
                 // Nesterov look-ahead: extrapolate along momentum direction.
                 let new_buf_d = &self.momentum_buffers[i];
                 let delta = (new_buf_d - &prev_buf)?;
-                let nesterov = (new_buf_d + (&delta * self.beta)?)?;
+                let nesterov = (new_buf_d + (&delta * self.beta)?)?.detach();
                 // Reshape to 2D for orthogonalization
                 let orig_shape = nesterov.dims().to_vec();
                 let rows = orig_shape[0];
@@ -190,13 +186,13 @@ impl Muon {
 
             // Weight decay (multiplicative)
             if self.weight_decay > 0.0 {
-                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?;
+                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?.detach();
                 var.set(&decayed)?;
             }
 
             // Apply update: w = w - lr * update
             let scaled_update = (&update * self.lr)?;
-            let new_val = var.as_tensor().sub(&scaled_update)?;
+            let new_val = var.as_tensor().sub(&scaled_update)?.detach();
             var.set(&new_val)?;
         }
         Ok(())

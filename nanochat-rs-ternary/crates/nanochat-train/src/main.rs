@@ -38,6 +38,9 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-500m-wave-haar" | "nano_500m_wave_haar" | "nano-500m" | "nano_500m" => {
             Some(TrainConfig::nano_500m_wave_haar())
         }
+        "nano-500m-baseline" | "nano_500m_baseline" => {
+            Some(TrainConfig::nano_500m_baseline())
+        }
         _ => None,
     }
 }
@@ -47,8 +50,15 @@ fn resolve_device(device: &str) -> Result<candle_core::Device, String> {
         "cpu" => Ok(candle_core::Device::Cpu),
         #[cfg(feature = "cuda")]
         "cuda" => candle_core::Device::new_cuda(0)
-            .map_err(|e| format!("Failed to initialize CUDA device: {}", e)),
-        other => Err(format!("Unknown device: {}. Use 'cpu' or 'cuda'.", other)),
+            .map_err(|e| format!("Failed to initialize CUDA device 0: {}", e)),
+        #[cfg(feature = "cuda")]
+        s if s.starts_with("cuda:") => {
+            let id: usize = s.strip_prefix("cuda:").unwrap().parse()
+                .map_err(|_| format!("Invalid CUDA device id in '{}'", s))?;
+            candle_core::Device::new_cuda(id)
+                .map_err(|e| format!("Failed to initialize CUDA device {}: {}", id, e))
+        }
+        other => Err(format!("Unknown device: {}. Use 'cpu', 'cuda', or 'cuda:N'.", other)),
     }
 }
 
@@ -182,6 +192,41 @@ enum Commands {
         #[arg(long)]
         mhc: String,
     },
+
+    /// Generate text from a trained checkpoint
+    Generate {
+        /// Checkpoint directory
+        #[arg(long)]
+        checkpoint: String,
+
+        /// Path to tokenizer.json
+        #[arg(long)]
+        tokenizer: String,
+
+        /// Prompt text
+        #[arg(long, default_value = "fn main() {")]
+        prompt: String,
+
+        /// Read prompt from file instead
+        #[arg(long)]
+        prompt_file: Option<String>,
+
+        /// Max tokens to generate
+        #[arg(long, default_value = "256")]
+        max_tokens: usize,
+
+        /// Sampling temperature (0 = greedy)
+        #[arg(long, default_value = "0.8")]
+        temperature: f64,
+
+        /// Top-k sampling (0 = disabled)
+        #[arg(long, default_value = "50")]
+        top_k: usize,
+
+        /// Device (cpu or cuda)
+        #[arg(long, default_value = "cpu")]
+        device: String,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -218,6 +263,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or(1);
                 tracing::info!("Threads: {} (auto-detected)", n);
             }
+
+            // Trim all CUDA memory pools before device init.
+            // Prevents OOM when GPU 0 is full and we target GPU N>0.
+            nanochat_train::train::trim_all_cuda_memory_pools();
 
             let device = match resolve_device(&device) {
                 Ok(device) => device,
@@ -266,11 +315,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 nanochat_train::train::Trainer::new(cfg.clone(), device)?
             };
 
-            // Apply --total-steps override (useful for chunked training)
+            // Apply --total-steps override (useful for chunked training).
+            // Sets stop_at_step WITHOUT changing config.total_steps — preserves LR schedule.
             if let Some(ts) = total_steps {
-                cfg.total_steps = ts;
-                trainer.config.total_steps = ts;
-                tracing::info!("Overriding total_steps to {}", ts);
+                trainer.stop_at_step = Some(ts);
+                tracing::info!("Will stop at step {} (LR schedule uses config total_steps={})", ts, cfg.total_steps);
             }
 
             let effective_seq_len = match effective_seq_len(seq_len, &cfg) {
@@ -381,6 +430,200 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!("Exporting to {} and {}...", gguf, mhc);
             nanochat_train::export::export_model(&model, &meta.config, &gguf, &mhc)?;
             tracing::info!("Export complete!");
+        }
+
+        Commands::Generate {
+            checkpoint,
+            tokenizer,
+            prompt,
+            prompt_file,
+            max_tokens,
+            temperature,
+            top_k,
+            device,
+        } => {
+            let prompt = if let Some(pf) = prompt_file {
+                std::fs::read_to_string(&pf)?
+            } else {
+                prompt
+            };
+            let device = match resolve_device(&device) {
+                Ok(d) => d,
+                Err(msg) => { eprintln!("{}", msg); std::process::exit(1); }
+            };
+
+            // Load tokenizer
+            let tok = nanochat_train::data::tokenizer::NanochatTokenizer::from_file(
+                std::path::Path::new(&tokenizer),
+            ).map_err(|e| -> Box<dyn std::error::Error> { e })?;
+
+            // Load model from checkpoint
+            tracing::info!("Loading checkpoint from {}...", checkpoint);
+            let meta_json = std::fs::read_to_string(format!("{}/meta.json", checkpoint))?;
+            let meta: nanochat_train::checkpoint::CheckpointMeta =
+                serde_json::from_str(&meta_json)?;
+
+            let varmap = candle_nn::VarMap::new();
+            let vb = candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
+            let model = nanochat_train::model::NanochatTrainModel::new(&meta.config, vb)?;
+
+            // Load weights onto the correct device
+            let tensors = candle_core::safetensors::load(
+                format!("{}/model.safetensors", checkpoint), &device
+            )?;
+            let mut data = varmap.data().lock().unwrap();
+            let mut loaded = 0usize;
+            let mut missing = Vec::new();
+            for (name, var) in data.iter_mut() {
+                if let Some(t) = tensors.get(name) {
+                    var.set(t).map_err(|e| format!("Failed to set {}: {}", name, e))?;
+                    loaded += 1;
+                } else {
+                    missing.push(name.clone());
+                }
+            }
+            let total_model = data.len();
+            let total_ckpt = tensors.len();
+            drop(data);
+
+            tracing::info!("Loaded {}/{} model params from checkpoint ({} tensors in file)", loaded, total_model, total_ckpt);
+            if !missing.is_empty() {
+                tracing::warn!("MISSING {} weights (still random!): {:?}",
+                    missing.len(),
+                    if missing.len() <= 10 { &missing[..] } else { &missing[..10] }
+                );
+            }
+
+            tracing::info!("Model loaded: {} params", model.param_count());
+
+            // Encode prompt
+            let mut token_ids: Vec<u32> = tok.encode(&prompt)
+                .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            tracing::info!("Prompt: {} ({} tokens)", prompt.chars().take(60).collect::<String>(), token_ids.len());
+
+            // Context padding: wavefield layers are bidirectional and need a
+            // well-populated field (~512 tokens) to produce good outputs. With short
+            // prompts, the wavefield field is too sparse. Pad with training data prefix.
+            let train_seq_len = 512usize;
+            let _prefix_len = if token_ids.len() < train_seq_len && meta.config.use_wave_field {
+                let pad_needed = train_seq_len - token_ids.len();
+                let data_path = "data/rust_v2_prepared/tokens.bin";
+                if std::path::Path::new(data_path).exists() {
+                    let token_data = std::fs::read(data_path)?;
+                    let all_tokens: Vec<u32> = token_data.chunks_exact(4)
+                        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect();
+                    // Use a random offset for diverse context
+                    use rand::Rng;
+                    let mut rng = rand::thread_rng();
+                    let max_offset = all_tokens.len().saturating_sub(pad_needed + 1);
+                    let offset = if max_offset > 0 { rng.gen_range(0..max_offset) } else { 0 };
+                    let pad_tokens: Vec<u32> = all_tokens[offset..offset + pad_needed].to_vec();
+                    tracing::info!("Wavefield context padding: {} prefix tokens (total: {})",
+                        pad_needed, train_seq_len);
+                    let mut padded = pad_tokens;
+                    padded.extend_from_slice(&token_ids);
+                    token_ids = padded;
+                    pad_needed
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            let prompt_len = token_ids.len();
+
+            // Print prompt (only the user's actual prompt, not padding)
+            print!("{}", prompt);
+            use std::io::Write;
+            std::io::stdout().flush()?;
+
+            // Autoregressive generation with sliding window
+            let max_ctx = train_seq_len; // cap context to training window size
+            for _ in 0..max_tokens {
+                // Use last max_ctx tokens as context window
+                let start = if token_ids.len() > max_ctx { token_ids.len() - max_ctx } else { 0 };
+                let input = candle_core::Tensor::new(
+                    &token_ids[start..],
+                    &device,
+                )?.unsqueeze(0)?; // [1, min(seq, max_ctx)]
+
+                let hidden = model.forward_hidden_only(&input)?;
+                let logits = model.project_hidden_to_logits(&hidden)?;
+
+                // Get logits for last position: [1, seq, vocab] -> [vocab]
+                let last_logits = logits.squeeze(0)?; // [seq, vocab]
+                let seq_len = last_logits.dim(0)?;
+                let last_logits = last_logits.get(seq_len - 1)?; // [vocab]
+                let mut logits_vec: Vec<f32> = last_logits.to_vec1()?;
+
+                // Sample next token
+                let next_token = if temperature <= 0.0 || temperature < 1e-8 {
+                    // Greedy
+                    logits_vec
+                        .iter()
+                        .enumerate()
+                        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                        .map(|(i, _)| i as u32)
+                        .unwrap_or(0)
+                } else {
+                    // Temperature + top-k sampling
+                    for v in logits_vec.iter_mut() {
+                        *v /= temperature as f32;
+                    }
+
+                    // Top-k: zero out everything outside top-k
+                    if top_k > 0 && top_k < logits_vec.len() {
+                        let mut indexed: Vec<(usize, f32)> =
+                            logits_vec.iter().copied().enumerate().collect();
+                        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                        let threshold = indexed[top_k].1;
+                        for v in logits_vec.iter_mut() {
+                            if *v < threshold {
+                                *v = f32::NEG_INFINITY;
+                            }
+                        }
+                    }
+
+                    // Softmax
+                    let max_val = logits_vec.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let exps: Vec<f32> = logits_vec.iter().map(|v| (v - max_val).exp()).collect();
+                    let sum: f32 = exps.iter().sum();
+                    let probs: Vec<f32> = exps.iter().map(|e| e / sum).collect();
+
+                    // Sample from distribution
+                    use rand::Rng;
+                    let mut rng = rand::thread_rng();
+                    let r: f32 = rng.gen();
+                    let mut cumsum = 0.0f32;
+                    let mut chosen = 0u32;
+                    for (i, &p) in probs.iter().enumerate() {
+                        cumsum += p;
+                        if r < cumsum {
+                            chosen = i as u32;
+                            break;
+                        }
+                    }
+                    chosen
+                };
+
+                token_ids.push(next_token);
+
+                // Decode and print just the new token
+                let text_result: std::result::Result<String, _> = tok.decode(&[next_token]);
+                if let Ok(text) = text_result {
+                    print!("{}", text);
+                    std::io::stdout().flush()?;
+                }
+            }
+
+            println!();
+            tracing::info!(
+                "Generated {} tokens (prompt={}, new={})",
+                token_ids.len(),
+                prompt_len,
+                token_ids.len() - prompt_len
+            );
         }
     }
 

@@ -1145,7 +1145,7 @@ impl TrainConfig {
             n_heads: 12,
             n_kv_heads: 4, // GQA 3:1
             ffn_mult: 2.6667, // ffn_dim = 2048, aligned to 128
-            vocab_size: 50257, // GPT-2 tokenizer vocab size (matches rust_tokens_large.bin)
+            vocab_size: 4096, // BPE tokenizer trained on Rust corpus
             max_seq_len: 2048,
             group_size: 128,
             mhc_n_streams: 2,
@@ -1157,9 +1157,9 @@ impl TrainConfig {
             mhc_lr: 1e-4,
             weight_decay: 0.0,
             batch_size: 2,
-            grad_accum_steps: 4, // effective batch 8 — autograd leak fixed by detach_grad_store_inplace
+            grad_accum_steps: 1, // no grad_accum — Candle leaks memory with accum
             warmup_steps: 500,
-            total_steps: 10_000,
+            total_steps: 30_000, // ~1 epoch on 36M token dataset (batch=2, seq=512)
             decay_start_frac: 0.8,
             grad_clip: 1.0,
             ns_steps: 5,
@@ -1205,6 +1205,15 @@ impl TrainConfig {
             wavefield_warmup_delay: 200, // freeze physics params for first 200 steps
             wavefield_haar_direct: true, // direct Haar-domain coefficients (not time-domain kernel)
         }
+    }
+
+    /// Ablation: same as nano-500m-wave-haar but WITHOUT wavefield.
+    /// Pure standard GQA attention for all 16 layers.
+    /// Compare against nano_500m_wave_haar to measure wavefield contribution.
+    pub fn nano_500m_baseline() -> Self {
+        let mut cfg = Self::nano_500m_wave_haar();
+        cfg.use_wave_field = false;
+        cfg
     }
 
     /// 125M hybrid: 50% standard attention + 50% wave field (interleaved).
