@@ -7,6 +7,7 @@ use candle_nn::VarBuilder;
 
 use crate::attention::AttentionTrain;
 use crate::config::TrainConfig;
+use crate::engram::EngramTrain;
 use crate::ffn::FeedForwardTrain;
 use crate::layers::RMSNormTrain;
 use crate::mhc::MhcLiteN2Train;
@@ -26,6 +27,7 @@ pub struct TransformerBlockTrain {
     pub norm_ffn: RMSNormTrain,
     pub attention: AttentionTrainLayer,
     pub ffn: FeedForwardTrain,
+    pub engram: Option<EngramTrain>,
     pub dim: usize,
     pub max_seq_len: usize,
 }
@@ -51,6 +53,7 @@ impl TransformerBlockTrain {
                 vb.pp("attn"),
             )?),
             ffn: FeedForwardTrain::new(config.dim, ffn_dim, config.group_size, vb.pp("ffn"))?,
+            engram: None,
             dim: config.dim,
             max_seq_len: config.max_seq_len,
         })
@@ -93,15 +96,38 @@ impl TransformerBlockTrain {
                 vb.pp("wavefield"),
             )?),
             ffn: FeedForwardTrain::new(config.dim, ffn_dim, config.group_size, vb.pp("ffn"))?,
+            engram: None,
             dim: config.dim,
             max_seq_len: config.max_seq_len,
         })
     }
 
+    /// Attach an Engram module to this block.
+    pub fn with_engram(mut self, engram: EngramTrain) -> Self {
+        self.engram = Some(engram);
+        self
+    }
+
     /// Forward: x_exp [batch, seq, 2*dim] -> [batch, seq, 2*dim]
-    pub fn forward(&self, x_exp: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    ///
+    /// token_ids is optional — only needed when this block has an Engram module.
+    pub fn forward(
+        &self,
+        x_exp: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        token_ids: Option<&Tensor>,
+    ) -> Result<Tensor> {
         // Attention sub-layer with mHC
         let attn_in = self.mhc_attn.prepare_input(x_exp, self.dim)?;
+
+        // Apply Engram enrichment before attention (if present)
+        let attn_in = if let (Some(engram), Some(ids)) = (&self.engram, token_ids) {
+            engram.forward(&attn_in, ids)?
+        } else {
+            attn_in
+        };
+
         let attn_normed = self.norm_attn.forward(&attn_in)?;
         let attn_out = match &self.attention {
             AttentionTrainLayer::Standard(attn) => attn.forward(&attn_normed, cos, sin)?,
@@ -123,6 +149,9 @@ impl TransformerBlockTrain {
             AttentionTrainLayer::WaveField(wf) => wf.linear_params(),
         };
         params.extend(self.ffn.linear_params());
+        if let Some(engram) = &self.engram {
+            params.extend(engram.linear_params());
+        }
         params
     }
 
@@ -138,7 +167,21 @@ impl TransformerBlockTrain {
 
     /// Collect norm parameters.
     pub fn norm_params(&self) -> Vec<&Tensor> {
-        vec![self.norm_attn.weight(), self.norm_ffn.weight()]
+        let mut params = vec![self.norm_attn.weight(), self.norm_ffn.weight()];
+        if let Some(engram) = &self.engram {
+            params.extend(engram.norm_params());
+            params.extend(engram.conv_params());
+        }
+        params
+    }
+
+    /// Collect engram table (embedding) parameters for separate optimizer group.
+    pub fn engram_table_params(&self) -> Vec<&Tensor> {
+        if let Some(engram) = &self.engram {
+            engram.table_params()
+        } else {
+            vec![]
+        }
     }
 }
 
@@ -205,6 +248,14 @@ mod tests {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -221,7 +272,7 @@ mod tests {
         let sin_s = sin.narrow(0, 0, 4)?;
 
         let x_exp = Tensor::randn(0.0f32, 1.0, (2, 4, 128), &device)?; // 2*dim=128
-        let y = block.forward(&x_exp, &cos_s, &sin_s)?;
+        let y = block.forward(&x_exp, &cos_s, &sin_s, None)?;
         assert_eq!(y.dims(), &[2, 4, 128]);
         Ok(())
     }
@@ -239,7 +290,7 @@ mod tests {
         let sin_s = sin.narrow(0, 0, 4)?;
 
         let x_exp = Tensor::randn(0.0f32, 1.0, (1, 4, 128), &device)?;
-        let y = block.forward(&x_exp, &cos_s, &sin_s)?;
+        let y = block.forward(&x_exp, &cos_s, &sin_s, None)?;
         let loss = y.sum_all()?;
         let grads = loss.backward()?;
 

@@ -8,13 +8,9 @@ use candle_nn::VarBuilder;
 /// Sigmoid helper that uses custom CUDA kernel when available.
 #[inline]
 fn sigmoid(t: &Tensor) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
-    {
-        if t.device().is_cuda() {
-            return crate::cuda_ops::cuda_sigmoid(t);
-        }
-    }
-    candle_nn::ops::sigmoid(t)
+    // Manual sigmoid: 1 / (1 + exp(-x)) — works on both CPU and CUDA
+    // (candle_nn::ops::sigmoid has no CUDA kernel)
+    t.neg()?.exp()?.affine(1.0, 1.0)?.recip()
 }
 
 /// Differentiable mHC-lite N=2 for training.

@@ -7,7 +7,7 @@
 //!
 //! Supports both local teacher (in-process) and remote teacher (HTTP endpoint).
 
-use candle_core::{DType, Device, Result, Tensor, Var};
+use candle_core::{DType, Device, D, Result, Tensor, Var};
 use candle_nn::VarMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -902,7 +902,7 @@ fn kl_divergence_loss(
     let student_scaled = student_logits.affine(1.0 / temp, 0.0)?;
 
     // Teacher probabilities (detached, no grad)
-    let teacher_probs = candle_nn::ops::softmax_last_dim(&teacher_scaled.detach())?;
+    let teacher_probs = candle_nn::ops::softmax(&teacher_scaled.detach(), D::Minus1)?;
 
     // Student log probabilities
     let student_log_probs = candle_nn::ops::log_softmax(&student_scaled, candle_core::D::Minus1)?;
@@ -942,7 +942,7 @@ pub fn load_balance_loss(router_logits: &Tensor, expert_mask: &Tensor) -> Result
     let expert_fracs = expert_counts.affine(1.0 / n_tokens, 0.0)?;
 
     // Compute average router probability for each expert
-    let router_probs = candle_nn::ops::softmax_last_dim(router_logits)?;
+    let router_probs = candle_nn::ops::softmax(router_logits, D::Minus1)?;
     let avg_router_probs = router_probs.mean(candle_core::D::Minus2)?.mean(0)?; // [n_experts]
 
     // Load balance loss: sum(frac * prob) * n_experts
@@ -968,7 +968,7 @@ pub fn router_auxiliary_loss(router_logits: &Tensor) -> Result<Tensor> {
     // entropy = -sum(p * log p)
     // We want to minimize entropy, so we use it directly as loss
 
-    let probs = candle_nn::ops::softmax_last_dim(router_logits)?;
+    let probs = candle_nn::ops::softmax(router_logits, D::Minus1)?;
     let log_probs = candle_nn::ops::log_softmax(router_logits, candle_core::D::Minus1)?;
     let entropy = probs.mul(&log_probs)?.neg()?.mean_all()?;
 
@@ -1042,6 +1042,14 @@ mod tests {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 

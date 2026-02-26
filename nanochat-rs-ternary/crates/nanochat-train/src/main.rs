@@ -41,6 +41,16 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-500m-baseline" | "nano_500m_baseline" => {
             Some(TrainConfig::nano_500m_baseline())
         }
+        "nano-275m-wave-haar" | "nano_275m_wave_haar" | "nano-275m" | "nano_275m" => {
+            Some(TrainConfig::nano_275m_wave_haar())
+        }
+        "nano-275m-baseline" | "nano_275m_baseline" => {
+            Some(TrainConfig::nano_275m_baseline())
+        }
+        "nano-275m-wave-engram-loop" | "nano_275m_wave_engram_loop"
+        | "nano-275m-engram" | "nano_275m_engram" => {
+            Some(TrainConfig::nano_275m_wave_engram_loop())
+        }
         _ => None,
     }
 }
@@ -281,7 +291,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(cfg) => cfg,
                 None => {
                     tracing::error!(
-                        "Unknown config: {}. Use d20, d20-loop, d20-mtp, d20-e3-full, d20-e3-fp4, d20-wave, nano-125m, nano-125m-wave, nano-125m-hybrid, nano-500m-wave-haar, nano-1b, medium-3b, large-7b, large-7b-6day, tiny-cpu, or test-8bit.",
+                        "Unknown config: {}. Use d20, d20-loop, d20-mtp, d20-e3-full, d20-e3-fp4, d20-wave, nano-125m, nano-125m-wave, nano-125m-hybrid, nano-275m-wave-haar, nano-275m-baseline, nano-275m-wave-engram-loop, nano-500m-wave-haar, nano-1b, medium-3b, large-7b, large-7b-6day, tiny-cpu, or test-8bit.",
                         config
                     );
                     std::process::exit(1);
@@ -676,6 +686,16 @@ mod tests {
             "nano_500m_wave_haar",
             "nano-500m",
             "nano_500m",
+            "nano-275m-wave-haar",
+            "nano_275m_wave_haar",
+            "nano-275m",
+            "nano_275m",
+            "nano-275m-baseline",
+            "nano_275m_baseline",
+            "nano-275m-wave-engram-loop",
+            "nano_275m_wave_engram_loop",
+            "nano-275m-engram",
+            "nano_275m_engram",
         ];
         for alias in aliases {
             assert!(

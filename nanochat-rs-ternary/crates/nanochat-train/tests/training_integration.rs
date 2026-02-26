@@ -70,6 +70,14 @@ fn tiny_config() -> TrainConfig {
         wavefield_physics_lr: 5e-4,
         wavefield_warmup_delay: 0,
         wavefield_haar_direct: true,
+        use_engram: false,
+        engram_d_mem: 256,
+        engram_n_gram_orders: vec![],
+        engram_n_heads: 4,
+        engram_table_size: 50021,
+        engram_layers: vec![],
+        engram_conv_kernel: 4,
+        engram_lr_mult: 5.0,
     }
 }
 

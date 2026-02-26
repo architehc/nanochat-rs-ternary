@@ -46,6 +46,26 @@ fn default_entropy_weight() -> f64 {
     0.0 // disabled by default
 }
 
+fn default_engram_d_mem() -> usize {
+    256
+}
+
+fn default_engram_n_heads() -> usize {
+    4
+}
+
+fn default_engram_table_size() -> usize {
+    50021 // prime, reduces hash collisions
+}
+
+fn default_engram_conv_kernel() -> usize {
+    4
+}
+
+fn default_engram_lr_mult() -> f64 {
+    5.0 // paper spec: 5× backbone lr for table params
+}
+
 fn default_wavefield_field_size() -> usize {
     1024
 }
@@ -254,6 +274,32 @@ pub struct TrainConfig {
     /// Default false for backward compat with old checkpoints.
     #[serde(default)]
     pub wavefield_haar_direct: bool,
+
+    // Engram: O(1) N-gram lookup memory (arXiv 2601.07372)
+    /// Enable Engram N-gram memory tables
+    #[serde(default)]
+    pub use_engram: bool,
+    /// Engram embedding dimension per head
+    #[serde(default = "default_engram_d_mem")]
+    pub engram_d_mem: usize,
+    /// N-gram orders (e.g., [2, 3] for bigrams + trigrams)
+    #[serde(default)]
+    pub engram_n_gram_orders: Vec<usize>,
+    /// Number of hash heads per order
+    #[serde(default = "default_engram_n_heads")]
+    pub engram_n_heads: usize,
+    /// Hash table size per (order, head) — prime recommended
+    #[serde(default = "default_engram_table_size")]
+    pub engram_table_size: usize,
+    /// Which unique layer indices get Engram (e.g., [0, 4] for first and last)
+    #[serde(default)]
+    pub engram_layers: Vec<usize>,
+    /// Depthwise causal conv kernel size
+    #[serde(default = "default_engram_conv_kernel")]
+    pub engram_conv_kernel: usize,
+    /// Learning rate multiplier for engram table params (paper: 5×)
+    #[serde(default = "default_engram_lr_mult")]
+    pub engram_lr_mult: f64,
 }
 
 impl TrainConfig {
@@ -540,6 +586,15 @@ impl TrainConfig {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -601,6 +656,15 @@ impl TrainConfig {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -684,6 +748,15 @@ impl TrainConfig {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -745,6 +818,15 @@ impl TrainConfig {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -815,6 +897,15 @@ impl TrainConfig {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -877,6 +968,15 @@ impl TrainConfig {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -938,6 +1038,15 @@ impl TrainConfig {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -999,6 +1108,15 @@ impl TrainConfig {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -1060,6 +1178,15 @@ impl TrainConfig {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -1204,6 +1331,15 @@ impl TrainConfig {
             wavefield_physics_lr: 5e-4, // faster than mhc_lr for spectral profile learning
             wavefield_warmup_delay: 200, // freeze physics params for first 200 steps
             wavefield_haar_direct: true, // direct Haar-domain coefficients (not time-domain kernel)
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -1214,6 +1350,176 @@ impl TrainConfig {
         let mut cfg = Self::nano_500m_wave_haar();
         cfg.use_wave_field = false;
         cfg
+    }
+
+    /// nano-275m with Haar wavefield attention (dim=1024, 20 layers).
+    /// ~277M params. Designed for dual-GPU A/B testing with nano_275m_baseline.
+    /// Training: batch=2, seq=256 via CLI --seq-len 256 to fit 23GB VRAM.
+    pub fn nano_275m_wave_haar() -> Self {
+        Self {
+            dim: 1024,
+            n_layers: 20,
+            n_heads: 16,     // 1024/16 = 64 head_dim
+            n_kv_heads: 4,   // GQA 4:1
+            ffn_mult: 3.0,   // ffn_dim = 3072, aligned to 128
+            vocab_size: 4096,
+            max_seq_len: 1024,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: None,
+
+            lr: 0.012,       // scaled from 0.015 by sqrt(768/1024)
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 1,
+            warmup_steps: 2000,
+            total_steps: 134_764, // 2 epochs on ~34.5M tokens (batch=2, seq=256)
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+
+            use_mtp: true,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: true,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
+
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+
+            use_wave_field: true,
+            wavefield_field_size: 256,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 0.5,  // 10 wavefield + 10 standard layers
+            wavefield_convolve_mode: Some("haar".to_string()),
+            wavefield_haar_levels: Some(6),
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 1000, // proportional to longer run
+            wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
+        }
+    }
+
+    /// Ablation: same as nano-275m-wave-haar but WITHOUT wavefield.
+    /// Pure standard GQA attention for all 20 layers.
+    pub fn nano_275m_baseline() -> Self {
+        let mut cfg = Self::nano_275m_wave_haar();
+        cfg.use_wave_field = false;
+        cfg
+    }
+
+    /// nano-275m with LoopLM + Wavefield + Engram.
+    /// ~279M total params (79M GPU + 200M engram tables).
+    /// Architecture: 2 local_before + 16-iteration shared loop + 2 local_after = 20 effective depth.
+    /// Engram on layers 0 and 4 (first and last unique layers).
+    pub fn nano_275m_wave_engram_loop() -> Self {
+        Self {
+            dim: 1024,
+            n_layers: 5, // 2 local_before + 1 shared + 2 local_after
+            n_heads: 16,
+            n_kv_heads: 4,
+            ffn_mult: 3.0,
+            vocab_size: 4096,
+            max_seq_len: 1024,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: Some(LoopConfig {
+                local_before: 2,
+                local_after: 2,
+                loop_count: 16,
+                adaptive_loop: None,
+            }),
+
+            lr: 0.012,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 1,
+            warmup_steps: 2000,
+            total_steps: 134_764,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: false,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
+
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+
+            // Wavefield: layers 1 and 3 of 5 unique layers (50% ratio)
+            use_wave_field: true,
+            wavefield_field_size: 256,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 0.5,
+            wavefield_convolve_mode: Some("haar".to_string()),
+            wavefield_haar_levels: Some(6),
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 1000,
+            wavefield_haar_direct: true,
+
+            // Engram: N-gram memory on first and last unique layers
+            use_engram: true,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![2, 3],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![0, 4], // first and last unique layers
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
+        }
     }
 
     /// 125M hybrid: 50% standard attention + 50% wave field (interleaved).

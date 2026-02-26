@@ -145,7 +145,8 @@ impl SharedLoopBlock {
         // 6. Global gate: mix with accumulated global state
         let gated_attn = if let Some(g_state) = global_state {
             let gate = self.g_qk.forward(&x_norm)?;
-            let gate = candle_nn::ops::sigmoid(&gate)?;
+            // Manual sigmoid for CUDA compatibility (candle_nn::ops::sigmoid has no CUDA kernel)
+            let gate = gate.neg()?.exp()?.affine(1.0, 1.0)?.recip()?;
 
             // Mix: gate * attn_out + (1 - gate) * global_state
             let one = gate.ones_like()?;
@@ -176,7 +177,8 @@ impl SharedLoopBlock {
         // 4. Global FFN gate
         let gated_ffn = if let Some(g_state) = global_state {
             let gate = self.g_ffn.forward(&x_norm)?;
-            let gate = candle_nn::ops::sigmoid(&gate)?;
+            // Manual sigmoid for CUDA compatibility
+            let gate = gate.neg()?.exp()?.affine(1.0, 1.0)?.recip()?;
 
             let one = gate.ones_like()?;
             let inv_gate = (&one - &gate)?;
@@ -230,7 +232,7 @@ impl SharedLoopBlock {
         let scores = self.apply_causal_mask(&scores)?;
 
         // Softmax
-        let attn_weights = candle_nn::ops::softmax_last_dim(&scores)?;
+        let attn_weights = candle_nn::ops::softmax(&scores, D::Minus1)?;
 
         // Output: [batch, n_heads, seq, head_dim]
         let out = attn_weights.matmul(&v)?;
@@ -346,6 +348,14 @@ mod tests {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 
@@ -439,7 +449,7 @@ mod tests {
         let masked = block.apply_causal_mask(&scores)?;
 
         // After softmax, future positions should have zero weight
-        let weights = candle_nn::ops::softmax_last_dim(&masked)?;
+        let weights = candle_nn::ops::softmax(&masked, D::Minus1)?;
 
         // Check that position 0 can only attend to itself
         let weights_0 = weights.i((0, 0, 0))?; // First query

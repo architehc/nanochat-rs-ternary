@@ -8,6 +8,7 @@ use candle_nn::{self, Module, VarBuilder};
 use crate::attention::precompute_rope_freqs;
 use crate::block::TransformerBlockTrain;
 use crate::config::TrainConfig;
+use crate::engram::EngramTrain;
 use crate::layers::RMSNormTrain;
 use crate::loop_block::SharedLoopBlock;
 use crate::mhc::MhcLiteN2Train;
@@ -51,6 +52,24 @@ impl NanochatTrainModel {
         )?;
         let tok_embed = candle_nn::Embedding::new(embed_weights, config.dim);
 
+        // Helper: optionally create Engram for a given unique layer index
+        let make_engram = |layer_idx: usize, vb_layer: &VarBuilder| -> Result<Option<EngramTrain>> {
+            if config.use_engram && config.engram_layers.contains(&layer_idx) {
+                Ok(Some(EngramTrain::new(
+                    config.dim,
+                    config.engram_d_mem,
+                    &config.engram_n_gram_orders,
+                    config.engram_n_heads,
+                    config.engram_table_size,
+                    config.engram_conv_kernel,
+                    config.group_size,
+                    vb_layer.pp("engram"),
+                )?))
+            } else {
+                Ok(None)
+            }
+        };
+
         // Build architecture based on loop_config
         let (blocks, local_blocks_before, shared_loop_block, local_blocks_after) =
             if let Some(loop_cfg) = &config.loop_config {
@@ -58,11 +77,16 @@ impl NanochatTrainModel {
                 // Respect wavefield config for local layers (shared loop block stays standard)
                 let before: Vec<_> = (0..loop_cfg.local_before)
                     .map(|i| {
-                        if config.is_wavefield_layer(i) {
-                            TransformerBlockTrain::new_wavefield(config, vb.pp(format!("local_before.{i}")))
+                        let layer_vb = vb.pp(format!("local_before.{i}"));
+                        let mut block = if config.is_wavefield_layer(i) {
+                            TransformerBlockTrain::new_wavefield(config, layer_vb.clone())?
                         } else {
-                            TransformerBlockTrain::new(config, vb.pp(format!("local_before.{i}")))
+                            TransformerBlockTrain::new(config, layer_vb.clone())?
+                        };
+                        if let Some(engram) = make_engram(i, &layer_vb)? {
+                            block = block.with_engram(engram);
                         }
+                        Ok(block)
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -71,11 +95,17 @@ impl NanochatTrainModel {
                 let after_offset = loop_cfg.local_before + 1; // +1 for shared block
                 let after: Vec<_> = (0..loop_cfg.local_after)
                     .map(|i| {
-                        if config.is_wavefield_layer(after_offset + i) {
-                            TransformerBlockTrain::new_wavefield(config, vb.pp(format!("local_after.{i}")))
+                        let unique_idx = after_offset + i;
+                        let layer_vb = vb.pp(format!("local_after.{i}"));
+                        let mut block = if config.is_wavefield_layer(unique_idx) {
+                            TransformerBlockTrain::new_wavefield(config, layer_vb.clone())?
                         } else {
-                            TransformerBlockTrain::new(config, vb.pp(format!("local_after.{i}")))
+                            TransformerBlockTrain::new(config, layer_vb.clone())?
+                        };
+                        if let Some(engram) = make_engram(unique_idx, &layer_vb)? {
+                            block = block.with_engram(engram);
                         }
+                        Ok(block)
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -85,11 +115,16 @@ impl NanochatTrainModel {
                 // Check each layer for wave field vs standard attention
                 let blocks = (0..config.n_layers)
                     .map(|i| {
-                        if config.is_wavefield_layer(i) {
-                            TransformerBlockTrain::new_wavefield(config, vb.pp(format!("blocks.{i}")))
+                        let layer_vb = vb.pp(format!("blocks.{i}"));
+                        let mut block = if config.is_wavefield_layer(i) {
+                            TransformerBlockTrain::new_wavefield(config, layer_vb.clone())?
                         } else {
-                            TransformerBlockTrain::new(config, vb.pp(format!("blocks.{i}")))
+                            TransformerBlockTrain::new(config, layer_vb.clone())?
+                        };
+                        if let Some(engram) = make_engram(i, &layer_vb)? {
+                            block = block.with_engram(engram);
                         }
+                        Ok(block)
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -150,13 +185,20 @@ impl NanochatTrainModel {
         let cos = self.freqs_cos.narrow(0, 0, seq_len)?;
         let sin = self.freqs_sin.narrow(0, 0, seq_len)?;
 
+        // Pass token_ids to blocks that have Engram (None if no engram)
+        let ids = if self.config.use_engram {
+            Some(token_ids)
+        } else {
+            None
+        };
+
         // 4. Transformer blocks (loop or standard)
         if let Some(ref loop_block) = self.shared_loop_block {
             let loop_cfg = self.config.loop_config.as_ref().unwrap();
 
             // 4a. Local layers before
             for block in &self.local_blocks_before {
-                x_exp = block.forward(&x_exp, &cos, &sin)?;
+                x_exp = block.forward(&x_exp, &cos, &sin, ids)?;
             }
 
             // 4b. Shared loop (N iterations)
@@ -169,12 +211,12 @@ impl NanochatTrainModel {
 
             // 4c. Local layers after
             for block in &self.local_blocks_after {
-                x_exp = block.forward(&x_exp, &cos, &sin)?;
+                x_exp = block.forward(&x_exp, &cos, &sin, ids)?;
             }
         } else {
             // Standard architecture
             for block in &self.blocks {
-                x_exp = block.forward(&x_exp, &cos, &sin)?;
+                x_exp = block.forward(&x_exp, &cos, &sin, ids)?;
             }
         }
 
@@ -347,6 +389,14 @@ mod tests {
             wavefield_physics_lr: 5e-4,
             wavefield_warmup_delay: 0,
             wavefield_haar_direct: true,
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
         }
     }
 

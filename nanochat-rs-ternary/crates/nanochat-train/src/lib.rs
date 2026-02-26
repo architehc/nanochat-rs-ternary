@@ -33,6 +33,7 @@ pub mod checkpoint;
 pub mod collider;
 pub mod config;
 pub mod data;
+pub mod engram;
 pub mod distill;
 pub mod error;
 pub mod export;
