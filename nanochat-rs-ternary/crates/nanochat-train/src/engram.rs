@@ -52,8 +52,28 @@ impl EngramTrain {
         table_size: usize,
         conv_kernel: usize,
         group_size: usize,
+        vocab_size: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
+        // Validate hash table capacity.
+        assert!(
+            table_size >= 2,
+            "Engram table_size must be >= 2, got {}",
+            table_size
+        );
+        // Warn when table is too small relative to vocab — high collision rate
+        // wastes parameters because many distinct N-grams map to the same slot.
+        if vocab_size > 0 && table_size < vocab_size / 4 {
+            tracing::warn!(
+                "Engram table_size ({}) < vocab_size/4 ({}). \
+                 High collision rate will reduce N-gram memory effectiveness. \
+                 Consider table_size >= {}.",
+                table_size,
+                vocab_size / 4,
+                vocab_size / 4
+            );
+        }
+
         let n_orders = n_gram_orders.len();
         let total_heads = n_orders * n_heads;
         let concat_dim = total_heads * d_mem;
@@ -348,6 +368,7 @@ mod tests {
             1009,     // table_size (prime)
             4,        // conv_kernel
             64,       // group_size
+            4000,     // vocab_size
             vb.pp("engram"),
         )?;
 
@@ -374,7 +395,7 @@ mod tests {
 
         let dim = 64;
         let engram = EngramTrain::new(
-            dim, 32, &[2, 3], 2, 1009, 4, 64, vb.pp("engram"),
+            dim, 32, &[2, 3], 2, 1009, 4, 64, 4000, vb.pp("engram"),
         )?;
 
         let batch = 2;
@@ -410,7 +431,7 @@ mod tests {
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
-        let engram = EngramTrain::new(64, 32, &[2, 3], 2, 1009, 4, 64, vb.pp("engram"))?;
+        let engram = EngramTrain::new(64, 32, &[2, 3], 2, 1009, 4, 64, 4000, vb.pp("engram"))?;
 
         let ids = &[1u32, 2, 3, 4, 5, 6, 7, 8];
         let indices1 = engram.precompute_hash_indices(ids, 1, 8);
@@ -430,7 +451,7 @@ mod tests {
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
         let dim = 64;
-        let engram = EngramTrain::new(dim, 32, &[2], 2, 1009, 4, 64, vb.pp("engram"))?;
+        let engram = EngramTrain::new(dim, 32, &[2], 2, 1009, 4, 64, 4000, vb.pp("engram"))?;
 
         // Create inputs with known values
         let hidden = Tensor::randn(0.0f32, 1.0, (1, 4, dim), &device)?;
@@ -451,7 +472,7 @@ mod tests {
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
         let dim = 64;
-        let engram = EngramTrain::new(dim, 32, &[2], 2, 1009, 4, 64, vb.pp("engram"))?;
+        let engram = EngramTrain::new(dim, 32, &[2], 2, 1009, 4, 64, 4000, vb.pp("engram"))?;
 
         let hidden = Tensor::randn(0.0f32, 1.0, (1, 4, dim), &device)?;
         let token_ids = Tensor::new(&[1u32, 2, 3, 4], &device)?.unsqueeze(0)?;
@@ -486,7 +507,7 @@ mod tests {
 
         let table_size = 1009;
         let engram =
-            EngramTrain::new(64, 32, &[2, 3], 2, table_size, 4, 64, vb.pp("engram"))?;
+            EngramTrain::new(64, 32, &[2, 3], 2, table_size, 4, 64, 4000, vb.pp("engram"))?;
 
         let ids = &[100u32, 200, 300, 400, 500, 1000, 2000, 4000];
         let indices = engram.precompute_hash_indices(ids, 1, 8);
@@ -511,7 +532,7 @@ mod tests {
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
-        let engram = EngramTrain::new(64, 32, &[2, 3], 2, 1009, 4, 64, vb.pp("engram"))?;
+        let engram = EngramTrain::new(64, 32, &[2, 3], 2, 1009, 4, 64, 4000, vb.pp("engram"))?;
 
         // 2 orders × 2 heads = 4 tables
         assert_eq!(engram.table_params().len(), 4);
@@ -521,6 +542,30 @@ mod tests {
         assert_eq!(engram.norm_params().len(), 2);
         // conv_weight
         assert_eq!(engram.conv_params().len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "table_size must be >= 2")]
+    fn test_table_size_too_small_panics() {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+
+        // table_size=1 should panic
+        let _ = EngramTrain::new(64, 32, &[2], 2, 1, 4, 64, 100, vb.pp("engram"));
+    }
+
+    #[test]
+    fn test_adequate_table_size_no_panic() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+
+        // table_size=1009 with vocab_size=4000 → 1009 >= 4000/4=1000, no warning
+        let engram = EngramTrain::new(64, 32, &[2], 2, 1009, 4, 64, 4000, vb.pp("engram"))?;
+        assert_eq!(engram.table_size, 1009);
 
         Ok(())
     }

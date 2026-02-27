@@ -417,6 +417,13 @@ impl WaveFieldAttention {
         let n_heads = config.n_wave_heads;
         let head_dim = config.head_dim;
         let field_size = config.field_size;
+        assert!(
+            field_size >= 2,
+            "WaveField field_size must be >= 2 (got {}). \
+             field_size=1 collapses all tokens to a single position, \
+             making the wave field stateless.",
+            field_size
+        );
         let total_proj = n_heads * head_dim;
 
         // Random scatter proj: dim -> n_heads * head_dim
@@ -508,6 +515,13 @@ impl WaveFieldAttention {
         field_size: usize,
         stride: f32,
     ) -> Self {
+        assert!(
+            field_size >= 2,
+            "WaveField field_size must be >= 2 (got {}). \
+             field_size=1 collapses all tokens to a single position, \
+             making the wave field stateless.",
+            field_size
+        );
         assert!(
             stride.is_finite() && stride >= 0.0,
             "WaveFieldAttention stride must be finite and non-negative, got {}",
@@ -1003,6 +1017,53 @@ mod tests {
             ratio < 2.0,
             "energy should stabilize with decay, but ratio={:.2} (last={:.2}, prev={:.2})",
             ratio, last, prev
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "field_size must be >= 2")]
+    fn test_field_size_one_panics_new_random() {
+        let config = WaveFieldConfig {
+            n_wave_heads: 4,
+            head_dim: 16,
+            field_size: 1, // degenerate — should panic
+            convolve_mode: ConvolveMode::Haar,
+            use_head_coupling: false,
+            haar_levels: Some(0),
+        };
+        let _wave = WaveFieldAttention::new_random(&config, 64, 512);
+    }
+
+    #[test]
+    #[should_panic(expected = "field_size must be >= 2")]
+    fn test_field_size_one_panics_from_parts() {
+        // Use dimensions compatible with group_size=128 for BitLinear
+        let dim = 128;
+        let n_heads = 2;
+        let head_dim = 64;
+        let total_proj = n_heads * head_dim; // 128
+
+        let physics = WavePhysicsParams {
+            omega: vec![1.0, 2.0],
+            alpha: vec![0.1, 0.2],
+            phi: vec![0.0, 0.5],
+        };
+        // Build kernel cache with valid field_size=2
+        let config = WaveFieldConfig {
+            n_wave_heads: n_heads,
+            head_dim,
+            field_size: 2,
+            convolve_mode: ConvolveMode::Haar,
+            use_head_coupling: false,
+            haar_levels: Some(1),
+        };
+        let kernel_cache = WaveKernelCache::from_physics(&physics, &config);
+        let scatter = BitLinear::from_float(&vec![0.0; total_proj * dim], total_proj, dim, 128);
+        let gate = BitLinear::from_float(&vec![0.0; total_proj * dim], total_proj, dim, 128);
+        let out = BitLinear::from_float(&vec![0.0; dim * total_proj], dim, total_proj, 128);
+        // field_size=1 should panic
+        let _wave = WaveFieldAttention::from_parts(
+            scatter, gate, out, physics, None, kernel_cache, n_heads, head_dim, 1, 0.5,
         );
     }
 }

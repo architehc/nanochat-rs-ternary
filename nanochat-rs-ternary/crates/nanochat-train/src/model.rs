@@ -63,6 +63,7 @@ impl NanochatTrainModel {
                     config.engram_table_size,
                     config.engram_conv_kernel,
                     config.group_size,
+                    config.vocab_size,
                     vb_layer.pp("engram"),
                 )?))
             } else {

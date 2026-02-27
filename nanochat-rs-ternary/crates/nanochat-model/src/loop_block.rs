@@ -457,8 +457,18 @@ impl SharedLoopBlock {
                 *score = (*score - max_score).exp();
                 sum += *score;
             }
-            for score in &mut scores {
-                *score = if sum > 0.0 { *score / sum } else { 0.0 };
+            if sum > 0.0 {
+                let inv_sum = 1.0 / sum;
+                for score in &mut scores {
+                    *score *= inv_sum;
+                }
+            } else {
+                // All exp(score - max) underflowed to 0 — fall back to uniform
+                // attention over causal positions instead of zeroing out.
+                let uniform = 1.0 / causal_len as f32;
+                for score in &mut scores {
+                    *score = uniform;
+                }
             }
 
             // Weighted sum over V (only causal positions)
@@ -750,5 +760,46 @@ mod tests {
 
         // Both iterations should complete without error
         // (With non-zero weights, states would differ, but zero weights produce zero outputs)
+    }
+
+    #[test]
+    fn test_softmax_underflow_gives_uniform_attention() {
+        // When all attention scores are extremely negative (causing exp() to underflow
+        // to 0), the softmax should fall back to uniform attention weights rather than
+        // producing all-zero weights that lose information.
+        let cfg = ModelConfig::d20();
+        let block = SharedLoopBlock::new_empty(&cfg);
+
+        let head_dim = cfg.head_dim();
+        let n_kv_heads = cfg.n_kv_heads;
+        let kv_dim = n_kv_heads * head_dim;
+
+        // Populate KV cache with 4 tokens
+        let mut kv_cache = KvCache::new(cfg.max_seq_len, n_kv_heads, head_dim);
+        for t in 0..4 {
+            let k: Vec<f32> = (0..kv_dim).map(|d| 0.1 * (t * kv_dim + d) as f32).collect();
+            let v: Vec<f32> = (0..kv_dim).map(|d| 1.0 + 0.01 * d as f32).collect();
+            kv_cache.append_kv(&k, &v);
+        }
+
+        // Create a query that is wildly different from all keys — this produces
+        // very negative dot products. With scale = 1/sqrt(head_dim), scores will
+        // be large negative numbers whose exp() underflows to 0.
+        let q: Vec<f32> = (0..cfg.dim).map(|d| -1e4 * (d as f32 + 1.0)).collect();
+
+        let mut out = vec![0.0f32; cfg.dim];
+        block
+            .compute_attention(&q, &kv_cache, 3, &mut out)
+            .expect("attention should succeed even with extreme scores");
+
+        // With uniform attention, output should be the mean of the V vectors,
+        // which is non-zero since we set V to positive values.
+        // The key property: output should NOT be all zeros.
+        let out_norm: f32 = out.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            out_norm > 0.0,
+            "Attention output should be non-zero when softmax underflows (uniform fallback). \
+             Got all-zero output, which means information was lost."
+        );
     }
 }

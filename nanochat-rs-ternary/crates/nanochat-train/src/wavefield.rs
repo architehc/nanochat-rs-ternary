@@ -92,6 +92,14 @@ impl WaveFieldAttentionTrain {
         per_elem_gate: bool,
         vb: VarBuilder,
     ) -> Result<Self> {
+        assert!(
+            field_size >= 2,
+            "WaveField field_size must be >= 2 (got {}). \
+             field_size=1 collapses all tokens to a single position, \
+             making the wave field stateless.",
+            field_size
+        );
+
         let total_proj = n_heads * head_dim;
 
         let scatter_proj = BitLinearSTE::new(dim, total_proj, group_size, vb.pp("scatter"))?;
@@ -784,5 +792,27 @@ mod tests {
         assert_eq!(physics.len(), 4, "FFT physics params count");
 
         Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "field_size must be >= 2")]
+    fn test_field_size_one_panics() {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+
+        // field_size=1 should panic during construction
+        let _ = WaveFieldAttentionTrain::new(
+            64,  // dim
+            4,   // n_heads
+            16,  // head_dim
+            1,   // field_size — degenerate, should panic
+            64,  // group_size
+            false,
+            ConvolveMode::Haar,
+            Some(0),
+            false,
+            vb.pp("wave"),
+        );
     }
 }
