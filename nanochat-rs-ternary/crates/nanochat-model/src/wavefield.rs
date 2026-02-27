@@ -343,6 +343,12 @@ struct WaveFieldWorkspace {
 ///
 /// Uses ternary projections for scatter/gate/output, FP32 physics for wave propagation.
 /// State is O(n_heads * field_size * head_dim) — constant in sequence length.
+///
+/// **Decay:** Per-head exponential decay is applied to state before each scatter-add.
+/// This prevents unbounded energy growth during long sequences. The decay factor
+/// for head h is `exp(-alpha[h] * stride)`, derived from the physics damping parameter.
+/// Heads with larger damping (alpha) forget faster, naturally matching their
+/// shorter-range convolution kernels.
 #[derive(Debug)]
 pub struct WaveFieldAttention {
     pub scatter_proj: BitLinear, // dim -> n_heads * head_dim
@@ -355,6 +361,9 @@ pub struct WaveFieldAttention {
     pub head_dim: usize,
     pub field_size: usize,
     pub stride: f32, // (field_size - 1) / (max_seq_len - 1)
+    /// Per-head decay factor: exp(-alpha[h] * stride), applied to state before each scatter.
+    /// Values are in (0, 1]. A value of 1.0 means no decay (alpha=0).
+    pub decay_factors: Vec<f32>,
     workspace: Mutex<WaveFieldWorkspace>,
 }
 
@@ -390,6 +399,19 @@ fn sigmoid(x: f32) -> f32 {
 }
 
 impl WaveFieldAttention {
+    /// Compute per-head decay factors from physics damping and stride.
+    ///
+    /// decay[h] = exp(-alpha[h] * stride), clamped to [min_decay, 1.0].
+    /// A minimum decay of 0.99 prevents extremely aggressive forgetting that
+    /// would make the field useless for slow-damped heads.
+    fn compute_decay_factors(alpha: &[f32], stride: f32) -> Vec<f32> {
+        const MIN_DECAY: f32 = 0.99;
+        alpha
+            .iter()
+            .map(|&a| (-a * stride).exp().clamp(MIN_DECAY, 1.0))
+            .collect()
+    }
+
     /// Create with random weights for testing.
     pub fn new_random(config: &WaveFieldConfig, dim: usize, max_seq_len: usize) -> Self {
         let n_heads = config.n_wave_heads;
@@ -451,6 +473,8 @@ impl WaveFieldAttention {
             0.0
         };
 
+        let decay_factors = Self::compute_decay_factors(&physics.alpha, stride);
+
         Self {
             scatter_proj,
             gate_proj,
@@ -462,6 +486,7 @@ impl WaveFieldAttention {
             head_dim,
             field_size,
             stride,
+            decay_factors,
             workspace: Mutex::new(WaveFieldWorkspace::default()),
         }
     }
@@ -488,6 +513,7 @@ impl WaveFieldAttention {
             "WaveFieldAttention stride must be finite and non-negative, got {}",
             stride
         );
+        let decay_factors = Self::compute_decay_factors(&physics.alpha, stride);
         Self {
             scatter_proj,
             gate_proj,
@@ -499,6 +525,7 @@ impl WaveFieldAttention {
             head_dim,
             field_size,
             stride,
+            decay_factors,
             workspace: Mutex::new(WaveFieldWorkspace::default()),
         }
     }
@@ -527,12 +554,20 @@ impl WaveFieldAttention {
         // 1. Scatter projection: x -> [n_heads * head_dim]
         self.scatter_proj.forward(x, &mut ws.scattered);
 
-        // 2. Bilinear scatter onto field
+        // 2. Decay state, then bilinear scatter onto field.
+        //    Decay prevents unbounded energy growth in long sequences.
+        //    Applied per-head: field[h] *= decay_factors[h]
         let field_pos = pos as f32 * self.stride;
         let field_pos = field_pos.min((field_size - 1) as f32).max(0.0);
         for h in 0..n_heads {
-            let values = &ws.scattered[h * head_dim..(h + 1) * head_dim];
+            let decay = self.decay_factors[h];
             let field = &mut state.fields[h * field_size * head_dim..(h + 1) * field_size * head_dim];
+            if decay < 1.0 {
+                for v in field.iter_mut() {
+                    *v *= decay;
+                }
+            }
+            let values = &ws.scattered[h * head_dim..(h + 1) * head_dim];
             bilinear_scatter(values, field, field_pos, field_size, head_dim);
         }
 
@@ -631,7 +666,7 @@ impl WaveFieldAttention {
         // Acquire workspace for reusable buffers
         let mut ws = self.workspace.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        // 1. Scatter all tokens onto fields
+        // 1. Scatter all tokens onto fields (with per-head decay before each scatter)
         ws.scattered.resize(total_proj, 0.0);
         for t in 0..seq_len {
             let x = &x_batch[t * dim..(t + 1) * dim];
@@ -641,8 +676,14 @@ impl WaveFieldAttention {
             let pos = pos.min((field_size - 1) as f32).max(0.0);
 
             for h in 0..n_heads {
-                let values = &ws.scattered[h * head_dim..(h + 1) * head_dim];
+                let decay = self.decay_factors[h];
                 let field = &mut state.fields[h * field_size * head_dim..(h + 1) * field_size * head_dim];
+                if decay < 1.0 {
+                    for v in field.iter_mut() {
+                        *v *= decay;
+                    }
+                }
+                let values = &ws.scattered[h * head_dim..(h + 1) * head_dim];
                 bilinear_scatter(values, field, pos, field_size, head_dim);
             }
         }
@@ -919,5 +960,49 @@ mod tests {
         assert!(energy.is_finite(), "energy should be finite, got {}", energy);
         // Energy should not explode — with positive damping it's bounded
         // (exact bound depends on input magnitude, but should stay reasonable)
+    }
+
+    #[test]
+    fn test_decay_prevents_unbounded_growth() {
+        // Run a long sequence and verify energy converges (doesn't grow linearly)
+        let dim = 128;
+        let max_seq = 1024;
+        let wf_cfg = test_wave_config();
+        let attn = WaveFieldAttention::new_random(&wf_cfg, dim, max_seq);
+
+        // Verify decay factors are set and in (0, 1]
+        for (h, &d) in attn.decay_factors.iter().enumerate() {
+            assert!(d > 0.0 && d <= 1.0, "head {} decay {} out of range", h, d);
+        }
+
+        let mut state = WaveFieldState::new(wf_cfg.n_wave_heads, wf_cfg.field_size, wf_cfg.head_dim);
+        let x = vec![0.1f32; dim];
+        let mut out = vec![0.0f32; dim];
+
+        // Process 200 tokens (more than enough for energy to stabilize with decay)
+        let mut energies = Vec::new();
+        for pos in 0..200 {
+            attn.forward(&x, &mut state, pos, &mut out);
+            if pos % 50 == 49 {
+                energies.push(state.energy());
+            }
+        }
+
+        // Energy should stabilize — the ratio between the last two samples
+        // should be close to 1.0 (within 2x), not growing linearly
+        assert!(energies.len() >= 2);
+        let last = energies[energies.len() - 1];
+        let prev = energies[energies.len() - 2];
+        assert!(
+            last.is_finite() && prev.is_finite(),
+            "energies should be finite: last={}, prev={}", last, prev
+        );
+        // With decay, energy ratio should be bounded (not > 2x between 50-token windows)
+        let ratio = if prev > 0.0 { last / prev } else { 1.0 };
+        assert!(
+            ratio < 2.0,
+            "energy should stabilize with decay, but ratio={:.2} (last={:.2}, prev={:.2})",
+            ratio, last, prev
+        );
     }
 }

@@ -185,12 +185,29 @@ impl NanochatTrainModel {
         let cos = self.freqs_cos.narrow(0, 0, seq_len)?;
         let sin = self.freqs_sin.narrow(0, 0, seq_len)?;
 
-        // Pass token_ids to blocks that have Engram (None if no engram)
-        let ids = if self.config.use_engram {
-            Some(token_ids)
+        // Precompute engram hash indices on CPU if engram is enabled.
+        // This avoids a GPU→CPU→GPU round-trip inside the forward pass.
+        let engram_indices: Option<Vec<Tensor>> = if self.config.use_engram {
+            let (batch, seq) = token_ids.dims2()?;
+            let ids_flat: Vec<u32> = token_ids.flatten_all()?.to_vec1()?;
+            // Use the first block's engram config (all blocks share the same settings)
+            let first_engram = self.blocks.iter()
+                .chain(self.local_blocks_before.iter())
+                .find_map(|b| b.engram.as_ref());
+            if let Some(engram) = first_engram {
+                let idx_vecs = engram.precompute_hash_indices(&ids_flat, batch, seq);
+                let tensors: Vec<Tensor> = idx_vecs
+                    .into_iter()
+                    .map(|v| Tensor::from_vec(v, batch * seq, token_ids.device()))
+                    .collect::<Result<_>>()?;
+                Some(tensors)
+            } else {
+                None
+            }
         } else {
             None
         };
+        let engram_idx_ref = engram_indices.as_deref();
 
         // 4. Transformer blocks (loop or standard)
         if let Some(ref loop_block) = self.shared_loop_block {
@@ -198,25 +215,28 @@ impl NanochatTrainModel {
 
             // 4a. Local layers before
             for block in &self.local_blocks_before {
-                x_exp = block.forward(&x_exp, &cos, &sin, ids)?;
+                x_exp = block.forward(&x_exp, &cos, &sin, engram_idx_ref)?;
             }
 
             // 4b. Shared loop (N iterations)
             let mut global_state: Option<Tensor> = None;
             for _ in 0..loop_cfg.loop_count {
-                let (x_out, g_state) = loop_block.forward(&x_exp, global_state.as_ref())?;
+                let (x_out, g_state, _exit_prob) =
+                    loop_block.forward(&x_exp, global_state.as_ref())?;
                 x_exp = x_out;
                 global_state = Some(g_state);
+                // exit_prob is used by the training loop for entropy regularization
+                // but not consumed in the forward-hidden-only path
             }
 
             // 4c. Local layers after
             for block in &self.local_blocks_after {
-                x_exp = block.forward(&x_exp, &cos, &sin, ids)?;
+                x_exp = block.forward(&x_exp, &cos, &sin, engram_idx_ref)?;
             }
         } else {
             // Standard architecture
             for block in &self.blocks {
-                x_exp = block.forward(&x_exp, &cos, &sin, ids)?;
+                x_exp = block.forward(&x_exp, &cos, &sin, engram_idx_ref)?;
             }
         }
 
@@ -296,6 +316,8 @@ impl NanochatTrainModel {
             linear.extend(loop_block.linear_params().into_iter().cloned());
             mhc.extend(loop_block.mhc_params().into_iter().cloned());
             norm.extend(loop_block.norm_params().into_iter().cloned());
+            // Exit gate params go with norms/biases (Lion optimizer)
+            norm.extend(loop_block.exit_gate_params().into_iter().cloned());
         }
 
         for block in &self.local_blocks_after {

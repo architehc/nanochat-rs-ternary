@@ -12,11 +12,62 @@ use crate::config::TrainConfig;
 use crate::layers::{BitLinearSTE, RMSNormTrain};
 use crate::mhc::MhcLiteN2Train;
 
+/// Exit gate for adaptive loop depth allocation (LoopLM paper Section 3.3).
+///
+/// At each loop iteration, the gate estimates the probability that the model
+/// is "done thinking". During training, exit probabilities are collected for
+/// entropy regularization (encouraging uniform depth usage). During inference,
+/// exit_prob > threshold triggers early exit.
+pub struct ExitGate {
+    /// Linear: dim → 1
+    pub linear_weight: Tensor,
+    pub linear_bias: Tensor,
+}
+
+impl ExitGate {
+    pub fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+        let linear_weight = vb.get_with_hints(
+            (1, dim),
+            "weight",
+            candle_nn::Init::Randn {
+                mean: 0.0,
+                stdev: (1.0 / dim as f64).sqrt(),
+            },
+        )?;
+        let linear_bias = vb.get_with_hints((1,), "bias", candle_nn::Init::Const(0.0))?;
+        Ok(Self {
+            linear_weight,
+            linear_bias,
+        })
+    }
+
+    /// Compute exit probability. Returns a scalar Tensor (gradient-tracked).
+    ///
+    /// Input: hidden [batch, seq, dim]
+    /// Output: scalar Tensor (mean exit probability across batch)
+    pub fn forward(&self, hidden: &Tensor) -> Result<Tensor> {
+        // Global average pooling over sequence: [batch, dim]
+        let pooled = hidden.mean(1)?;
+        // Linear: [batch, 1]
+        let logits = pooled.matmul(&self.linear_weight.t()?)?;
+        let logits = logits.broadcast_add(&self.linear_bias)?;
+        // Sigmoid (manual for CUDA compat)
+        let prob = logits.neg()?.exp()?.affine(1.0, 1.0)?.recip()?;
+        // Mean across batch → scalar
+        prob.mean_all()
+    }
+
+    pub fn params(&self) -> Vec<&Tensor> {
+        vec![&self.linear_weight, &self.linear_bias]
+    }
+}
+
 /// Shared loop block: recurrent transformer layer with global state accumulation.
 ///
 /// Architecture per LoopLM paper Section 3.2:
 /// - Local transformations: Q/K/V projections, FFN (unique per iteration)
 /// - Global recurrent updates: Gate mechanisms (g_qk, g_ffn) that mix current with accumulated state
+/// - Exit gate (Section 3.3): adaptive depth via learned halting probability
 pub struct SharedLoopBlock {
     // Local attention projections
     pub wq: BitLinearSTE,
@@ -42,6 +93,9 @@ pub struct SharedLoopBlock {
     // mHC residual connection handlers
     pub mhc_attn: MhcLiteN2Train,
     pub mhc_ffn: MhcLiteN2Train,
+
+    // Exit gate for adaptive depth
+    pub exit_gate: ExitGate,
 
     // Config
     pub dim: usize,
@@ -86,6 +140,9 @@ impl SharedLoopBlock {
         let mhc_attn = MhcLiteN2Train::new(vb.pp("mhc_attn"))?;
         let mhc_ffn = MhcLiteN2Train::new(vb.pp("mhc_ffn"))?;
 
+        // Exit gate for adaptive depth
+        let exit_gate = ExitGate::new(dim, vb.pp("exit_gate"))?;
+
         Ok(Self {
             wq,
             wk,
@@ -100,6 +157,7 @@ impl SharedLoopBlock {
             norm_ffn,
             mhc_attn,
             mhc_ffn,
+            exit_gate,
             dim,
             n_heads,
             n_kv_heads,
@@ -118,11 +176,12 @@ impl SharedLoopBlock {
     /// Returns:
     /// - x_expanded_out: [batch, seq, dim * n_streams] - Updated hidden state
     /// - global_state_out: [batch, seq, dim] - Updated global recurrent state
+    /// - exit_prob: scalar Tensor - exit gate probability (gradient-tracked)
     pub fn forward(
         &self,
         x_expanded: &Tensor,
         global_state: Option<&Tensor>,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor, Tensor, Tensor)> {
         // ========== Attention Sub-Layer ==========
 
         // 1. mHC prepare: collapse expanded input to single stream
@@ -193,7 +252,11 @@ impl SharedLoopBlock {
         // 6. Update global state: average of attention and FFN outputs
         let global_state_out = ((&gated_attn + &gated_ffn)? * 0.5)?;
 
-        Ok((x_expanded_out, global_state_out))
+        // 7. Exit gate: compute halting probability from collapsed hidden state
+        //    Uses the collapsed x (single-stream) after FFN for exit decision
+        let exit_prob = self.exit_gate.forward(&x)?;
+
+        Ok((x_expanded_out, global_state_out, exit_prob))
     }
 
     /// Compute multi-head attention (simplified).
@@ -282,6 +345,11 @@ impl SharedLoopBlock {
     /// Collect all norm parameters.
     pub fn norm_params(&self) -> Vec<&Tensor> {
         vec![self.norm_attn.weight(), self.norm_ffn.weight()]
+    }
+
+    /// Collect exit gate parameters (should use Lion optimizer with norms/biases).
+    pub fn exit_gate_params(&self) -> Vec<&Tensor> {
+        self.exit_gate.params()
     }
 }
 
@@ -393,11 +461,15 @@ mod tests {
         let x_expanded = Tensor::randn(0f32, 1.0, (batch, seq, dim * n_streams), &device)?;
 
         // First iteration (no global state)
-        let (x_out, global_state) = block.forward(&x_expanded, None)?;
+        let (x_out, global_state, exit_prob) = block.forward(&x_expanded, None)?;
 
         // Check output shapes
         assert_eq!(x_out.dims(), &[batch, seq, dim * n_streams]);
         assert_eq!(global_state.dims(), &[batch, seq, dim]);
+
+        // Exit prob should be a scalar in [0, 1]
+        let ep = exit_prob.to_scalar::<f32>()?;
+        assert!(ep >= 0.0 && ep <= 1.0, "exit_prob {} not in [0,1]", ep);
 
         Ok(())
     }
@@ -419,17 +491,56 @@ mod tests {
         let x_expanded = Tensor::randn(0f32, 1.0, (batch, seq, dim * n_streams), &device)?;
 
         // Iteration 1
-        let (mut x_state, mut global_state) = block.forward(&x_expanded, None)?;
+        let (mut x_state, mut global_state, _ep) = block.forward(&x_expanded, None)?;
+
+        // Collect exit probs for entropy check
+        let mut exit_probs = Vec::new();
+        exit_probs.push(_ep);
 
         // Iteration 2: with global state
-        (x_state, global_state) = block.forward(&x_state, Some(&global_state))?;
+        let ep2;
+        (x_state, global_state, ep2) = block.forward(&x_state, Some(&global_state))?;
+        exit_probs.push(ep2);
 
         // Iteration 3
-        (x_state, global_state) = block.forward(&x_state, Some(&global_state))?;
+        let ep3;
+        (x_state, global_state, ep3) = block.forward(&x_state, Some(&global_state))?;
+        exit_probs.push(ep3);
 
         // Output shapes should remain consistent
         assert_eq!(x_state.dims(), &[batch, seq, dim * n_streams]);
         assert_eq!(global_state.dims(), &[batch, seq, dim]);
+
+        // All exit probs should be valid
+        for (i, ep) in exit_probs.iter().enumerate() {
+            let v = ep.to_scalar::<f32>()?;
+            assert!(v >= 0.0 && v <= 1.0, "iter {} exit_prob {} not in [0,1]", i, v);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exit_gate_gradient_flows() -> Result<()> {
+        let cfg = test_config();
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+
+        let block = SharedLoopBlock::new(&cfg, vb.pp("loop_block"))?;
+
+        let batch = 1;
+        let seq = 4;
+        let dim = cfg.dim;
+        let n_streams = cfg.mhc_n_streams;
+
+        let x_expanded = Tensor::randn(0f32, 1.0, (batch, seq, dim * n_streams), &device)?;
+        let (_x_out, _g_state, exit_prob) = block.forward(&x_expanded, None)?;
+
+        // Backward through exit_prob should produce gradients for exit gate params
+        let grads = exit_prob.backward()?;
+        let gate_w_grad = grads.get(&block.exit_gate.linear_weight);
+        assert!(gate_w_grad.is_some(), "exit gate weight should have gradient");
 
         Ok(())
     }

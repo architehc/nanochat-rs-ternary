@@ -514,8 +514,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Context padding: wavefield layers are bidirectional and need a
             // well-populated field (~512 tokens) to produce good outputs. With short
             // prompts, the wavefield field is too sparse. Pad with training data prefix.
-            let train_seq_len = 512usize;
-            let _prefix_len = if token_ids.len() < train_seq_len && meta.config.use_wave_field {
+            let train_seq_len = meta.config.max_seq_len.min(256);
+            let _prefix_len = if false && token_ids.len() < train_seq_len && meta.config.use_wave_field {
                 let pad_needed = train_seq_len - token_ids.len();
                 let data_path = "data/rust_v2_prepared/tokens.bin";
                 if std::path::Path::new(data_path).exists() {

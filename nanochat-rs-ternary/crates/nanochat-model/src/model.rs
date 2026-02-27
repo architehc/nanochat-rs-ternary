@@ -658,6 +658,23 @@ impl NanochatModel {
         let mhc_attn = Self::extract_mhc_n2(mhc_layers, mhc_idx * 2)?;
         let mhc_ffn = Self::extract_mhc_n2(mhc_layers, mhc_idx * 2 + 1)?;
 
+        // Exit gate: try to load from GGUF, fall back to zero-initialized.
+        // Models without an exit gate will get sigmoid(0)=0.5, which won't
+        // trigger early exit at default threshold of 0.5 (requires >0.5).
+        let exit_gate_key = format!("{}.exit_gate.weight", prefix);
+        let has_exit_gate = gguf.tensors.iter().any(|t| t.name == exit_gate_key);
+        let exit_gate = if has_exit_gate {
+            let eg_weight = Self::load_f32_vec(gguf, &exit_gate_key)?;
+            let eg_bias_key = format!("{}.exit_gate.bias", prefix);
+            let eg_bias = Self::load_f32_vec(gguf, &eg_bias_key)
+                .ok()
+                .and_then(|v| v.first().copied())
+                .unwrap_or(0.0);
+            crate::loop_block::ExitGate::from_weights(eg_weight, eg_bias)
+        } else {
+            crate::loop_block::ExitGate::new_zero(config.dim)
+        };
+
         Ok(SharedLoopBlock::new(
             wq,
             wk,
@@ -672,6 +689,7 @@ impl NanochatModel {
             norm_ffn,
             mhc_attn,
             mhc_ffn,
+            exit_gate,
             config.dim,
             config.n_heads,
             config.n_kv_heads,
@@ -788,10 +806,18 @@ impl NanochatModel {
                     Some(GgufValue::F32(v)) => *v,
                     _ => 5.0,
                 };
+                let exit_threshold = match gguf
+                    .metadata
+                    .get("nanochat.loop.adaptive.exit_threshold")
+                {
+                    Some(GgufValue::F32(v)) => *v,
+                    _ => 0.5, // default
+                };
                 Some(AdaptiveLoopConfig {
                     min_loops,
                     max_loops,
                     perplexity_threshold,
+                    exit_threshold,
                 })
             } else {
                 None
@@ -1368,6 +1394,12 @@ impl NanochatModel {
             if let Some(kv_cache) = self.loop_kv_cache.as_mut() {
                 let mut global_state: Option<Vec<f32>> = None;
 
+                // Determine adaptive loop parameters
+                let adaptive = self.config.loop_config.as_ref()
+                    .and_then(|lc| lc.adaptive_loop.as_ref());
+                let min_loops = adaptive.map(|a| a.min_loops).unwrap_or(loop_count);
+                let exit_threshold = adaptive.map(|a| a.exit_threshold).unwrap_or(1.0);
+
                 for iter in 0..loop_count {
                     let append_kv = iter == 0; // Only append KV on first iteration
                     match loop_block.forward(
@@ -1377,9 +1409,13 @@ impl NanochatModel {
                         append_kv,
                         Some(pos), // Pass explicit token position for causal masking
                     ) {
-                        Ok((x_out, g_state)) => {
+                        Ok((x_out, g_state, exit_prob)) => {
                             x_exp = x_out;
                             global_state = Some(g_state);
+                            // Early exit: if past minimum loops and exit gate fires
+                            if iter >= min_loops && exit_prob > exit_threshold {
+                                break;
+                            }
                         }
                         Err(e) => {
                             eprintln!(

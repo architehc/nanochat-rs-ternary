@@ -110,20 +110,21 @@ impl TransformerBlockTrain {
 
     /// Forward: x_exp [batch, seq, 2*dim] -> [batch, seq, 2*dim]
     ///
-    /// token_ids is optional — only needed when this block has an Engram module.
+    /// `engram_indices` is optional — only needed when this block has an Engram module.
+    /// Pass precomputed hash index tensors (from `EngramTrain::precompute_hash_indices()`).
     pub fn forward(
         &self,
         x_exp: &Tensor,
         cos: &Tensor,
         sin: &Tensor,
-        token_ids: Option<&Tensor>,
+        engram_indices: Option<&[Tensor]>,
     ) -> Result<Tensor> {
         // Attention sub-layer with mHC
         let attn_in = self.mhc_attn.prepare_input(x_exp, self.dim)?;
 
         // Apply Engram enrichment before attention (if present)
-        let attn_in = if let (Some(engram), Some(ids)) = (&self.engram, token_ids) {
-            engram.forward(&attn_in, ids)?
+        let attn_in = if let (Some(engram), Some(indices)) = (&self.engram, engram_indices) {
+            engram.forward(&attn_in, indices)?
         } else {
             attn_in
         };

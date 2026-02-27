@@ -110,15 +110,16 @@ impl EngramTrain {
     ///
     /// Args:
     /// - hidden: [batch, seq, dim] — current hidden state
-    /// - token_ids: [batch, seq] — token IDs for N-gram lookup (u32)
+    /// - hash_indices: precomputed hash index tensors, one per (order, head).
+    ///   Each tensor is [batch * seq] u32 with values in [0, table_size).
+    ///   Use `precompute_hash_indices()` to generate these on CPU *before*
+    ///   moving data to the device, avoiding a GPU→CPU→GPU round-trip.
     ///
     /// Returns: [batch, seq, dim] — hidden + gated engram residual
-    pub fn forward(&self, hidden: &Tensor, token_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, hidden: &Tensor, hash_indices: &[Tensor]) -> Result<Tensor> {
         let (batch, seq, _dim) = hidden.dims3()?;
 
-        // 1. Compute hash indices for all (order, head) combinations
-        //    indices: [batch, seq] per (order, head)
-        let hash_indices = self.compute_hash_indices(token_ids, batch, seq)?;
+        let hash_indices = hash_indices;
 
         // 2. Retrieve embeddings from tables and concatenate
         let mut all_embeddings = Vec::with_capacity(self.n_gram_orders.len() * self.n_heads);
@@ -162,24 +163,51 @@ impl EngramTrain {
         hidden + &conv_out
     }
 
-    /// Compute hash indices for all (order, head) combinations.
-    /// Returns a Vec of flat index tensors, one per (order, head).
-    fn compute_hash_indices(
+    /// Precompute hash indices on CPU from raw token IDs.
+    ///
+    /// Call this in the data pipeline (before GPU transfer) to avoid a
+    /// GPU→CPU→GPU round-trip during `forward()`. Each returned Vec<u32>
+    /// is [batch * seq] indices in [0, table_size).
+    ///
+    /// To convert to tensors for `forward()`:
+    /// ```ignore
+    /// let idx_vecs = engram.precompute_hash_indices(&ids_flat, batch, seq);
+    /// let idx_tensors: Vec<Tensor> = idx_vecs.iter()
+    ///     .map(|v| Tensor::from_vec(v.clone(), batch * seq, device))
+    ///     .collect::<Result<_>>()?;
+    /// ```
+    pub fn precompute_hash_indices(
         &self,
-        token_ids: &Tensor,
+        ids_flat: &[u32],
         batch: usize,
         seq: usize,
-    ) -> Result<Vec<Tensor>> {
-        // Extract token IDs to CPU for hash computation
-        let ids_flat: Vec<u32> = token_ids.flatten_all()?.to_vec1()?;
-        let device = token_ids.device();
-        let total = batch * seq;
+    ) -> Vec<Vec<u32>> {
+        Self::precompute_hash_indices_static(
+            ids_flat,
+            batch,
+            seq,
+            &self.n_gram_orders,
+            self.n_heads,
+            self.table_size,
+        )
+    }
 
-        let mut all_indices = Vec::with_capacity(self.n_gram_orders.len() * self.n_heads);
+    /// Static version — can be called without an EngramTrain instance.
+    /// Useful for data loading workers that don't hold the model.
+    pub fn precompute_hash_indices_static(
+        ids_flat: &[u32],
+        batch: usize,
+        seq: usize,
+        n_gram_orders: &[usize],
+        n_heads: usize,
+        table_size: usize,
+    ) -> Vec<Vec<u32>> {
+        let total = batch * seq;
+        let mut all_indices = Vec::with_capacity(n_gram_orders.len() * n_heads);
         let mut prime_idx = 0;
 
-        for &order in &self.n_gram_orders {
-            for _head in 0..self.n_heads {
+        for &order in n_gram_orders {
+            for _head in 0..n_heads {
                 let mut indices = vec![0u32; total];
 
                 for b in 0..batch {
@@ -199,17 +227,47 @@ impl EngramTrain {
                             h = h.wrapping_mul(prime).wrapping_add(token);
                         }
 
-                        indices[flat_pos] = (h % self.table_size as u64) as u32;
+                        indices[flat_pos] = (h % table_size as u64) as u32;
                     }
                 }
 
-                let idx_tensor = Tensor::from_vec(indices, total, device)?;
-                all_indices.push(idx_tensor);
+                all_indices.push(indices);
                 prime_idx += 1;
             }
         }
 
-        Ok(all_indices)
+        all_indices
+    }
+
+    /// Convenience: compute hash indices from a device Tensor, pulling to CPU.
+    ///
+    /// **Prefer `precompute_hash_indices()` in the data pipeline** to avoid
+    /// the GPU→CPU transfer. This method exists for backward compat and tests.
+    pub fn compute_hash_indices_from_tensor(
+        &self,
+        token_ids: &Tensor,
+        batch: usize,
+        seq: usize,
+    ) -> Result<Vec<Tensor>> {
+        let ids_flat: Vec<u32> = token_ids.flatten_all()?.to_vec1()?;
+        let device = token_ids.device();
+        let total = batch * seq;
+
+        let idx_vecs = self.precompute_hash_indices(&ids_flat, batch, seq);
+        idx_vecs
+            .into_iter()
+            .map(|v| Tensor::from_vec(v, total, device))
+            .collect()
+    }
+
+    /// Legacy forward that accepts raw token_ids (pulls to CPU internally).
+    ///
+    /// **Prefer `forward()` with precomputed indices** for GPU training.
+    /// This exists for backward compatibility and testing.
+    pub fn forward_with_token_ids(&self, hidden: &Tensor, token_ids: &Tensor) -> Result<Tensor> {
+        let (batch, seq, _dim) = hidden.dims3()?;
+        let hash_indices = self.compute_hash_indices_from_tensor(token_ids, batch, seq)?;
+        self.forward(hidden, &hash_indices)
     }
 
     /// Depthwise causal convolution: convolve each channel independently.
@@ -298,12 +356,50 @@ mod tests {
         let hidden = Tensor::randn(0.0f32, 1.0, (batch, seq, dim), &device)?;
         let token_ids = Tensor::zeros((batch, seq), DType::U32, &device)?;
 
-        let out = engram.forward(&hidden, &token_ids)?;
+        let out = engram.forward_with_token_ids(&hidden, &token_ids)?;
         assert_eq!(out.dims(), &[batch, seq, dim]);
 
         // Output should be finite
         let vals: Vec<f32> = out.flatten_all()?.to_vec1()?;
         assert!(vals.iter().all(|v| v.is_finite()), "output should be finite");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_engram_precomputed_indices() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+
+        let dim = 64;
+        let engram = EngramTrain::new(
+            dim, 32, &[2, 3], 2, 1009, 4, 64, vb.pp("engram"),
+        )?;
+
+        let batch = 2;
+        let seq = 8;
+        let hidden = Tensor::randn(0.0f32, 1.0, (batch, seq, dim), &device)?;
+
+        // Precompute indices on CPU (simulating data pipeline)
+        let ids_flat = vec![0u32; batch * seq];
+        let idx_vecs = engram.precompute_hash_indices(&ids_flat, batch, seq);
+        let idx_tensors: Vec<Tensor> = idx_vecs
+            .into_iter()
+            .map(|v| Tensor::from_vec(v, batch * seq, &device))
+            .collect::<Result<_>>()?;
+
+        // Forward with precomputed indices
+        let out = engram.forward(&hidden, &idx_tensors)?;
+        assert_eq!(out.dims(), &[batch, seq, dim]);
+
+        // Compare with legacy path
+        let token_ids = Tensor::zeros((batch, seq), DType::U32, &device)?;
+        let out_legacy = engram.forward_with_token_ids(&hidden, &token_ids)?;
+
+        let diff: f32 = (&out - &out_legacy)?
+            .abs()?.sum_all()?.to_scalar()?;
+        assert!(diff < 1e-6, "precomputed and legacy paths should match, diff={}", diff);
 
         Ok(())
     }
@@ -316,14 +412,11 @@ mod tests {
 
         let engram = EngramTrain::new(64, 32, &[2, 3], 2, 1009, 4, 64, vb.pp("engram"))?;
 
-        let token_ids = Tensor::new(&[1u32, 2, 3, 4, 5, 6, 7, 8], &device)?.unsqueeze(0)?;
+        let ids = &[1u32, 2, 3, 4, 5, 6, 7, 8];
+        let indices1 = engram.precompute_hash_indices(ids, 1, 8);
+        let indices2 = engram.precompute_hash_indices(ids, 1, 8);
 
-        let indices1 = engram.compute_hash_indices(&token_ids, 1, 8)?;
-        let indices2 = engram.compute_hash_indices(&token_ids, 1, 8)?;
-
-        for (i1, i2) in indices1.iter().zip(indices2.iter()) {
-            let v1: Vec<u32> = i1.to_vec1()?;
-            let v2: Vec<u32> = i2.to_vec1()?;
+        for (v1, v2) in indices1.iter().zip(indices2.iter()) {
             assert_eq!(v1, v2, "hash should be deterministic");
         }
 
@@ -344,7 +437,7 @@ mod tests {
         let token_ids = Tensor::new(&[10u32, 20, 30, 40], &device)?.unsqueeze(0)?;
 
         // Forward should work without errors (gate values are internal)
-        let out = engram.forward(&hidden, &token_ids)?;
+        let out = engram.forward_with_token_ids(&hidden, &token_ids)?;
         let vals: Vec<f32> = out.flatten_all()?.to_vec1()?;
         assert!(vals.iter().all(|v| v.is_finite()));
 
@@ -363,7 +456,7 @@ mod tests {
         let hidden = Tensor::randn(0.0f32, 1.0, (1, 4, dim), &device)?;
         let token_ids = Tensor::new(&[1u32, 2, 3, 4], &device)?.unsqueeze(0)?;
 
-        let out = engram.forward(&hidden, &token_ids)?;
+        let out = engram.forward_with_token_ids(&hidden, &token_ids)?;
         let loss = out.sum_all()?;
         let grads = loss.backward()?;
 
@@ -395,14 +488,11 @@ mod tests {
         let engram =
             EngramTrain::new(64, 32, &[2, 3], 2, table_size, 4, 64, vb.pp("engram"))?;
 
-        let token_ids = Tensor::new(&[100u32, 200, 300, 400, 500, 1000, 2000, 4000], &device)?
-            .unsqueeze(0)?;
+        let ids = &[100u32, 200, 300, 400, 500, 1000, 2000, 4000];
+        let indices = engram.precompute_hash_indices(ids, 1, 8);
 
-        let indices = engram.compute_hash_indices(&token_ids, 1, 8)?;
-
-        for idx_tensor in &indices {
-            let vals: Vec<u32> = idx_tensor.to_vec1()?;
-            for &v in &vals {
+        for vals in &indices {
+            for &v in vals {
                 assert!(
                     (v as usize) < table_size,
                     "hash index {} >= table_size {}",

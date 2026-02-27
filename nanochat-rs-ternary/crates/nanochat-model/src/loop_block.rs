@@ -9,9 +9,56 @@ use crate::config::ModelConfig;
 use crate::norm::RMSNorm;
 use mhc_lite::MhcLiteN2;
 
+/// Exit gate for adaptive loop depth (inference side).
+///
+/// Computes a scalar halting probability from the hidden state.
+/// When exit_prob > threshold, the model stops looping early.
+#[derive(Debug, Clone)]
+pub struct ExitGate {
+    /// Weight: [1, dim] — single output
+    pub weight: Vec<f32>,
+    /// Bias: scalar
+    pub bias: f32,
+    pub dim: usize,
+}
+
+impl ExitGate {
+    /// Create with zero-initialized weights (no early exit by default).
+    pub fn new_zero(dim: usize) -> Self {
+        Self {
+            weight: vec![0.0f32; dim],
+            bias: 0.0,
+            dim,
+        }
+    }
+
+    /// Create from loaded weights.
+    pub fn from_weights(weight: Vec<f32>, bias: f32) -> Self {
+        let dim = weight.len();
+        Self { weight, bias, dim }
+    }
+
+    /// Compute exit probability from hidden state [dim].
+    /// Returns a scalar in [0, 1].
+    pub fn forward(&self, hidden: &[f32]) -> f32 {
+        let mut logit = self.bias;
+        for i in 0..self.dim.min(hidden.len()) {
+            logit += self.weight[i] * hidden[i];
+        }
+        // sigmoid
+        1.0 / (1.0 + (-logit).exp())
+    }
+
+    pub fn clone_to_node(&self, _node: usize) -> Self {
+        self.clone()
+    }
+}
+
 /// Shared loop block for inference: recurrent transformer layer with global state.
 ///
 /// Uses ternary quantized weights (BitLinear) for memory efficiency and speed.
+/// Includes an exit gate for adaptive depth — early loop termination when the
+/// model is confident it's done processing.
 #[derive(Debug)]
 pub struct SharedLoopBlock {
     // Local attention projections (ternary quantized)
@@ -38,6 +85,9 @@ pub struct SharedLoopBlock {
     // mHC residual connection handlers (FP32)
     pub mhc_attn: MhcLiteN2,
     pub mhc_ffn: MhcLiteN2,
+
+    // Exit gate for adaptive depth (FP32)
+    pub exit_gate: ExitGate,
 
     // Config
     pub dim: usize,
@@ -68,6 +118,7 @@ impl SharedLoopBlock {
         norm_ffn: RMSNorm,
         mhc_attn: MhcLiteN2,
         mhc_ffn: MhcLiteN2,
+        exit_gate: ExitGate,
         dim: usize,
         n_heads: usize,
         n_kv_heads: usize,
@@ -90,6 +141,7 @@ impl SharedLoopBlock {
             norm_ffn,
             mhc_attn,
             mhc_ffn,
+            exit_gate,
             dim,
             n_heads,
             n_kv_heads,
@@ -138,6 +190,8 @@ impl SharedLoopBlock {
         let mhc_attn = MhcLiteN2::new_identity();
         let mhc_ffn = MhcLiteN2::new_identity();
 
+        let exit_gate = ExitGate::new_zero(dim);
+
         let n_rep = n_heads / n_kv_heads;
 
         Self {
@@ -154,6 +208,7 @@ impl SharedLoopBlock {
             norm_ffn,
             mhc_attn,
             mhc_ffn,
+            exit_gate,
             dim,
             n_heads,
             n_kv_heads,
@@ -173,8 +228,10 @@ impl SharedLoopBlock {
     /// - token_pos: Option<usize> - explicit token position for causal masking (None = infer from cache)
     ///
     /// Returns:
-    /// - Ok((x_expanded_out, global_state_out)) on success
+    /// - Ok((x_expanded_out, global_state_out, exit_prob)) on success
     /// - Err on cache/position mismatch
+    ///
+    /// exit_prob is in [0, 1]. If exit_prob > threshold, caller should stop looping.
     ///
     /// # Errors
     /// Returns error if token_pos exceeds cache length
@@ -185,7 +242,7 @@ impl SharedLoopBlock {
         kv_cache: &mut KvCache,
         append_kv: bool,
         token_pos: Option<usize>,
-    ) -> Result<(Vec<f32>, Vec<f32>), String> {
+    ) -> Result<(Vec<f32>, Vec<f32>, f32), String> {
         let expected_expanded = 2 * self.dim;
         if x_expanded.len() != expected_expanded {
             return Err(format!(
@@ -335,7 +392,10 @@ impl SharedLoopBlock {
             .map(|(&a, &f)| (a + f) * 0.5)
             .collect();
 
-        Ok((x_expanded_out, global_state_out))
+        // 7. Exit gate: compute halting probability from the collapsed hidden state
+        let exit_prob = self.exit_gate.forward(&x);
+
+        Ok((x_expanded_out, global_state_out, exit_prob))
     }
 
     /// Compute multi-head attention over cached KV with causal masking.
@@ -477,7 +537,7 @@ impl SharedLoopBlock {
             let global_state = global_states.get(t).and_then(|gs| gs.as_deref());
 
             // Use single-token forward path with explicit position for causal masking
-            let (x_out, g_state) = self.forward(
+            let (x_out, g_state, _exit_prob) = self.forward(
                 x_exp,
                 global_state,
                 kv_cache,
@@ -508,6 +568,7 @@ impl SharedLoopBlock {
             norm_ffn: self.norm_ffn.clone_to_node(node),
             mhc_attn: self.mhc_attn.clone(),
             mhc_ffn: self.mhc_ffn.clone(),
+            exit_gate: self.exit_gate.clone_to_node(node),
             dim: self.dim,
             n_heads: self.n_heads,
             n_kv_heads: self.n_kv_heads,
@@ -534,6 +595,7 @@ impl Clone for SharedLoopBlock {
             norm_ffn: self.norm_ffn.clone(),
             mhc_attn: self.mhc_attn.clone(),
             mhc_ffn: self.mhc_ffn.clone(),
+            exit_gate: self.exit_gate.clone(),
             dim: self.dim,
             n_heads: self.n_heads,
             n_kv_heads: self.n_kv_heads,
@@ -574,13 +636,14 @@ mod tests {
         let mut kv_cache = KvCache::new(cfg.max_seq_len, cfg.n_kv_heads, cfg.head_dim());
 
         // First iteration (no global state, append KV)
-        let (x_out, global_state) = block
+        let (x_out, global_state, exit_prob) = block
             .forward(&x_expanded, None, &mut kv_cache, true, None)
             .unwrap();
 
         // Check output shapes
         assert_eq!(x_out.len(), dim * n_streams);
         assert_eq!(global_state.len(), dim);
+        assert!(exit_prob >= 0.0 && exit_prob <= 1.0, "exit_prob={}", exit_prob);
 
         // Check KV cache was populated
         assert_eq!(kv_cache.len, 1); // Should have 1 token in cache
@@ -598,7 +661,7 @@ mod tests {
         let mut kv_cache = KvCache::new(cfg.max_seq_len, cfg.n_kv_heads, cfg.head_dim());
 
         // Iteration 1: append KV, no global state
-        let (mut x_state, mut global_state) = block
+        let (mut x_state, mut global_state, _ep1) = block
             .forward(&x_expanded, None, &mut kv_cache, true, None)
             .unwrap();
 
@@ -606,7 +669,8 @@ mod tests {
         assert_eq!(kv_len_after_first, 1);
 
         // Iteration 2: don't append KV, use global state
-        (x_state, global_state) = block
+        let _ep2;
+        (x_state, global_state, _ep2) = block
             .forward(&x_state, Some(&global_state), &mut kv_cache, false, None)
             .unwrap();
 
@@ -614,7 +678,8 @@ mod tests {
         assert_eq!(kv_cache.len, kv_len_after_first);
 
         // Iteration 3: another loop
-        (x_state, global_state) = block
+        let _ep3;
+        (x_state, global_state, _ep3) = block
             .forward(&x_state, Some(&global_state), &mut kv_cache, false, None)
             .unwrap();
 
@@ -670,12 +735,12 @@ mod tests {
         let mut kv_cache = KvCache::new(cfg.max_seq_len, cfg.n_kv_heads, cfg.head_dim());
 
         // First iteration creates global state
-        let (x1, global_state1) = block
+        let (x1, global_state1, _ep1) = block
             .forward(&x_expanded, None, &mut kv_cache, true, None)
             .unwrap();
 
         // Second iteration uses global state
-        let (_x2, global_state2) = block
+        let (_x2, global_state2, _ep2) = block
             .forward(&x1, Some(&global_state1), &mut kv_cache, false, None)
             .unwrap();
 

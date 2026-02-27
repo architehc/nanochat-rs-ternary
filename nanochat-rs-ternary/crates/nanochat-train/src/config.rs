@@ -93,8 +93,16 @@ pub struct AdaptiveLoopConfig {
     pub min_loops: usize,
     /// Maximum number of loop iterations
     pub max_loops: usize,
-    /// Perplexity threshold for early stopping
+    /// Perplexity threshold for early stopping (legacy, pre-exit-gate)
     pub perplexity_threshold: f32,
+    /// Exit gate threshold: if exit_prob > this, stop looping (after min_loops).
+    /// Default 0.5. Set to 1.0 to disable exit gate.
+    #[serde(default = "default_exit_threshold")]
+    pub exit_threshold: f32,
+}
+
+fn default_exit_threshold() -> f32 {
+    0.5
 }
 
 /// LoopLM configuration: recurrent loop mechanics per arXiv:2510.25741.
@@ -852,6 +860,7 @@ impl TrainConfig {
                     min_loops: 2,
                     max_loops: 6,
                     perplexity_threshold: 5.0,
+                    exit_threshold: 0.5,
                 }),
             }),
 
