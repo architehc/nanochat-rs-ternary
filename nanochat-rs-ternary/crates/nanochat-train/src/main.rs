@@ -57,6 +57,9 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-275m-engram-only" | "nano_275m_engram_only" | "nano-275m-engram" | "nano_275m_engram" => {
             Some(TrainConfig::nano_275m_engram_only())
         }
+        "nano-275m-engram-mtp" | "nano_275m_engram_mtp" => {
+            Some(TrainConfig::nano_275m_engram_mtp())
+        }
         "nano-275m-haar-v3" | "nano_275m_haar_v3" => {
             Some(TrainConfig::nano_275m_haar_v3())
         }
@@ -743,6 +746,8 @@ mod tests {
             "nano_275m_engram_only",
             "nano-275m-engram",
             "nano_275m_engram",
+            "nano-275m-engram-mtp",
+            "nano_275m_engram_mtp",
             "nano-275m-haar-v3",
             "nano_275m_haar_v3",
         ];

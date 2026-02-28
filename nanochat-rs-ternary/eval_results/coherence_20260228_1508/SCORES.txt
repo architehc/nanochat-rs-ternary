@@ -1,0 +1,57 @@
+================================================================================
+COHERENCE BENCHMARK RESULTS
+================================================================================
+
+### SCORES (0 samples)
+  Bracket Balance:    0.000
+  Repetition (3-gram): 0.000
+  Repetition (5-gram): 0.000
+  Rust Keywords:      0.000
+  Token Quality:      0.000
+  Syntax Coherence:   0.000
+  *** COMPOSITE:      0.000 ***
+
+### baseline-v1 (15 samples)
+  Bracket Balance:    0.936
+  Repetition (3-gram): 0.767
+  Repetition (5-gram): 0.872
+  Rust Keywords:      0.253
+  Token Quality:      0.996
+  Syntax Coherence:   0.500
+  *** COMPOSITE:      0.699 ***
+
+### engram-mtp (15 samples)
+  Bracket Balance:    0.947
+  Repetition (3-gram): 0.845
+  Repetition (5-gram): 0.924
+  Rust Keywords:      0.223
+  Token Quality:      0.997
+  Syntax Coherence:   0.575
+  *** COMPOSITE:      0.734 ***
+
+### engram-v1 (15 samples)
+  Bracket Balance:    0.918
+  Repetition (3-gram): 0.888
+  Repetition (5-gram): 0.956
+  Rust Keywords:      0.237
+  Token Quality:      0.998
+  Syntax Coherence:   0.608
+  *** COMPOSITE:      0.752 ***
+
+### engram-v2 (15 samples)
+  Bracket Balance:    0.951
+  Repetition (3-gram): 0.818
+  Repetition (5-gram): 0.905
+  Rust Keywords:      0.235
+  Token Quality:      0.993
+  Syntax Coherence:   0.617
+  *** COMPOSITE:      0.740 ***
+
+================================================================================
+RANKING (by composite score)
+================================================================================
+  1. engram-v1             composite=0.752  syntax=0.608  rep3=0.888  brackets=0.918
+  2. engram-v2             composite=0.740  syntax=0.617  rep3=0.818  brackets=0.951
+  3. engram-mtp            composite=0.734  syntax=0.575  rep3=0.845  brackets=0.947
+  4. baseline-v1           composite=0.699  syntax=0.500  rep3=0.767  brackets=0.936
+  5. SCORES                composite=0.000  syntax=0.000  rep3=0.000  brackets=0.000

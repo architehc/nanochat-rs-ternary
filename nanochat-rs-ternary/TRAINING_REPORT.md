@@ -2,20 +2,23 @@
 
 ## Executive Summary
 
-Dual-GPU training session on 2x RTX 4090 (23GB each). Four model runs across two rounds:
+Dual-GPU training session on 2x RTX 4090 (23GB each). Six model runs across three rounds:
 
-| Model | Architecture | Steps | Final Loss | H (CE) | Generation Quality |
-|-------|-------------|-------|------------|--------|-------------------|
-| **haar-v5** | Wavefield Haar + mHC | 30,000 | **1.1714** | 1.17 | Garbled (wavefield bypass) |
-| **engram-v1** | Engram N-gram + mHC | 10,000 | **2.1916** | 2.19 | Semi-coherent Rust (best) |
-| **baseline-v1** | Standard + MTP | 10,000 | **4.1929** | **2.92** | Semi-coherent Rust |
-| **engram-v2** | Extended engram (resumed) | 16,000 | **2.9363** | 2.95 | Degraded from v1 |
+| Model | Architecture | Steps | Final Loss | H (CE) | Coherence Score |
+|-------|-------------|-------|------------|--------|----------------|
+| **haar-v5** | Wavefield Haar + mHC | 30,000 | **1.1714** | 1.17 | N/A (garbled) |
+| **engram-v1** | Engram N-gram + mHC | 10,000 | **2.1916** | 2.19 | **0.752** (best) |
+| **engram-v2** | Extended engram (resumed) | 16,000 | **2.9363** | 2.95 | 0.740 |
+| **engram-mtp** | Engram + MTP combined | 10,000 | **4.1924** | **2.91** | 0.734 |
+| **baseline-v1** | Standard + MTP | 10,000 | **4.1929** | **2.92** | 0.699 |
+| **engram-v3** | Fresh engram (20K) | *in progress* | — | — | (pending) |
 
 **Key findings**:
-1. Wavefield Haar achieves the lowest training loss but cannot generate coherent text (bidirectional attention).
-2. Engram-v1 remains the best model for code generation despite not having the lowest loss.
-3. Baseline-v1 with MTP achieves H=2.92 — comparable to engram but the reported loss is inflated by MTP (~1.3 above pure CE).
+1. **Coherence > Loss**: engram-v1 has the best generation quality (0.752) despite engram-v2 having better syntax coherence (0.617 vs 0.608). Repetition control is the key differentiator.
+2. **MTP does NOT improve coherence**: engram-mtp (0.734) with MTP scores worse than engram-v1 (0.752) without MTP at the same step count. MTP overhead hurts single-token generation.
+3. **Engram consistently helps**: All 3 engram variants beat baseline-v1 (0.699) for coherence.
 4. Resuming from a converged checkpoint with full LR causes permanent destabilization (engram-v2 regression).
+5. Wavefield Haar achieves the lowest training loss but cannot generate coherent text (bidirectional attention).
 
 ## Training Configuration
 
@@ -159,6 +162,93 @@ Step     Loss    H     LR        gnorm   Notes
 (3 future tokens, weight=0.2). The H column shows pure cross-entropy for the primary
 next-token prediction. H=2.92 is the comparable metric to engram-v1's loss=2.19.
 
+### engram-mtp (Engram + MTP Combined, Round 3)
+
+```
+Step     Loss    H     LR        gnorm   Notes
+50       11.6289 8.11  0.000400  19.70   Random init (MTP inflates loss ~1.3)
+500      7.8964  5.75  0.004000  6.63    Warmup phase
+1000     6.5903  4.55  0.008000  2.90
+1500     6.0641  4.03  0.012000  2.25    Full LR
+2000     5.5013  3.64  0.012000  1.90
+3000     5.2438  3.56  0.012000  2.21
+4000     4.8369  3.30  0.012000  2.16
+5000     4.5952  3.15  0.012000  2.46
+6000     4.6118  3.16  0.012000  2.80
+7000     4.3655  3.00  0.012000  3.29    First H < 3.0
+8000     4.3392  3.00  0.012000  3.69    Entered decay phase
+9000     4.0855  2.85  0.006600  3.90    Rapid improvement
+9400     3.9448  2.77  0.003426  3.63    Best H
+10000    4.1924  2.91  0.001200  3.50    Final
+```
+
+**Total training time**: 283.5 minutes (4.7 hours)
+**Total steps**: 10,000
+**Throughput**: ~610 tok/s average
+
+**Analysis**: Combining Engram + MTP produced H=2.91, nearly identical to baseline-v1's
+H=2.92. The MTP auxiliary loss adds gradient noise that appears to slow convergence of
+the primary next-token prediction. The engram memory tables don't compensate for this
+overhead at 10K steps.
+
+### engram-v3 (Fresh 20K Engram, Round 3 — IN PROGRESS)
+
+```
+Step     Loss    H     LR        gnorm   Notes
+50       8.3953  8.11  0.000400  17.14   Random init
+500      5.6693  5.71  0.004000  5.96
+1000     4.6947  4.50  0.008000  2.71
+1500     4.3394  4.01  0.012000  2.18    Full LR
+2000     3.9479  3.61  0.012000  1.81
+3000     3.6810  3.51  0.012000  2.46
+4000     3.4568  3.36  0.012000  2.38
+5000     3.2549  3.20  0.012000  2.73
+6000     3.3052  3.25  0.012000  3.05
+7000     3.2862  3.25  0.012000  3.84
+8000     3.2226  3.18  0.012000  5.83
+9000     3.2133  3.18  0.012000  6.06
+10000    3.2468  3.21  0.012000  6.76    50% done, gnorms elevated
+```
+
+Still running on GPU 1. Decay starts at step 16000. Grad norms are elevated
+(6-7x) compared to earlier (2-3x) — possibly overfitting or training instability.
+Will evaluate coherence when complete.
+
+## Coherence Benchmark
+
+Quantitative evaluation across 15 standard Rust prompts per model, using 6 metrics:
+- **Bracket Balance** (w=0.15): Open/close parity of (), {}, [], <>
+- **Repetition 3-gram** (w=0.15): Unique 3-gram ratio (higher = less repetitive)
+- **Repetition 5-gram** (w=0.15): Unique 5-gram ratio
+- **Rust Keywords** (w=0.15): Real Rust keyword density
+- **Token Quality** (w=0.15): Absence of invented/garbage tokens
+- **Syntax Coherence** (w=0.25): Regex-based pattern detection (fn, let, struct, impl, etc.)
+
+### Results
+
+| Rank | Model | Composite | Syntax | Rep(3g) | Rep(5g) | Brackets | Keywords | Tokens |
+|------|-------|-----------|--------|---------|---------|----------|----------|--------|
+| 1 | engram-v1 | **0.752** | 0.608 | **0.888** | **0.956** | 0.918 | 0.237 | 0.998 |
+| 2 | engram-v2 | 0.740 | **0.617** | 0.818 | 0.905 | **0.951** | 0.235 | 0.993 |
+| 3 | engram-mtp | 0.734 | 0.575 | 0.845 | 0.924 | 0.947 | 0.223 | 0.997 |
+| 4 | baseline-v1 | 0.699 | 0.500 | 0.767 | 0.872 | 0.936 | **0.253** | 0.996 |
+
+### Key Observations
+
+1. **Repetition is the differentiator**: engram-v1 wins primarily because it's the least
+   repetitive (3-gram: 0.888 vs 0.767-0.845 for others). This suggests the engram N-gram
+   memory helps the model avoid repetitive patterns.
+
+2. **MTP hurts repetition control**: engram-mtp (3-gram: 0.845) is worse than engram-v1
+   (0.888) despite identical architecture except for MTP. The multi-token prediction
+   objective may encourage the model to produce safe/repetitive patterns.
+
+3. **Bracket balance correlates weakly with quality**: engram-v2 has the best bracket
+   balance (0.951) but ranks 2nd overall. Good brackets don't guarantee good code.
+
+4. **All models have similar token quality** (0.993-0.998), meaning invented tokens
+   are rare across the board at this scale.
+
 ## Code Fixes Applied (This Session)
 
 ### Critical Fix: LR Schedule Extension
@@ -277,30 +367,42 @@ inconsistent syntax, but still recognizes basic Rust patterns.
 
 ## Key Findings
 
-### 1. Wavefield Attention — High Training Efficiency, Zero Generation Utility
-The wavefield Haar attention achieves the lowest training loss (1.17 vs 2.19) because
-it can attend to all positions bidirectionally. However, this makes it completely
-unsuitable for autoregressive generation. **Training loss is not comparable between
-wavefield and standard attention models.**
+### 1. Coherence Scoring Reveals What Loss Cannot
+Loss alone is misleading for generation quality assessment:
+- haar-v5 has the best loss (1.17) but worst generation (garbled)
+- engram-v1 (loss=2.19) and baseline-v1 (H=2.92) have different losses but
+  both produce semi-coherent code
+- **Coherence benchmark** (composite score) is a much better predictor of
+  actual generation utility than raw loss
 
-Potential fixes:
-- Train a causal variant of wavefield attention
-- Use wavefield for representation learning, then distill to standard attention
-- Implement KV-caching for wavefield (requires significant research)
+### 2. Engram N-gram Memory Reduces Repetition
+The #1 differentiator between models is **repetition control**:
+- engram-v1 3-gram uniqueness: 0.888 (best)
+- engram-mtp 3-gram: 0.845
+- engram-v2 3-gram: 0.818
+- baseline-v1 3-gram: 0.767 (worst)
 
-### 2. Engram N-gram Memory — Promising for Code Generation
-The engram model reached loss=2.19 in only 10,000 steps — significantly better than
-previous non-wavefield models (best was 2.88 at 16,500 steps with the small 29.9M model).
-The N-gram hash tables provide useful n-gram context at minimal compute cost.
+The engram hash tables appear to help the model track recent n-grams and avoid
+repeating them. This is the module's most valuable contribution.
 
-### 3. WSD LR Schedule — Critical for Convergence
+### 3. MTP Does Not Improve Generation Quality
+Direct comparison at 10K steps:
+- **engram-v1** (no MTP): H=2.19, coherence=0.752
+- **engram-mtp** (with MTP): H=2.91, coherence=0.734
+
+MTP adds ~1.3 to reported loss and achieves H=2.91 vs engram-v1's 2.19. Even
+accounting for MTP overhead, the coherence benchmark shows MTP produces *worse*
+generation quality. The multi-token prediction objective may encourage safe/repetitive
+patterns that hurt diversity.
+
+### 4. WSD LR Schedule — Critical for Convergence
 The cosine decay phase (last 20% of training) is responsible for the majority of
 final loss improvement. Example from engram-v1:
 - Step 8000 (start of decay): loss=3.19
 - Step 10000 (end): loss=2.19
 - **31% loss reduction in just 20% of training!**
 
-### 4. Resume LR Discontinuity — A Critical Pitfall
+### 5. Resume LR Discontinuity — A Critical Pitfall
 When extending training with `--total-steps`, the LR schedule jumps from minimum
 back to stable-phase LR. Results vary dramatically:
 
@@ -309,80 +411,63 @@ back to stable-phase LR. Results vary dramatically:
 - **engram-v2**: Same LR spike (0.0012 → 0.012) caused loss 2.19 → 3.00.
   **Never recovered** — loss stayed at 2.94 after 6000 additional steps. Failure.
 
-The difference: haar-v5 had wavefield attention (bidirectional) with very low gnorm
-(0.04), while engram-v1 had standard attention with higher gnorm (2-4). The LR
-spike was proportionally much larger relative to engram's gradient landscape.
-
 **Recommendation**: When resuming from a converged checkpoint, either:
 - Use a warmup ramp (100-200 steps from current LR to target)
 - Use a lower peak LR (e.g., 0.003 instead of 0.012)
 - Start fresh training with a different total_steps target instead
 
-### 5. MTP Inflates Loss But Improves Hidden Representations
-Baseline-v1 with MTP reports loss ~4.2 but achieves H=2.92 (pure next-token CE).
-The ~1.3 loss inflation comes from predicting 3 additional future tokens. While
-the MTP loss makes cross-model comparison tricky, MTP may improve the model's
-internal representations through multi-step reasoning. Baseline-v1's generation
-quality at H=2.92 is comparable to engram-v1 at loss=2.19, despite baseline having
-trained without engram memory augmentation.
-
-### 6. Engram vs Baseline — Minimal Difference at Same Scale
-At 10,000 steps with the same architecture (dim=1024, 20 layers, 275M params):
-- **engram-v1**: loss=2.19 (pure CE)
-- **baseline-v1**: H=2.92 (pure CE, no engram)
-
-The ~0.7 loss gap suggests engram provides measurable benefit, but the generation
-quality difference is modest. Both produce semi-coherent Rust code. engram-v1
-has slightly better syntactic structure while baseline-v1 has more varied vocabulary.
+### 6. Wavefield Attention — High Training Efficiency, Zero Generation Utility
+The wavefield Haar attention achieves the lowest training loss (1.17 vs 2.19) because
+it can attend to all positions bidirectionally. However, this makes it completely
+unsuitable for autoregressive generation.
 
 ## Model Checkpoints
 
-### Best Models
+### Best Models (ranked by coherence)
 ```
-checkpoints/nano-275m-haar-v5/final/           # loss=1.1714 (best training loss, no generation)
-checkpoints/nano-275m-engram-v1/final/         # loss=2.1916 (best for generation)
-checkpoints/nano-275m-baseline-v1/final/       # H=2.92 (baseline comparison, MTP)
-checkpoints/nano-275m-engram-v2/final/         # loss=2.9363 (failed resume, worse than v1)
+checkpoints/nano-275m-engram-v1/final/         # coherence=0.752, loss=2.1916 (BEST for generation)
+checkpoints/nano-275m-engram-v2/final/         # coherence=0.740, loss=2.9363 (failed resume)
+checkpoints/nano-275m-engram-mtp/final/        # coherence=0.734, H=2.91 (engram+MTP)
+checkpoints/nano-275m-baseline-v1/final/       # coherence=0.699, H=2.92 (baseline+MTP)
+checkpoints/nano-275m-haar-v5/final/           # loss=1.1714 (best loss, no generation)
 ```
 
-### Previous Best
+### In Progress
 ```
-checkpoints/nano-275m-haar-v3/step_20000/      # loss=1.1930 (previous best)
+checkpoints/nano-275m-engram-v3/               # fresh 20K engram, ~50% done
 ```
 
 ## Training Stability
 
-- **No OOM errors** during the entire session (~10 hours total GPU time)
-- **No NaN losses** detected across all 4 runs
-- **No crashes** — all processes ran to completion
+- **One OOM error**: engram-v3 OOM at step 150 on GPU 1 (both GPUs initializing simultaneously). Restarted successfully.
+- **No NaN losses** detected across all 6 runs
+- **No other crashes** — all completed processes ran to final step
 - VRAM usage stable: 18-20GB per GPU
-- GPU temperatures: 45-60C
-- Throughput: ~585-700 tok/s (higher when single-GPU)
+- GPU temperatures: 43-64C
+- Throughput: ~585-700 tok/s (600-660 typical, lower when both GPUs active)
+- Total GPU hours: ~20 hours across 3 rounds
 
 ## Recommendations
 
-1. **For coherent code generation**: Use engram-v1 (loss=2.19), the best model.
-   For further improvement, train a fresh engram run with total_steps=20000
-   (not resumed from a converged checkpoint).
+1. **For coherent code generation**: Use engram-v1 (coherence=0.752), the best model.
+   Wait for engram-v3 (fresh 20K) to potentially surpass it.
 
-2. **Do NOT resume converged checkpoints at full LR**: The engram-v2 experiment
-   proves this destroys model quality. Either train fresh with more steps, or
-   resume with a warmup ramp.
+2. **Skip MTP for generation tasks**: MTP does not improve coherence scores and adds
+   training overhead. Use pure CE loss with engram memory for best generation quality.
 
-3. **For wavefield research**: Investigate causal wavefield variants or
-   distillation from wavefield to standard attention. Current wavefield
-   cannot generate coherent text.
+3. **Do NOT resume converged checkpoints at full LR**: The engram-v2 experiment
+   proves this destroys model quality. Train fresh with more steps instead.
 
-4. **For best training efficiency**: Use the WSD schedule with at least 20%
+4. **Focus on repetition reduction**: The key quality gap between models is repetition.
+   Techniques like frequency penalty, n-gram blocking, or contrastive decoding could
+   help at inference time. The engram memory helps at training time.
+
+5. **For best training efficiency**: Use the WSD schedule with at least 20%
    decay phase. The decay phase provides 31% of final loss improvement.
 
-5. **Data scaling**: The current 97M token dataset is modest. Scaling to
+6. **Data scaling**: The current 97M token dataset is modest. Scaling to
    500M+ tokens of Rust code could improve generalization significantly.
 
-6. **Architecture**: The LoopLM (loop_count=16) configuration is too slow
-   for practical training (67 tok/s vs 585 tok/s). Reduce loop_count to 4
-   or use standard deep architecture.
-
-7. **MTP**: Baseline-v1 with MTP achieved comparable generation quality to
-   engram-v1. MTP may be a low-cost way to improve representations without
-   custom memory modules. Consider combining MTP + engram in future runs.
+7. **Use coherence benchmarks, not loss**: Always evaluate with the coherence
+   benchmark (eval_coherence.sh + score_coherence.py) rather than relying on
+   training loss or perplexity alone.

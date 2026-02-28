@@ -1,0 +1,95 @@
+# Model: baseline-v1
+# Checkpoint: checkpoints/nano-275m-baseline-v1/final
+# Device: cuda
+# Date: Sat Feb 28 10:09:22 EST 2026
+
+--- PROMPT 1 ---
+INPUT: fn main() {
+OUTPUT:
+fn main() {        let p = bar::tempdir();        assert_eq!(            r,            mem::transmute(__msa_broadcast(mem::transmute(a), mem::transmute(b)))        );    }    #[simd_test(enable = "msa")]    fn test_msa_broadcast_broadcast_broadcast_broadcast_broadcast_w() {        let p = project()        .file(            "Cargo.toml",            r#"                [package]                name = "foo"                version = "0.0.0"                edition = "2015"                authors = []                [dependencies.bar]                path = "bar"                [dependencies.bar]                path = "bar"            "#,        )        .file("src/lib.rs", "fn main() {}")        .build();    p.cargo("build -scale")        .with_stderr_data(str![[r#"[UPDATING] `dummy-registry` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s"#]])        .run();}#[cargo_test]fn test_msa_broadcast_broadcast_broadcast_broadcast_broadcast_aroadcast_a
+
+
+--- PROMPT 2 ---
+INPUT: pub struct Config {
+OUTPUT:
+pub struct Config {    #[primary_span]    pub span: Span,}#[derive(Clone, Copy, PartialEq, Eq)]#[derive(Copy)]struct Config {    #[primary_span]    pub span: Span,    #[subdiagnostic]    pub span: Span,    pub span: Span,    #[subdiagnostic]    pub span: Span,    #[subdiagnostic]    pub span: Span,    pub span: Span,    pub span: Span,    pub name: String,    pub ident: Span,    pub span: Span,}#[derive(Diagnostic)]#[diag("`{name}` here, `description}` cannot be a const")]pub struct ConditionAuto {    #[primary_span]    pub span: Span,    pub name: Symbol,    pub ident: Ident,    pub ident: Symbol,    pub ident: Ident,}#[derive(Diagnostic)]#[diag("`{name}` is not a type of `{$name}`")]pub struct ConditionAuto {    #[primary_span]    pub span: Span,    #[subdiagnostic]    pub span: Span,    pub ident: Ident,    pub ident: Ident,    pub ident: Ident,    pub
+
+
+--- PROMPT 3 ---
+INPUT: use std::collections::HashMap;\n\nfn 
+OUTPUT:
+use std::collections::HashMap;\n\nfn Z<T>(x: T, y: T) -> i32 {    if y + 1 {        x + y;    }    y * x = y;    }    y += 1;    y * x = y;    y * y = y;    // Lists for iratio to one    x *x = y * x;    z = y;    y * y - y * x * y;    drop *y;    y * x = y * y;}// Note that we don't need at the same way in the same way.use hdr::Hdr;use hdr::Context;use hdr::task::Pending;use crate::sync::mpsc::mpsc::mpsc;use std::mpsc::mpsc::mpsc;use std::mpsc::{Capture, Vec, Vec2, Vec2, Vec2, Vec2};use bevy_mpsc::mpsc;use bevy_mpsc::mpsc;use bevy_math::palec::*;use bevy_platform::collections::HashMap;use tracing::fx::{DiagnosticsMap,
+
+
+--- PROMPT 4 ---
+INPUT: impl Iterator for 
+OUTPUT:
+impl Iterator for Quot {    const fn default() -> Self {        Self::default()    }    fn default() -> Self::Item {        Self::default()    }    fn default() -> Self::Item {        Self::default()    }}impl<'a> FromIterator for &'a str {    fn from(val: &'a str) -> Self {        Self::default()    }}impl FromIterator for &'a str {    fn from(val: &'a str) -> Self {        Self::into_iter()    }}impl FromIterator for &'a str {    fn from(val: &'a str) -> Self {        Self::from_internal(val)    }}impl FromIterator for &'a str {    fn from(val: &'a str) -> Self {        Self::from_internal(val)    }}impl FromIterator for &'a str {    fn from(val: &'a str) -> Self {        Self::from_sql(val)    }}impl FromIterator for &'a str {    fn from(val: &'a str) -> Self {        Self::from_into_case(val)    }}impl FromIterator for &'a str {
+
+
+--- PROMPT 5 ---
+INPUT: pub fn parse(input: &str) -> Result<
+OUTPUT:
+pub fn parse(input: &str) -> Result<String, Error> {    let mut path = String::from("");    let mut buf = None.to_string();    let mut path = String::from("foo");    let mut buf = String::from("foo");    let mut buf = String::from("foo");    while let Some(output) = candidate {        let mut buf = String::from("foo");        std::fs::write_all_bytes(output)    } else {        std::fs::write_all_bytes(b"foo\n")?;        match candidate {            Ok(err) => panic!("{}c"),            Err(err) => {                return Err(err);            }            Err(err) => panic!("{}c {}", candidate),        };        Ok(())    }}#[cfg(not(no_global_oom_handling))]fn write_all_handlers(    bytes: &str,    bytes: &str,    file: &Path,    file: &Path,    cmd: &str,    schem: &str,    file: &Path,) -> io::Result<usize> {    let mut buf = candidate("a".
+
+
+--- PROMPT 6 ---
+INPUT: #[derive(Debug, Clone)]\npub struct 
+OUTPUT:
+#[derive(Debug, Clone)]\npub struct Z;pub struct Z;#[cfg(feature = "bevy_reflect")]pub struct Z;#[cfg(feature = "bevy_reflect")]pub struct Z;#[cfg(feature = "bevy_reflect")]pub struct Z;#[cfg(feature = "bevy_reflect")]pub struct Z;#[cfg(feature = "bevy_reflect")]impl<S: Default, A: Allocator> Default for Z syn::SpawnSet {    fn default() -> Self {        Self {            // SAFETY: the caller is not a valid string value value which is not guaranteed in an            // `entity_id` has not constructed to be registered to be made.            //            // SAFETY: The caller is not guaranteed in the same implementation value.        }        // SAFETY: Because the caller is not a valid string value when `entity_id`        // was created, it is made.        unsafe {            // SAFETY: `entity_id` was `entities_id` which will not check `entity_id`            // for `entity_id` which is not valid for accessible to be occeed in            // the caller.            unsafe {
+
+
+--- PROMPT 7 ---
+INPUT: async fn handle_request(req: Request) -> Response {
+OUTPUT:
+async fn handle_request(req: Request) -> Response {        self.send_all(req)    }    fn poll_all<F>(self, _: F) -> Result<(), Self::Error>    where        F: FnOnce() -> Result<Self::Error>    where        F: FnOnce() -> Result<Self::Error>        where            F: FnOnce(Box<Self::Error>> for Request<Self::Error>        where            F: FnOnce(Box<Self::Error>) -> Result<Self::Error>            where                F: FnOnce() -> Result<Self::Error>,            {                self.send_response(req)            }        }    }    fn poll_all<F, F>(self, _: F) -> Result<Self::Error>    where        F: FnMut() -> Result<Self::Error>,    {        let mut r = self.send_all(req);        let mut read = r.recv();        let mut r = RwLock::new(            Self::new(                self.response(conn),                Self::Error: Into<Self::Error>,                Self::Error: Into<Self::Error>,           >>::Error,            Self::Error: Into<Self::Error>,            Self::
+
+
+--- PROMPT 8 ---
+INPUT: impl Display for Error {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+OUTPUT:
+impl Display for Error {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {        write!(f, "{}{}{}", f)?;        write!(f, "{} {}{}", f)?;        write!(f, "{}{}", f)?;        Ok(())    }    fn write(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {        write!(f, "{}{}", f)?;        write!(f, "{}{}", f)?;        write!(f, "{} {}{}", f)?;        write!(f, "{}{}", f)?;        write!(f, "{}{}{}", f)?;        write!(f, "{}{}", f)?;        write!(f, "{}{}", f)?;        write!(f, "{} {}{}", f)?;        write!(f, "{}{}", f);        write!(f, "{}{}", f)?;        write!(f, "{}{}", f)?;        write!(f, "{}{}", f)?;    }    Ok(())}use crate::fmt::Display;use crate::fmt::Display;use crate::fmt::Display;use crate::fmt;use crate::fmt::Display;use crate::fmt::Display;use crate::fmt;use crate::fmt::Display;use crate::fmtError;use crate::fmt::{self, fmt};use crate::fmt
+
+
+--- PROMPT 9 ---
+INPUT: pub trait 
+OUTPUT:
+pub trait util::Error {    fn as_mut(&mut self) -> Result<Self, Self::Error> {        Ok(self)    }}impl_util::Error for ErrorKind {    type Error = util::Error;    fn as_mut(&self) -> bool {        match self {            Ok(self) => {                let error = self.err().span_fatal(self.type_span.to_str());                if self.is_empty() {                    Some(value)                } else {                    None                }            }            Err(Error::new_error(err))            } else {                None            }        }    }}impl_util::Error for ErrorKind {    fn from_str(err: Self::Error) -> Self::Error {        ErrorKind::Remo {            err: fmt::Error::new_error(err.into()),        }    }}impl_util::Error for ErrorKind {    fn parse_str(err: Self::Error) -> Self, Error {        ErrorKind::Remo {            error: fmt::Error::new_error(err),            fmt::Display,            fmt::Display::fmt(&
+
+
+--- PROMPT 10 ---
+INPUT: match self {
+OUTPUT:
+match self {                    let mut inner_str = self.project_value_with_string(self.token.span);                    self.context_with_string(inner_str, self.token_id);                }                self.context_with_loop(last.token.span, self.token_id);            }            Ok(())        }        fn visit_impl_args_with_loop(self, expr: &hir::Expr<'_>) -> &'a mut Node {            self.check_impl_args_with_loop(expr, self.token.hir_id);            self.tcx.dcx().emit_err(errors::MultipleSafeFnSafeFnSugg { span: self.token.span, op: &hir::ExprKind::MultipleSafeFnSugg),            candidates: self.token_path_with_hi(expr),        }    }    fn visit_impl_args(&self, expr: &hir::Expr) -> Vec<(ty::Path, Ty<'hir>)> {        for (expr, ty::TyKind::Trait(hir::ExprKind::Trait { .. }) = self.tcx.hir_node_sig
+
+
+--- PROMPT 11 ---
+INPUT: #[test]\nfn test_
+OUTPUT:
+#[test]\nfn test_msa_test_blen() {    let a = i32x4::new(        2, 6, 7, 7, 17, 5, 8, 9, 9, 6, 7, 4, 11, 12, 11, 12, 13, 14, 15, 16, 16, 16, 1, 2, 2, 3, 2, 2, 2, 3, 4, 5, 7,        4, 2, 2, 4, 3, 4, 4, 4, 5, 4, 5, 6, 5, 7,        8, 9, 10, 11, 12, 13, 14, 15, 16, 16, 16, 16, 2, 2, 2, 2, 3, 4, 3, 4, 6, 7, 8, 1, 1, 2, 1, 1, 20, 1, 2, 2, 1, 2, 2, 1, 3, 5, 2, 1, 2, 1, 2, 1, 0, 0, 1, 2, 4, 1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0,
+
+
+--- PROMPT 12 ---
+INPUT: let mut result = Vec::new();\n    for 
+OUTPUT:
+let mut result = Vec::new();\n    for Key in Key in Key {        if key.contains(key.entity) {            Ok(key);        }        if key.contains(key.eq) {            for (key, _) in &key.entry {                let key = key.get(&key_entity);                if key.contains(key.eq) {                    key.set(&key.insert(key);                } else {                    key.contains(key.entity);                }            }        }    }    if key.contains(key.eq) {        key.keys_mut(key.insert(key.entity()));    }    if key.contains(key.value) {        key.keys_mut(key.index());    }    let key = key.get(&key.table);    key.keys_mut(key.index());    key.insert(key.index());    key.keys_mut(key.index());    key.filter_by(key.id);    key.map_or(key_index);    key.press_mut(key.index());}/// Return the key to insert a latch of the key.////// This is created
+
+
+--- PROMPT 13 ---
+INPUT: fn from_str(s: &str) -> Result<Self, Self::Err> {
+OUTPUT:
+fn from_str(s: &str) -> Result<Self, Self::Err> {        s.into_str()            .map(|s| s.into_str())            .collect();        ops::write_str(s, s)    }}impl From<&str> for Box<std::ffi::OsStr> {    fn from(self) -> Result<Self::Error, Self::Error>;}impl From<std::ffi::OsStr> {    fn from(self) -> Result<Self, Self::Error>;}impl From<std::ffi::OsStr> for Box<std::ffi::OsStr> {    fn from(self) -> Self {        Self::from(self.path())    }}impl From<std::ffi::OsStr> for Box<std::ffi::OsStr> {    fn from(data: &[u8]) -> Self {        Self::from(data.into_str())    }}#[cfg(test)]mod tests {    use crate::ffi::OsStr;    use crate::ffi::OsStr;    use std::ffi::OsStr;    use crate::os::OsStr;    use core::os::OsString;    use crate::ffi::OsStr;    use crate::os::unix::net::UnixListener;   
+
+
+--- PROMPT 14 ---
+INPUT: /// Returns the number of elements in the collection.\npub fn len(&self) -> usize {
+OUTPUT:
+/// Returns the number of elements in the collection.\npub fn len(&self) -> usize {    // Call in the vec that are the same as the upperolute index.    let mut next = self.0.add_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_with_delta_and_delta_with_delta_with_delta_with_delta_with_
+
+
+--- PROMPT 15 ---
+INPUT: use serde::{Deserialize, Serialize};\n\n#[derive(Debug, Serialize, Deserialize)]\npub struct 
+OUTPUT:
+use serde::{Deserialize, Serialize};\n\n#[derive(Debug, Serialize, Deserialize)]\npub struct ();impl<'a> ();impl<'a> Result<&'a mut Vec<u8>> for ();impl<'a> ();pub fn ();impl<'a, T> From<&'a T> for  {    fn from(value: T) -> Self {        Self::from_bytes(value)    }}impl<B> From<&'a> for  {    fn from(value: T) -> Self {        Self::from_bytes(value)    }}impl<B> From<&'a T> for ();impl<B> From<&'a T> for Zero T {    fn from(value: T) -> Self {        Self::from_bytes(value)    }}impl<'a, T> From<&'a T> for ZeroT {    fn from(value: T) -> Self {        Self::from_bytes(value)    }}impl<'a, T> From<&'a T> for ZeroT {    fn from(value: T) -> Self {        Self::from_bytes(value)    }}impl<'a, T> From<&'a T> for ZeroT {    fn from(value: T) ->
+
+

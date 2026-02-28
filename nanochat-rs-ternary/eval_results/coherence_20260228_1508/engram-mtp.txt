@@ -1,0 +1,94 @@
+# Model: engram-mtp
+# Checkpoint: checkpoints/nano-275m-engram-mtp/final
+# Date: Sat Feb 28 15:08:54 EST 2026
+
+--- PROMPT 1 ---
+INPUT: fn main() {
+OUTPUT:
+fn main() {    let p = project()        .file(            "Cargo.toml",            r#"                [package]                name = "foo"                version = "0.0.1"                edition = "2015"                authors = []                [dependencies]                path = "bar"                version = "0.1.0"                authors = []                [dependencies]                path = "foo"                path = "foo"                [dependencies]                fallib = { path = "bar" }            "#,        )        .file("src/lib.rs", "")        .file(            "bar-a/Cargo.toml",            r#"                [package]                name = "a"                version = "0.1.0"                edition = "2015"                [dependencies]                bar = { path = "a" }            "#,        )        .file("bar/src/lib.rs", "")        .file("build/foo/bar.rs", "")        .build();    p.cargo("check --verbose")        .with_stderr_data(str![[r#"[UPDATING] `dummy-registry` index[LOCKING] 1 package to latest compatible
+
+
+--- PROMPT 2 ---
+INPUT: pub struct Config {
+OUTPUT:
+pub struct Config {    /// The `Initial::Required` is defined.    ///    /// This is used for the incremental value. The `Initial` is used by one    /// `Existinct_on_droken` instead.    ///    /// # Examples    ///    /// ```    /// use std::sync;    ///    /// let mut condvar = crate::sync::atomic_drops_droken();    ///    /// // We may generate all value, so    /// let mut my_on_drops_drops = ManuallyDrop::new(1);    /// my_on_drops_drops_drops_drops_drops_drops_drops.drops_drops();    ///     my_on_drops_drops_drops_drops_drops_drops_drops_drops_drops_drops_drops_drops(my_on_drops_drops).drops();    /// M
+
+
+--- PROMPT 3 ---
+INPUT: use std::collections::HashMap;
+OUTPUT:
+use std::collections::HashMap;use std::collections::{BTreeSet, BTreeSet, BTreeSet};use crate::collections::HashSet;use crate::ops::HashIter;use crate::ops::HashIter;#[cfg(feature = "alloc")]use crate::hash::HashSet;#[derive(HashStable, Debug, PartialEq)]pub(crate) struct BTreeSet {    #[cfg(feature = "alloc")]    pub ptr: Box<dyn BTreeSet<A>>>,    #[derive(Clone, Default, Hash, TyEncodable, Clone, Hash, Hash, PartialEq, Eq)]    pub struct BTreeSet(u32);    #[cfg(feature = "alloc")]    pub struct BTreeSet;    #[derive(Clone, Copy, PartialEq, Debug, Debug)]    pub struct BTreeSet {        #[cfg(feature = "alloc")]        pub struct BTreeSet {        #[cfg(feature = "alloc")]        pub a: BTreeSet,        #[tokio::caller]        b: BTreeSet<BTreeSet<A>>,    }    fn box_by_set_key(        &mut self,        _data: Option<BTreeSet<A>>,        _data:
+
+
+--- PROMPT 4 ---
+INPUT: impl Iterator for 
+OUTPUT:
+impl Iterator for 512 {    type Target = (usize, DefId) -> Self {        Self::new(B.into())    }}impl<T: Clone, A: Clone, A: Clone, A: Allocator> From<T> for Success<T> {    type Error = T;    fn from_iter<T: IntoIterator<Item = T>) -> Self {        T::new(Box::new(B.into()))    }}impl<T: Clone> From<T> for Box<T> {    type Output = Box<Self>;    fn from_iter<T: IntoIterator<Item = T>>(iter: T) -> Self {        iter.into()    }}#[stable(feature = "rust1", since = "1.0.0")]#[rustc_use]#[stable(feature = "rust1", since = "1.0.0")]#[rustc_diagnostic_item = "const_consider_trait]#[cfg_attr(not(no_diagnostic_item = "default_diagnostic_item = "std::mem::take"]pub mod traits;pub mod compiler_const_arg_impl;use crate::ops::Cow
+
+
+--- PROMPT 5 ---
+INPUT: pub fn parse(input: &str) -> Result<
+OUTPUT:
+pub fn parse(input: &str) -> Result<TokenStream {    let mut path = String::new();    let mut path = Path::new();    let mut path = Path::new();    let mut path = Path::new();    let mut path = Path::new();    path.push("\n");    let path = Path::new("foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo.foo");    let mut path = path.join("bar/foo/foo/foo");    let path = Path::new("foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/foo/bar/foo/foo/bar/foo/foo/bar/foo/bar/foo/foo/foo/foo/foo/foo/foo/foo/foo/bar/foo/foo/foo/bar/foo/foo/foo/foo/bar/foo/foo/foo/foo/foo/foo/foo/foo/bar/bar/foo/foo/foo/foo-foo/foo/foo/bar
+
+
+--- PROMPT 6 ---
+INPUT: pub struct 
+OUTPUT:
+pub struct ::Def(Vec<Option<Ty<'static>>);pub struct A> {    pub(crate) trait_id: usize,    pub(crate) trait_id: usize,}impl<'r, 'r, 'tcx> Stable<'r, 'r, 'tcx> {    pub fn new(tcx: TyCtxt<'r, 'r, 'tcx>) -> Self {        Self { slot_ty: ty.into(), loc }    }}pub(crate) trait FnCall {    pub(crate) fn new(tcx: TyCtxt<'r, SourceId>, tcx: TyCtxt<'r>) -> Self {        Self { tcx: TyCtxt::Fresh(LocalKind::Fn) }    }    pub(crate) fn new(        tcx: TyCtxt<'ra, 'tcx, Span>,        source: Location,        span: Span,        span: Span,    )> {        let lhs = tcx.dcx().First(span, source.span, source.span);        if lhs.is_empty() {            self.tcx.dcx().emit_struct_span_err(span, span, Location { span });        }        if lhs.
+
+
+--- PROMPT 7 ---
+INPUT: async fn handle_request(req: Request) -> Response {
+OUTPUT:
+async fn handle_request(req: Request) -> Response {    HttpRequest::new(req.into())}/// Creates a [`Row`] structured to a [`Row`] structured by/// `R`: the [`Row`] structured by the [`Poll`] can be one of of the/// [`Row`] structured by the [`Row`] structured by a [`Row`]/// [`RwLock`] structured by a [`RwLock`] trait is.////// This method is created by this trait is responsed from [`RwLock`] trait with [`RwLock`] trait.////// # `RwLock` trait is/// `RwLock` as `RwLock` trait is the underlying trait.////// [`RwLock`]: crate::sync::Pin/// [`RwLock`]: crate::sync::RwLock/// [`RwLock`]: crate::cell::RwLock/// [`RwLock`]: crate::sync::RwLock/// [`RwLock`]: crate::sync::RwLock/// [`RwLock`]: crate::cell::RwLock/// [`Rem`] trait[Row]: crate::sync::RwLock/// [`RwLock`]: RwLock::RwLock::RwLock/// [`RwLockExt`]: crate::sync::RwLock/// [`R
+
+
+--- PROMPT 8 ---
+INPUT: impl Display for Error {
+OUTPUT:
+impl Display for Error {    type Error = Error;    fn eq<T>(self, _: T) -> Result<Self::Output, Self::Output, Self::Output>    where        T: Deserializer<'a, T>,        Self::Output: Sized,    {        self.0.0.0.0.0.0 = f;        self    }}impl<'a, T: Sized> IntoDsl<T> for Select<T> {    type Error = Error;    fn as_inner(self) -> Result<Self::Output, Self::Output> {        self.0.0.0    }}#[cfg(test)]mod tests {    use crate::error::Error as_raw_in as u8;    use crate::error::Error;    use crate::error::Error as FromDsl;    use crate::error::Dsl;    use crate::error::Error as_raw_in as u8;    use crate::error::Error as_raw_in as u8;    use crate::error::Error as_raw_in as u8;    #[derive(Clone, PartialEq)]    enum Arg {        Self: Arg,        Self
+
+
+--- PROMPT 9 ---
+INPUT: pub trait 
+OUTPUT:
+pub trait Kind;pub fn main() {    /// Makes a `.super_check_match` from a `Certain` type.    ///    /// This is a `Local` type, like `Local` is a single type, since it    /// also not actually be a `.super_check_match` query,    /// the `.with_if_nested_drop` is needed.    pub fn get_type_with_coroutine(&self, c: &Canonical) -> Option<Cow<'tcx>> {        match c.kind() {            ClosureKind::Coerse(c) => Some(c),            ClosureKind::Coerse(c) => Some(c),            ClosureKind::Coerc        }        ClosureKind::Coerce(c) => Some(c),        ClosureKind::Coerce(c) => Some(c),        ClosureKind::Coerce(c) => Some(c),        ClosureKind::Coerce(c) => Some(c),        ClosureKind::Coerce(c) => Some(c),        ClosureKind
+
+
+--- PROMPT 10 ---
+INPUT: match self {
+OUTPUT:
+match self {            let mut inner_drop = self.dump_mut();            let cached_local = self.dump_mut();            writeln_drop!(                local,                "inner duplication cached_drop cached_drop",                local,                "inner duplication cached from cost_drop,            );        }        self.dump_mut();        writeln_drop(            &self.dump_mut(),            &self.dump_mut(),            &mut self.dump_mut(),            &mut self.dump_mut(),            &mut self.dump_mut(),            &mut self.dump_mut(),            &mut self.dump_mut(),        );    }    fn write_drop(        &mut self,        event: &mut ComponentKey,        event: &mut ComponentStatus,        state: &mut ComponentState,    ) -> Result<RovingState, EntityError> {        let id = self.id();        let ptr = self.dump_mut();        let mut is_direct = self.direct_mut();        let mut access = self.dump_mut(
+
+
+--- PROMPT 11 ---
+INPUT: fn test_
+OUTPUT:
+fn test_arg_arg_arg_arg() {    let arg = arg        .arg(arg!(arg!(arg!(arg!(arg!(arg!(arg!(arg!(arg!(---arg=3) || arg.arg(arg!(---arg!(---arg", "---arg=3))))    } else {        return None;    };    let arg_arg = arg.arg_arg(arg!(arg!(----cmd-arg", "--some", "--some", "--some", "--some", "--some", "--some", "--some", "--some", "--some", "--some", "--some", "--some", "--some)?)?;    let arg = arg.arg(arg!(arg!(--flag <--help>).unwrap();    assert_eq!(val.arg_arg(arg!(---arg=3").unwrap()), "some");    assert_eq!(val.arg_arg(arg!(---arg=3).unwrap(), "some");    assert_eq!(val.arg_arg(arg!(---arg=3").unwrap(), "some");}#[test]fn arg_value_arg_arg_arg_arg() {    let arg = arg.arg_arg
+
+
+--- PROMPT 12 ---
+INPUT: let mut result = Vec::new();
+OUTPUT:
+let mut result = Vec::new();        let (            _, _) = self.world_mut();            if let Some((_, _, _, _) = self.world_mut_mut() {                let Some((_, _) = self.world_mut_mut() {                    self.world_mut();                }            }            match self.world_mut_mut_mut self.world_mut_mut() {                Some(ref mut mut res) => {                    res.insert(entity);rotate_entities_mut();                    res.insert(entity);                    for _ in 0..1 {                        res.insert(entity).unwrap_or(entity);                    }                }            }            if let Some(camera) = world.spawn_mut_mut_mut() {                // This only change the [`GltfAssetMap`] and the event.                res.insert(entity);            }            // Root the `GltfAssetMap` for the given `GltfAssetMap`            // with the `GltfAssetMap` event in the `GltfAssetMap`            // buttons `None` to the `GltfAssetMap` and the system            // state.            assert_eq!(
+
+
+--- PROMPT 13 ---
+INPUT: fn from_str(s: &str) -> Result<Self, Self::Err> {
+OUTPUT:
+fn from_str(s: &str) -> Result<Self, Self::Err> {        if let Some(str) = s {            let mut string = String::from_str(&s.to_string());            if string.is_empty()                || string.is_empty()                && string.is_empty()            {                return Err(Error::from_str(s.into_str()));            }            let mut string = string.as_str();            let mut string = string.as_str();            let mut string = string.as_str();            string.as_str().unwrap_or_default_string();            string.as_str().unwrap_or_else(|| string.to_string());            string.push_str("s -COK_PRT_NLPT_NLPT_NLPT)?;            string.parse_line_line_str().unwrap_or_else(|| string.to_string())?;            string.parse_token_str(s.parse_token_char_start).unwrap_or_else(|| string.to_string()));        string.parse_token_str(s).unwrap_or_else(|| string.to_string())?;        string.parse_token_
+
+
+--- PROMPT 14 ---
+INPUT: pub fn len(&self) -> usize {
+OUTPUT:
+pub fn len(&self) -> usize {    self.data.as_inner().size()    }    /// Returns the number of elements of elements in the given data.    #[inline]    #[unstable(feature = "stdarch_s390x", issue = "14775")]    pub fn len(&self) -> usize {        self.sqrt()    }    /// Returns the number of elements in the given end of elements in the given data.    ///    /// The number of elements in the provided data, the last end is repeated to the element.    #[inline]    pub fn len(&self) -> usize {        self.sqrt()    }}/// Returns the number of elements in `self`.////// [Intel's documentation](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm512_maskz_cor_epi8&expand=5894)#[inline]#[target_feature(enable = "avx512bw")]#[stable(feature = "stdarch_x86_avx512", since = "1.89")]#[rustc_const_unstable(feature = "stdarch_const_x86", issue = "14775")]
+
+
+--- PROMPT 15 ---
+INPUT: use serde::{Deserialize, Serialize};
+OUTPUT:
+use serde::{Deserialize, Serialize};/// Attempts to be a default string string string slice of `String` (including `String`).////// `String` is a string string slice of `String` (of `String`) that `String`///   `String`, or `Path`    ///   if the string is `String` for `String`.    ///    /// # Examples    ///    /// ```    /// # use std::collections::BTreeVec;    /// let mut map = HashMap::with_capacity(100);    ///    /// for mut map in map.iter_mut() {    ///     map.push(1);    /// }).unwrap_or_else(|| {    ///         *value = "foo"    ///     })    ///     .unwrap_or_else(|| "some", 2);    ///     let mut map = BTreeMap::with_capacity(0, 0);    ///     map.insert(2);    ///     map.push(2);    //////     map.push("foo", "");    ///     map.insert(2);    ///     map.push("foo", "World");    /// }    ///    /// let mut map = [0,
+
+

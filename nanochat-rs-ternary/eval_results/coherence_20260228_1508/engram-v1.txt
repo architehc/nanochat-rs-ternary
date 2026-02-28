@@ -1,0 +1,95 @@
+# Model: engram-v1
+# Checkpoint: checkpoints/nano-275m-engram-v1/final
+# Device: cuda
+# Date: Sat Feb 28 09:44:07 EST 2026
+
+--- PROMPT 1 ---
+INPUT: fn main() {
+OUTPUT:
+fn main() {    let foo = &format!(        "foo.rs",        r#"                    "#,                        r#"                    ;                }            "#,        )        .build();    assert_eq!(        r#"[UPDATING] `foo.rs` index[UPDATING] `foo.rs` index[ERROR] failed to parse `foo`Caused by:  + [ROOT]/bar/src/foo/foo/foo/bar/foo/foo/foo/bar/bar/foo/bar/bar/bar/bar/bar.rs"#]])        .run();}#[cargo_test]fn test_rust_bin_reason() {    let p = project()        .file("src/bin.rs", r#"fn main() {}")        .build();    p.cargo("check -Zfile")        .env("foo.rs", r#"[ERROR] failed to parse `foo.rs`[ERROR] failed to parse `foo v0.0.0 ([ROOT]/foo)[UPDATING] `foo` index[ERROR] failed to parse `foo`Caused by:  + debuginfo to parse `foo.rs`[HELP] is not a valid
+
+
+--- PROMPT 2 ---
+INPUT: pub struct Config {
+OUTPUT:
+pub struct Config {    pub id: String,}impl Config {    pub id: Vec<Span>,}impl Config for Config {}impl Config {    pub fn new(s: &Path) -> Config {        unsafe {        Self(s)    }}impl Config {    /// Config this is a `Serializer<Path>`.    ///    /// This is a `Serializer<S>`, [`Serializer`].    ///    /// This is a `Serializer` method.    pub fn sample(&self) -> Config {        self.0    }    /// Returns the `Serializer`, this encoding that this can be a `Serializer`    pub fn new(s: &mut Sender) -> Condition {        // SAFETY: The `Serializer` is affect.        unsafe {            // SAFETY: The `Serializer`.            let surround = s.as_ref().to_str();            let snapshot = snapshot.get_mut(s.as_ref())?;            let snapshot = snapshot.get_mut(s.as_ref())?;            let snapshot = snapshot.get_mut
+
+
+--- PROMPT 3 ---
+INPUT: use std::collections::HashMap;\n\nfn 
+OUTPUT:
+use std::collections::HashMap;\n\nfn helper_manual_manual_in(b: &mut Bencher) {    unsafe {        let mut out = 0;        for _ in 0..100 {            let mut infruage = 0;            }            out = 0;        }        let new_size = unsafe {            out = 0;            out.extend_unchecked(b);        }        if !self.is_range_in(b) {            out.push((b);            let mut out = 0;            out_size += 1;            for _ in 0..100 {                out.push((b);                self.requires_size_in(b)));            }            out        }    }    fn extend_release_read_in(a: &mut Bencher) {        let mut out = 0;        out.push((b);        out = 0;        while !other.is_range_in(a).is_err() {            // no bytes:            //            out.last() = 0;            out.push(b);        }    }    // Also the release_read_in(b);    if !self.
+
+
+--- PROMPT 4 ---
+INPUT: impl Iterator for 
+OUTPUT:
+impl Iterator for KeyVisitor {        fn drop_ty(&self) -> &mut Self::Output {            self.inner().map_some().map_or(self)            .collect_or(self.inner_ty(self.inner_ty(self)));            self.inner_ty(self.inner_ty(self.inner_ty(self.inner_ty(self.inner_ty(self.inner_ty_ty(self.inner_ty(self.inner_ty(self.inner_ty(self.inner_ty(self.inner_ty(self.inner_ty_ty(self.inner_ty(self.inner_ty(self.inner_ty(self.data, self.inner_ty(self.inner_ty(self.inner_ty(self.inner_ty(self.inner_ty(self.inner))            .collect_or(self.inner_ty(self.inner_ty(self.inner_ty(self.inner_ty(self.inner_ty, self.inner_ty(self.inner_ty(self.inner_ty(self.inner.typing_env::id)),            }        }   
+
+
+--- PROMPT 5 ---
+INPUT: pub fn parse(input: &str) -> Result<
+OUTPUT:
+pub fn parse(input: &str) -> Result<Self::Value, Option<String>> {                    Ok(input)                }                Ok(())            }            Err(input) => {                let mut variant = None;                Ok(input)            }            Err(input) => {                let mut variant = None;                match self.parsener.borrow(input) {                    Ok(input) => {                        self.parsener.borrow(input)                    } else {                        self.parsener.borrow(input.parsener).ok_or(input.parse()?.clone());                    }                    Ok(input) => {                        self.parse_span_label(input.parse()?.span, "`!")?; in the source and `self.parse_span_label`",                        self.parse_span_label(input.parse().map(|method| self.parse_span_label(input.parse().map(|item| {                            self.parse_span_label(def.span.to_string());                        })                }            }        }    }    /// Returns the `None` if a [`Result`] was found.    pub fn parse_span_label(&self, input: &str) -> Result<T, Error, Error
+
+
+--- PROMPT 6 ---
+INPUT: #[derive(Debug, Clone)]\npub struct 
+OUTPUT:
+#[derive(Debug, Clone)]\npub struct (),    }}#[derive(Debug)]#[diag(    "consider function")]#[serde(deserial_type_structures_structures_structures_structures_structures_structures_structures_structures_structures_structures_structures_structures_structures_structures_structures_table;#[derive(Debug, Debug)]struct Acq(T);#[derive(Debug, Debug)]#[serde(deserializer)]pub struct Acq(T);impl<T> Excq<T> for Acq {    fn clone(&self) -> D {        &mut self    }    fn from_type(self) -> D::D {        &self    }}#[derive(Debug, PartialEq, Eq, Debug)]enum Acq(T);impl<T> FromDynDiag {    fn from_type_structures_table(self, _: &dyn Reflect) -> Self {        &mut self.inner.deserializer()    }}#[derive(Debug, PartialEq,Encodable, Decodable, Debug)]enum MacroDetAbort {    Binary(T);impl<T
+
+
+--- PROMPT 7 ---
+INPUT: async fn handle_request(req: Request) -> Response {
+OUTPUT:
+async fn handle_request(req: Request) -> Response {        let (req, _) = mock_request(req);        let (req, _) = mock_request(req, service);        match (req, Err(err) {            Ok(err) => {                let (req, _) = mock_request(req, client).unwrap();                Ok(err.into_bytes())            } else {                None            })        }        Ok(ref err) => {            let Some(req) = service();            let (req, config) = wait_channel(req_url) else {                return Err(Ok(req));            };            Ok(req)        }    };    Ok(req)}//! This runtime is useful to use overlapses that the user is enabled, and [`Poll::Poll::Poll::Poll::Poll::Poll::Poll::Poll::Poll::Poll::Pending//! [`Poll::Pending`]: crate::task::Poll::Pending//! [`Poll::Pending`]: crate::runtime::Runtime::Pending//! [`Poll::Pending`]: crate::task::Pending//! [`Pending`]: crate::runtime::P
+
+
+--- PROMPT 8 ---
+INPUT: impl Display for Error {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+OUTPUT:
+impl Display for Error {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {        f.debug_struct("\n", r"--features")?;        f.debug_struct("bar", &self.s);        f.debug_struct("foo", &self.s);    }    fn excluded(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {        f.debug_struct("bar", &self.s);        f.debug_struct("bar", &self.s);    }    fn excluded(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {        f.debug_struct("foo", &self.s);    }    fn excluded(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {        f.debug_struct("bar", &self.s);        f.debug_struct("bar", &self.s).finish()    }    fn write_name(&self, f: &mut fmt::Formatter<'_>) -> io::Result<()> {        write_name("foo", &self.s).finish()    }    fn write_name("bar", &self.s: &str) -> Result<bool, String> {        write_name("bar", &self.s
+
+
+--- PROMPT 9 ---
+INPUT: pub trait 
+OUTPUT:
+pub trait Kind<'tcx> {    pub(crate) fn const_type_ty(self, tcx: TyCtxt<'tcx>) {        let in_ty = self.tcx.hir_id(trait_ty);        let mut type_param_id = self.tcx.hir_def_id(trait_param_def_id);        let ty_param_def_id = tcx.def_id(trait_param_def_id);        ty_param_def_id(trait_param_def_id)        .unwrap();        assert!(            self.tcx.hir_node(trait_param_def_id.def_id),            "trait_param_def_id should be moved for type {}",        );        let impl_predicate = if tcx.is_trait_trait(trait_param_def_id) {            return;        };        let (impl_ty, trait_param_def_id) = impl_param_def_id(impl_ty);        let trait_param_def_id = tcx.def_span(trait_param_def_id);        let mut trait_param_def_id = tcx.def_id
+
+
+--- PROMPT 10 ---
+INPUT: match self {
+OUTPUT:
+match self {            Err(_) => {                let mut res = false;                self.map_res = true;                let mut res = self.visit_res(expr);                if let Res::Def(DefKind::Def(lt_expr, ..) = self.find_expr(expr) {                    err.emit();                }            }            let n = self.ast_expr_span(expr.hir_id.shrink_to_hi());            if res.is_empty() {                err.emit();                let res = e.as_ref();                if res.is_empty() {                    err.emit_err(                        "expected field of the `Span` when `Span` is `Span`"                );                err.emit();                err.emit();                err.help_span(expr);            }            err.help("expr.ident, res);        }        let mut res = if res.is_empty() {            try_pat_span(expr.span, item.span);            res.span("arg", "use`");            err.emit();            err.help_span(expr);        }        let mut res = self.hir_span(expr
+
+
+--- PROMPT 11 ---
+INPUT: #[test]\nfn test_
+OUTPUT:
+#[test]\nfn test_size_hint_w() {    // Note: `MultiplyIterator` should have the same as the same as well.    // (weak over all `MultiplyIterator::size_hint_w)`, but we don't really the    // `MultiplyIterator::size_hint_w` and `Multiplyable::size_hint_w)`    // should be over all elements to the last range.    // (weak over all `MemFlags` must have no other `MemFlags` to be a    // value without the same as there are no byte.    // If the start slices is the same as it exists.    // If the end is the same, the `MemFlags` can reuse the same.    //    // `MemFlags::size_hint_w` is the same as well.    // Note that the `MemFlags` is not allowed, but no value is always greater than `MemFlags` to create a `MemFlags`    // is the end of a `MemFlags` and `MemFlags` for `MemFlags` to a `MemFlags`    //
+
+
+--- PROMPT 12 ---
+INPUT: let mut result = Vec::new();\n    for 
+OUTPUT:
+let mut result = Vec::new();\n    for low in &mut world {        if let Some(b) = c.query_mut() {            if let Some(d) = e.query_mut(c) {                if let Some(c) = e.query_mut(c) {                    c.query_mut()                } else {                    return;                }                None            })        }    }    /// Removes the current entity, and returns the same entity.    pub fn as_mut_mut_read_mut(&mut self, c: &mut World) {        match c {            Offset::Medc(c) if c.query_mut() => c.query_mut()                .map_or_default()                .map_or_default()                .map_or_default()                .map_or_default()                .map_or_default()                .map_or_default()                .map_or_default()                .map_or_default()                .map_or_default()                .map_or_default()                .map_or_default(|| panic!("s\n\n");        let Some(f) = f.query_mut(f
+
+
+--- PROMPT 13 ---
+INPUT: fn from_str(s: &str) -> Result<Self, Self::Err> {
+OUTPUT:
+fn from_str(s: &str) -> Result<Self, Self::Err> {        if s.try_get_matches() {            return Ok(value);        }        let s = s.try_get_matches_from(s.into_str())?;        let mut res = c.try_get_matches();        res.set_strategy(s);    }    let mut res = String::new();    let mut res = PathBuf::new();    res.set_string_matches(s.len());    res.set_matches(s);    res.set_string_matches(s);    res.set_string_matches(s);}/// A [`Tokens`] and `--help` for the type.////// This is valid to a [`Tokens`] and `--help` for the `--help`/// and `--help` for the type.////// The `Tokens` is the same type.////// `Tokens` is a `TokenStream` can be used for `--help` to/// be used to be used./// The `--help` is returned, it is a `TokenStream` expression/// as `Tokens::TokenStream` or `--help` will use a `TokenStream`/// with `
+
+
+--- PROMPT 14 ---
+INPUT: /// Returns the number of elements in the collection.\npub fn len(&self) -> usize {
+OUTPUT:
+/// Returns the number of elements in the collection.\npub fn len(&self) -> usize {                        self.as_inner().is_some()                    } else {                        self.as_inner().get_or_inner().start_bytes_mut(self)                }            }            self.as_inner().last_inner().unwrap_or_default()        }        self.as_inner().len()    }    /// Returns the number of elements in the collection.    ///    /// If `len` is a `len` is not a `len` is not    /// to `len` is unused.    ///    /// This is equivalent to `len` to `len` are dropped to `len` and `len` is an empty    /// `len` is dropped.    ///    /// Used to the number of elements in the slice, and the end    /// pointer is the same slices of the slice.    ///    /// If `len` is used, this is dropped.    ///    /// # Examples    ///    /// ```    /// # use std::sync::atomic::Temp;    /// let mut vec = vec![];    /// let mut ptr = 0;    /// vec.to_inner().unwrap_or_default().unwrap();    /// assert_
+
+
+--- PROMPT 15 ---
+INPUT: use serde::{Deserialize, Serialize};\n\n#[derive(Debug, Serialize, Deserialize)]\npub struct 
+OUTPUT:
+use serde::{Deserialize, Serialize};\n\n#[derive(Debug, Serialize, Deserialize)]\npub struct ::SortedList(&[String {    // Sorted the pattern that `similarity::Dyn(similarity::Dyn))`.    // This is a marker, where we have a font affects as the same    // version of the line as the nor for `timilarity::Dyn`    // version of the parent of a font in `timilarity::Dyn`.    ///    /// This is a `Option<String>`.    ///    /// If the default `similarity` is to update the line as a font    /// with this dynamic version is allowed to load the parent.    ///    /// The `similarity::Dyn` is a `Option<String>`.    ///    /// If the user is in a `similarity::Dyn`.    ///    /// This is a `similarity` for each `similarity::Dyn`.    ///    /// # Examples    ///    /// ```    /// let v = Command::new("foo/target/target/foo/bar/bar/bar/bar/foo/
+
+

@@ -1698,6 +1698,18 @@ impl TrainConfig {
         }
     }
 
+    /// nano-275m Engram + MTP combo.
+    /// Same as engram_only but with MTP enabled (3 future tokens).
+    /// Total steps: 10000 for direct comparison with engram-v1 and baseline-v1.
+    pub fn nano_275m_engram_mtp() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.use_mtp = true;
+        cfg.mtp_n_tokens = 3;
+        cfg.mtp_weight = 0.2;
+        cfg.total_steps = 10_000;
+        cfg
+    }
+
     /// nano-275m Haar v3 — fresh run with matched hyperparams for fair comparison.
     /// 20 layers, 50% wavefield Haar, no MTP, total_steps=20000.
     pub fn nano_275m_haar_v3() -> Self {
