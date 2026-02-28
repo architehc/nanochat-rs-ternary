@@ -1166,6 +1166,7 @@ impl Trainer {
         let mut consecutive_nan_count = 0usize;
         let mut cooldown_steps_remaining = 0usize;
         let mut last_checkpoint_path: Option<String> = None;
+        let mut last_step_loss = 0.0f64;
 
         for epoch in 0..epochs {
             let epoch_start = Instant::now();
@@ -1241,6 +1242,7 @@ impl Trainer {
                     }
                 }
 
+                last_step_loss = stats.loss;
                 running_loss += stats.loss;
                 running_entropy += stats.entropy;
                 running_gnorm += stats.grad_norm;
@@ -1380,7 +1382,7 @@ impl Trainer {
                 &self.varmap,
                 &self.config,
                 self.global_step,
-                0.0,
+                last_step_loss,
                 &path,
             )
             .map_err(|e| candle_core::Error::Msg(format!("checkpoint save: {}", e)))?;
