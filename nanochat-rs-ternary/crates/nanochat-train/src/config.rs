@@ -340,6 +340,13 @@ impl TrainConfig {
             ));
         }
 
+        if self.n_kv_heads > 0 && !self.n_heads.is_multiple_of(self.n_kv_heads) {
+            errors.push(format!(
+                "n_heads ({}) must be divisible by n_kv_heads ({}) for GQA",
+                self.n_heads, self.n_kv_heads
+            ));
+        }
+
         if !self.dim.is_multiple_of(self.group_size) {
             errors.push(format!(
                 "dim ({}) must be divisible by group_size ({})",
@@ -1526,6 +1533,242 @@ impl TrainConfig {
             engram_n_heads: 4,
             engram_table_size: 50021,
             engram_layers: vec![0, 4], // first and last unique layers
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
+        }
+    }
+
+    /// nano-275m pure LoopLM (no wavefield, no engram).
+    /// 5 unique layers (2 local_before + 1 shared + 2 local_after), 16 loop iterations = 20 effective depth.
+    /// ~79M GPU params. Tests whether weight-sharing alone matches 20 unique layers.
+    pub fn nano_275m_loop_only() -> Self {
+        Self {
+            dim: 1024,
+            n_layers: 5,
+            n_heads: 16,
+            n_kv_heads: 4,
+            ffn_mult: 3.0,
+            vocab_size: 4096,
+            max_seq_len: 1024,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: Some(LoopConfig {
+                local_before: 2,
+                local_after: 2,
+                loop_count: 16,
+                adaptive_loop: None,
+            }),
+
+            lr: 0.012,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 1,
+            warmup_steps: 1500,
+            total_steps: 20_000,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: true,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
+
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+
+            use_wave_field: false,
+            wavefield_field_size: 256,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 0.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
+        }
+    }
+
+    /// nano-275m pure Engram (no wavefield, no loop).
+    /// 20 standard GQA layers with N-gram memory on layers 0, 5, 10, 15, 19.
+    /// ~277M GPU params + ~250M engram tables = ~527M total.
+    pub fn nano_275m_engram_only() -> Self {
+        Self {
+            dim: 1024,
+            n_layers: 20,
+            n_heads: 16,
+            n_kv_heads: 4,
+            ffn_mult: 3.0,
+            vocab_size: 4096,
+            max_seq_len: 1024,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: None,
+
+            lr: 0.012,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 1,
+            warmup_steps: 1500,
+            total_steps: 20_000,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: true,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
+
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+
+            use_wave_field: false,
+            wavefield_field_size: 256,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 0.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
+
+            // Engram on 2 layers (first and last), smaller tables to fit 24GB VRAM
+            use_engram: true,
+            engram_d_mem: 128,
+            engram_n_gram_orders: vec![2, 3],
+            engram_n_heads: 4,
+            engram_table_size: 10007,
+            engram_layers: vec![0, 19],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
+        }
+    }
+
+    /// nano-275m Haar v3 — fresh run with matched hyperparams for fair comparison.
+    /// 20 layers, 50% wavefield Haar, no MTP, total_steps=20000.
+    pub fn nano_275m_haar_v3() -> Self {
+        Self {
+            dim: 1024,
+            n_layers: 20,
+            n_heads: 16,
+            n_kv_heads: 4,
+            ffn_mult: 3.0,
+            vocab_size: 4096,
+            max_seq_len: 1024,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: None,
+
+            lr: 0.012,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 1,
+            warmup_steps: 1500,
+            total_steps: 20_000,
+            decay_start_frac: 0.8,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: true,
+            async_n_workers: 4,
+            async_prefetch_size: 8,
+
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.0,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+
+            use_wave_field: true,
+            wavefield_field_size: 256,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 0.5,
+            wavefield_convolve_mode: Some("haar".to_string()),
+            wavefield_haar_levels: Some(6),
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 1000,
+            wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
         }

@@ -16,9 +16,10 @@ use crate::layers::{BitLinearSTE, RMSNormTrain};
 
 /// Fixed primes for multiplicative hashing, one per (order, head).
 /// Using distinct primes per position in the N-gram avoids systematic collisions.
+/// All values are verified prime to ensure coprimality with any table_size.
 const HASH_PRIMES: [u64; 12] = [
-    2654435761, 2246822519, 3266489917, 668265263, 374761393, 2869860233, 2654435769, 1103515245,
-    12345, 1664525, 1013904223, 6364136223,
+    2654435761, 2246822519, 3266489917, 668265263, 374761393, 2869860233, 2654435771, 1103515243,
+    12347, 1664543, 1013904227, 6364136237,
 ];
 
 /// Engram module for training — N-gram memory with context gating.

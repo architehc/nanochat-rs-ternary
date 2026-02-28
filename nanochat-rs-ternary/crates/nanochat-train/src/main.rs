@@ -48,8 +48,17 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
             Some(TrainConfig::nano_275m_baseline())
         }
         "nano-275m-wave-engram-loop" | "nano_275m_wave_engram_loop"
-        | "nano-275m-engram" | "nano_275m_engram" => {
+        | "nano-275m-engram-loop" | "nano_275m_engram_loop" => {
             Some(TrainConfig::nano_275m_wave_engram_loop())
+        }
+        "nano-275m-loop-only" | "nano_275m_loop_only" | "nano-275m-loop" | "nano_275m_loop" => {
+            Some(TrainConfig::nano_275m_loop_only())
+        }
+        "nano-275m-engram-only" | "nano_275m_engram_only" | "nano-275m-engram" | "nano_275m_engram" => {
+            Some(TrainConfig::nano_275m_engram_only())
+        }
+        "nano-275m-haar-v3" | "nano_275m_haar_v3" => {
+            Some(TrainConfig::nano_275m_haar_v3())
         }
         _ => None,
     }
@@ -236,6 +245,13 @@ enum Commands {
         /// Device (cpu or cuda)
         #[arg(long, default_value = "cpu")]
         device: String,
+
+        /// Bypass wavefield attention layers (use for wavefield models).
+        /// Wavefield layers are bidirectional and produce garbage during
+        /// autoregressive generation. This flag disables them, keeping
+        /// only the causal standard-attention layers active.
+        #[arg(long, default_value = "false")]
+        bypass_wavefield: bool,
     },
 }
 
@@ -291,7 +307,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(cfg) => cfg,
                 None => {
                     tracing::error!(
-                        "Unknown config: {}. Use d20, d20-loop, d20-mtp, d20-e3-full, d20-e3-fp4, d20-wave, nano-125m, nano-125m-wave, nano-125m-hybrid, nano-275m-wave-haar, nano-275m-baseline, nano-275m-wave-engram-loop, nano-500m-wave-haar, nano-1b, medium-3b, large-7b, large-7b-6day, tiny-cpu, or test-8bit.",
+                        "Unknown config: {}. Use d20, d20-loop, d20-mtp, d20-e3-full, d20-e3-fp4, d20-wave, nano-125m, nano-125m-wave, nano-125m-hybrid, nano-275m-wave-haar, nano-275m-baseline, nano-275m-wave-engram-loop, nano-275m-loop-only, nano-275m-engram-only, nano-275m-haar-v3, nano-500m-wave-haar, nano-1b, medium-3b, large-7b, large-7b-6day, tiny-cpu, or test-8bit.",
                         config
                     );
                     std::process::exit(1);
@@ -306,7 +322,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Resume from checkpoint if specified
             let mut trainer = if let Some(ref ckpt_dir) = resume {
                 tracing::info!("Resuming from checkpoint: {}", ckpt_dir);
-                let trainer = nanochat_train::train::Trainer::from_checkpoint(ckpt_dir, device)?;
+                let mut trainer = nanochat_train::train::Trainer::from_checkpoint(ckpt_dir, device)?;
                 let meta_json = std::fs::read_to_string(format!("{}/meta.json", ckpt_dir))?;
                 let meta: nanochat_train::checkpoint::CheckpointMeta =
                     serde_json::from_str(&meta_json)?;
@@ -319,6 +335,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("{}", message);
                     std::process::exit(1);
                 }
+                // Sync override back to trainer so the actual training loop uses it
+                trainer.config.batch_size = cfg.batch_size;
                 tracing::info!("Using checkpoint config (vocab_size={}, dim={})", cfg.vocab_size, cfg.dim);
                 trainer
             } else {
@@ -451,6 +469,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             temperature,
             top_k,
             device,
+            bypass_wavefield,
         } => {
             let prompt = if let Some(pf) = prompt_file {
                 std::fs::read_to_string(&pf)?
@@ -506,6 +525,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             tracing::info!("Model loaded: {} params", model.param_count());
 
+            // Auto-detect wavefield and enable bypass if needed
+            let use_causal = bypass_wavefield || meta.config.use_wave_field;
+            if use_causal && meta.config.use_wave_field {
+                let n_wf = model.blocks.iter().filter(|b| b.is_wavefield()).count();
+                let n_std = model.blocks.len() - n_wf;
+                tracing::info!(
+                    "Wavefield model detected ({} wavefield + {} standard layers). \
+                     Bypassing wavefield attention for causal generation.",
+                    n_wf, n_std
+                );
+            }
+
             // Encode prompt
             let mut token_ids: Vec<u32> = tok.encode(&prompt)
                 .map_err(|e| -> Box<dyn std::error::Error> { e })?;
@@ -514,7 +545,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Context padding: wavefield layers are bidirectional and need a
             // well-populated field (~512 tokens) to produce good outputs. With short
             // prompts, the wavefield field is too sparse. Pad with training data prefix.
-            let train_seq_len = meta.config.max_seq_len.min(256);
+            let train_seq_len = meta.config.max_seq_len;
             let _prefix_len = if false && token_ids.len() < train_seq_len && meta.config.use_wave_field {
                 let pad_needed = train_seq_len - token_ids.len();
                 let data_path = "data/rust_v2_prepared/tokens.bin";
@@ -558,7 +589,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &device,
                 )?.unsqueeze(0)?; // [1, min(seq, max_ctx)]
 
-                let hidden = model.forward_hidden_only(&input)?;
+                let hidden = if use_causal {
+                    model.forward_hidden_only_causal(&input)?
+                } else {
+                    model.forward_hidden_only(&input)?
+                };
                 let logits = model.project_hidden_to_logits(&hidden)?;
 
                 // Get logits for last position: [1, seq, vocab] -> [vocab]
@@ -569,11 +604,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Sample next token
                 let next_token = if temperature <= 0.0 || temperature < 1e-8 {
-                    // Greedy
+                    // Greedy (NaN-safe: total_cmp treats NaN as less than all values)
                     logits_vec
                         .iter()
                         .enumerate()
-                        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                        .max_by(|a, b| a.1.total_cmp(b.1))
                         .map(|(i, _)| i as u32)
                         .unwrap_or(0)
                 } else {
@@ -586,7 +621,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if top_k > 0 && top_k < logits_vec.len() {
                         let mut indexed: Vec<(usize, f32)> =
                             logits_vec.iter().copied().enumerate().collect();
-                        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                        indexed.sort_by(|a, b| b.1.total_cmp(&a.1));
                         let threshold = indexed[top_k].1;
                         for v in logits_vec.iter_mut() {
                             if *v < threshold {
@@ -606,7 +641,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut rng = rand::thread_rng();
                     let r: f32 = rng.gen();
                     let mut cumsum = 0.0f32;
-                    let mut chosen = 0u32;
+                    let mut chosen = (probs.len() - 1) as u32; // fallback to last token
                     for (i, &p) in probs.iter().enumerate() {
                         cumsum += p;
                         if r < cumsum {
@@ -694,8 +729,18 @@ mod tests {
             "nano_275m_baseline",
             "nano-275m-wave-engram-loop",
             "nano_275m_wave_engram_loop",
+            "nano-275m-engram-loop",
+            "nano_275m_engram_loop",
+            "nano-275m-loop-only",
+            "nano_275m_loop_only",
+            "nano-275m-loop",
+            "nano_275m_loop",
+            "nano-275m-engram-only",
+            "nano_275m_engram_only",
             "nano-275m-engram",
             "nano_275m_engram",
+            "nano-275m-haar-v3",
+            "nano_275m_haar_v3",
         ];
         for alias in aliases {
             assert!(

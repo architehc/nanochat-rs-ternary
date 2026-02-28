@@ -55,20 +55,25 @@ pub fn cosine_annealing_with_restarts(
 
     let mut cycle_start = 0usize;
     let mut current_cycle_steps = cycle_steps;
-    
-    // Find which cycle we're in
-    while step >= cycle_start + current_cycle_steps {
+
+    // Find which cycle we're in.
+    // Cap iterations to prevent O(step) loop when cycle_mult < 1.0
+    // (cycles shrink to 1 and the loop becomes linear in step count).
+    let max_iters = 1000;
+    let mut iters = 0;
+    while step >= cycle_start + current_cycle_steps && iters < max_iters {
         cycle_start += current_cycle_steps;
         current_cycle_steps = (current_cycle_steps as f64 * cycle_mult) as usize;
         if current_cycle_steps == 0 {
             current_cycle_steps = 1;
         }
+        iters += 1;
     }
-    
-    let step_in_cycle = step - cycle_start;
+
+    let step_in_cycle = step.saturating_sub(cycle_start);
     let progress = step_in_cycle as f64 / current_cycle_steps as f64;
-    
-    min_lr + (base_lr - min_lr) * 0.5 * (1.0 + (std::f64::consts::PI * progress).cos())
+
+    min_lr + (base_lr - min_lr) * 0.5 * (1.0 + (std::f64::consts::PI * progress.min(1.0)).cos())
 }
 
 /// Exponential decay schedule

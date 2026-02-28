@@ -318,8 +318,8 @@ fn test_async_loader_metrics() -> Result<()> {
     let metrics = loader.metrics();
     assert_eq!(metrics.batches_consumed, 1);
     
-    // Verify ExactSizeIterator
-    assert_eq!(loader.len(), 7); // ceil(50/8) = 7
+    // Verify ExactSizeIterator returns remaining count (total - consumed)
+    assert_eq!(loader.len(), 6); // ceil(50/8) - 1 consumed = 6
     
     Ok(())
 }

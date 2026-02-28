@@ -130,6 +130,9 @@ impl AsyncDataLoader {
         }
         let indices = Arc::new(indices);
 
+        let total_batches = dataset.len().div_ceil(batch_size);
+        let metrics = Arc::new(AsyncLoaderMetricsInner::default());
+
         // Spawn worker threads
         let mut workers = Vec::new();
         for worker_id in 0..n_workers {
@@ -137,10 +140,11 @@ impl AsyncDataLoader {
             let indices = Arc::clone(&indices);
             let batch_tx = batch_tx.clone();
             let shutdown = Arc::clone(&shutdown);
+            let metrics = Arc::clone(&metrics);
 
             let handle = thread::spawn(move || {
                 Self::worker_loop(
-                    worker_id, n_workers, dataset, indices, batch_size, batch_tx, shutdown,
+                    worker_id, n_workers, dataset, indices, batch_size, batch_tx, shutdown, metrics,
                 );
             });
 
@@ -149,9 +153,6 @@ impl AsyncDataLoader {
 
         // Drop the sender from main thread so channel closes when workers finish
         drop(batch_tx);
-
-        let total_batches = dataset.len().div_ceil(batch_size);
-        let metrics = Arc::new(AsyncLoaderMetricsInner::default());
 
         Self {
             batch_rx,
@@ -173,6 +174,7 @@ impl AsyncDataLoader {
         batch_size: usize,
         batch_tx: Sender<PreprocessedBatch>,
         shutdown: Arc<AtomicBool>,
+        metrics: Arc<AsyncLoaderMetricsInner>,
     ) {
         let total_samples = indices.len();
         let n_batches = total_samples.div_ceil(batch_size);
@@ -232,6 +234,7 @@ impl AsyncDataLoader {
                 // Channel closed, shutdown
                 break;
             }
+            metrics.batches_prefetched.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -291,6 +294,7 @@ impl Iterator for AsyncDataLoader {
 impl ExactSizeIterator for AsyncDataLoader {
     fn len(&self) -> usize {
         self.total_batches
+            .saturating_sub(self.metrics.batches_consumed.load(Ordering::Relaxed))
     }
 }
 

@@ -392,8 +392,9 @@ impl SharedLoopBlock {
             .map(|(&a, &f)| (a + f) * 0.5)
             .collect();
 
-        // 7. Exit gate: compute halting probability from the collapsed hidden state
-        let exit_prob = self.exit_gate.forward(&x);
+        // 7. Exit gate: compute halting probability from post-FFN collapsed state
+        let x_post_ffn = self.mhc_ffn.prepare_input(&x_expanded_out, self.dim);
+        let exit_prob = self.exit_gate.forward(&x_post_ffn);
 
         Ok((x_expanded_out, global_state_out, exit_prob))
     }

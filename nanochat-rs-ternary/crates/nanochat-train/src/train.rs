@@ -323,13 +323,20 @@ impl Trainer {
         self.lion.import_state(&state.lion)?;
         tracing::info!("Optimizer state restored from {}", bin_path);
 
-        // Load MTP parameters if present
-        if let Some(ref mut mtp_vm) = self.mtp_varmap {
+        // Load MTP parameters if present (device-aware, VarMap::load hardcodes CPU)
+        if let Some(ref mtp_vm) = self.mtp_varmap {
             let mtp_path = format!("{}/mtp.safetensors", checkpoint_dir);
             if std::path::Path::new(&mtp_path).exists() {
-                mtp_vm.load(&mtp_path).map_err(|e| {
-                    candle_core::Error::Msg(format!("MTP state load {}: {}", mtp_path, e))
-                })?;
+                let tensors = candle_core::safetensors::load(&mtp_path, &self.device)
+                    .map_err(|e| candle_core::Error::Msg(format!(
+                        "MTP state load {}: {}", mtp_path, e
+                    )))?;
+                let data = mtp_vm.data().lock().unwrap_or_else(|e| e.into_inner());
+                for (name, var) in data.iter() {
+                    if let Some(tensor) = tensors.get(name) {
+                        let _ = var.set(tensor);
+                    }
+                }
                 tracing::info!("MTP state restored from {}", mtp_path);
             } else {
                 tracing::info!(
@@ -406,15 +413,8 @@ impl Trainer {
             );
         }
 
-        let lion = Lion::new(
-            lion_vars,
-            base_lr_lion,
-            config.lion_betas.0,
-            config.lion_betas.1,
-            0.0, // no weight decay for Lion group (matches new() path)
-        )?;
-
         // E3 optimizations: Multi-Token Prediction
+        // Must create MTP before Lion so MTP vars can be added to Lion's parameter group.
         let (mtp, mtp_varmap_stored) = if let Some(mtp_vm) = mtp_varmap {
             let mtp_vb = candle_nn::VarBuilder::from_varmap(&mtp_vm, DType::F32, &device);
             let mtp_module = MultiTokenPrediction::new(
@@ -424,10 +424,20 @@ impl Trainer {
                 config.mtp_n_tokens,
             )?;
             println!("  MTP resumed: {} future tokens", config.mtp_n_tokens);
+            let mtp_vars = sorted_vars(&mtp_vm);
+            lion_vars.extend(mtp_vars);
             (Some(mtp_module), Some(mtp_vm))
         } else {
             (None, None)
         };
+
+        let lion = Lion::new(
+            lion_vars,
+            base_lr_lion,
+            config.lion_betas.0,
+            config.lion_betas.1,
+            0.0, // no weight decay for Lion group (matches new() path)
+        )?;
 
         // E3 optimizations: Collider token filtering
         let collider = if config.use_collider {
@@ -543,6 +553,25 @@ impl Trainer {
             println!("  GaLore update freq: {} steps", config.galore_update_freq);
         }
 
+        // E3 optimizations: Multi-Token Prediction
+        // Must create MTP before Lion so MTP vars can be added to Lion's parameter group.
+        let (mtp, mtp_varmap_stored) = if let Some(mtp_vm) = mtp_varmap {
+            let mtp_vb = candle_nn::VarBuilder::from_varmap(&mtp_vm, DType::F32, &device);
+            let mtp_module = MultiTokenPrediction::new(
+                mtp_vb,
+                config.dim,
+                config.vocab_size,
+                config.mtp_n_tokens,
+            )?;
+            println!("  MTP enabled: {} future tokens", config.mtp_n_tokens);
+            // Add MTP vars to Lion so they actually get updated
+            let mtp_vars = sorted_vars(&mtp_vm);
+            lion_vars.extend(mtp_vars);
+            (Some(mtp_module), Some(mtp_vm))
+        } else {
+            (None, None)
+        };
+
         let lion = Lion::new(
             lion_vars,
             config.mhc_lr,
@@ -553,21 +582,6 @@ impl Trainer {
 
         let base_lr_muon = config.lr;
         let base_lr_lion = config.mhc_lr;
-
-        // E3 optimizations: Multi-Token Prediction
-        let (mtp, mtp_varmap_stored) = if let Some(mtp_vm) = mtp_varmap {
-            let mtp_vb = candle_nn::VarBuilder::from_varmap(&mtp_vm, DType::F32, &device);
-            let mtp_module = MultiTokenPrediction::new(
-                mtp_vb,
-                config.dim,
-                config.vocab_size,
-                config.mtp_n_tokens,
-            )?;
-            println!("  MTP enabled: {} future tokens", config.mtp_n_tokens);
-            (Some(mtp_module), Some(mtp_vm))
-        } else {
-            (None, None)
-        };
 
         // E3 optimizations: Collider token filtering
         let collider = if config.use_collider {
@@ -792,20 +806,17 @@ impl Trainer {
         let uniform_scaled = (uniform_loss * label_smooth_eps)?;
         let mut loss = (ce_scaled + uniform_scaled)?;
 
-        // Compute entropy for diagnostics (even if weight is 0)
+        // Compute entropy for diagnostics and optional regularization
         let probs = log_probs_for_smoothing.exp()?;
         let neg_entropy = probs.mul(&log_probs_for_smoothing)?.sum(D::Minus1)?;
-        let entropy_val = neg_entropy.neg()?.mean_all()?.to_scalar::<f32>()? as f64;
+        let entropy_tensor = neg_entropy.neg()?.mean_all()?;
+        let entropy_val = entropy_tensor.to_scalar::<f32>()? as f64;
 
-        // Explicit entropy regularization: loss -= entropy_weight * H(p)
-        // H(p) = -Σ p * log(p), maximized when predictions are spread out.
-        // Prevents logit collapse in ternary models where weight quantization
-        // can amplify distributional imbalance.
+        // Entropy regularization: loss -= entropy_weight * H(p)
+        // Keep entropy_tensor in the computation graph so gradients flow through.
         let entropy_weight = self.config.entropy_weight;
         if entropy_weight > 0.0 {
-            let device = loss.device().clone();
-            // Subtract: encourages higher entropy (more diverse predictions)
-            loss = (loss - (Tensor::new(entropy_val as f32, &device)? * entropy_weight)?)?;
+            loss = (loss - (&entropy_tensor * entropy_weight)?)?;
         }
 
         // E3: Multi-Token Prediction (15-20% data efficiency boost)
@@ -878,7 +889,7 @@ impl Trainer {
         // forward-pass computation graph alive, leaking ~2GB/step on GPU.
         // The current layout guarantees no fallible code between backward() and
         // detach — do not insert any `?` operations between these two lines.
-        detach_grad_store_inplace(&mut grads, &self.varmap);
+        detach_grad_store_inplace(&mut grads, &self.varmap, self.mtp_varmap.as_ref());
 
         // CRITICAL: Drop the entire forward-pass computation graph NOW, before
         // the optimizer step allocates memory for Newton-Schulz orthogonalization.
@@ -1038,7 +1049,8 @@ impl Trainer {
         }
     }
 
-    /// Clear internal caches to free memory
+    /// Clear internal caches to free memory.
+    /// Resets gradient accumulation — the next micro-step starts a fresh cycle.
     fn clear_caches(&mut self) {
         self.accum_grads = None;
         self.accum_micro_steps = 0;
@@ -1117,9 +1129,10 @@ impl Trainer {
     /// Reduce learning rates by a factor for a limited number of steps (cooldown).
     ///
     /// Used after NaN recovery to stabilize training before returning to normal LR.
+    /// Always applies factor relative to the original config LR to prevent compounding.
     fn apply_lr_cooldown(&mut self, factor: f64, duration_steps: usize) {
-        self.base_lr_muon *= factor;
-        self.base_lr_lion *= factor;
+        self.base_lr_muon = self.config.lr * factor;
+        self.base_lr_lion = self.config.mhc_lr * factor;
         tracing::warn!(
             "LR cooldown: reduced by {:.0}% for next {} steps (muon={:.6}, lion={:.6})",
             (1.0 - factor) * 100.0,
@@ -1203,11 +1216,19 @@ impl Trainer {
                     if let Some(ref ckpt_path) = last_checkpoint_path {
                         tracing::warn!("Reloading weights from {}", ckpt_path);
                         let weights_path = format!("{}/model.safetensors", ckpt_path);
-                        self.varmap.load(&weights_path).map_err(|e| {
-                            candle_core::Error::Msg(format!(
+                        // Use device-aware loading (VarMap::load hardcodes CPU)
+                        let tensors = candle_core::safetensors::load(&weights_path, &self.device)
+                            .map_err(|e| candle_core::Error::Msg(format!(
                                 "NaN recovery weight reload failed: {}", e
-                            ))
-                        })?;
+                            )))?;
+                        {
+                            let data = self.varmap.data().lock().unwrap_or_else(|e| e.into_inner());
+                            for (name, var) in data.iter() {
+                                if let Some(tensor) = tensors.get(name) {
+                                    let _ = var.set(tensor);
+                                }
+                            }
+                        }
                         // Read step from checkpoint meta
                         let meta_path = format!("{}/meta.json", ckpt_path);
                         if let Ok(meta_json) = std::fs::read_to_string(&meta_path) {
@@ -1250,7 +1271,7 @@ impl Trainer {
                 interval_steps += 1;
                 batch_idx += 1;
 
-                if self.global_step.is_multiple_of(log_interval) && interval_steps > 0 {
+                if self.global_step > 0 && self.global_step.is_multiple_of(log_interval) && interval_steps > 0 {
                     let avg_loss = running_loss / interval_steps as f64;
                     let avg_entropy = running_entropy / interval_steps as f64;
                     let avg_gnorm = running_gnorm / interval_steps as f64;
@@ -1282,7 +1303,7 @@ impl Trainer {
                 }
 
                 // Checkpoint with disk monitoring and cleanup
-                if checkpoint_interval > 0 && self.global_step.is_multiple_of(checkpoint_interval) {
+                if checkpoint_interval > 0 && self.global_step > 0 && self.global_step.is_multiple_of(checkpoint_interval) {
                     if let Some(dir) = checkpoint_dir {
                         // Check disk space before saving
                         if let Ok((total, avail)) =
@@ -1496,11 +1517,16 @@ pub fn trim_all_cuda_memory_pools() {}
 /// Simply detaching intermediate entries only fixes (1) — the data stays because
 /// detach() shares storage via Arc. We must REPLACE intermediates with tiny scalars
 /// to actually free the CUDA memory.
-fn detach_grad_store_inplace(store: &mut GradStore, varmap: &VarMap) {
-    // Build set of leaf variable IDs for O(1) lookup
+fn detach_grad_store_inplace(store: &mut GradStore, varmap: &VarMap, mtp_varmap: Option<&VarMap>) {
+    // Build set of leaf variable IDs for O(1) lookup (includes MTP vars if present)
     let vars = sorted_vars(varmap);
-    let var_ids: std::collections::HashSet<candle_core::TensorId> =
+    let mut var_ids: std::collections::HashSet<candle_core::TensorId> =
         vars.iter().map(|v| v.as_tensor().id()).collect();
+    if let Some(mtp_vm) = mtp_varmap {
+        for v in sorted_vars(mtp_vm) {
+            var_ids.insert(v.as_tensor().id());
+        }
+    }
 
     let all_ids: Vec<candle_core::TensorId> = store.get_ids().copied().collect();
     // Tiny CPU scalar — costs ~0 bytes, replaces multi-MB intermediate gradients.

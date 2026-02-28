@@ -252,9 +252,9 @@ impl SharedLoopBlock {
         // 6. Update global state: average of attention and FFN outputs
         let global_state_out = ((&gated_attn + &gated_ffn)? * 0.5)?;
 
-        // 7. Exit gate: compute halting probability from collapsed hidden state
-        //    Uses the collapsed x (single-stream) after FFN for exit decision
-        let exit_prob = self.exit_gate.forward(&x)?;
+        // 7. Exit gate: compute halting probability from post-FFN collapsed state
+        let x_post_ffn = self.mhc_ffn.prepare_input(&x_expanded_out, self.dim)?;
+        let exit_prob = self.exit_gate.forward(&x_post_ffn)?;
 
         Ok((x_expanded_out, global_state_out, exit_prob))
     }

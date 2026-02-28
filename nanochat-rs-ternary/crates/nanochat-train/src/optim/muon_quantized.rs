@@ -219,13 +219,13 @@ impl QuantizedMuon {
 
             // Weight decay (multiplicative)
             if self.weight_decay > 0.0 {
-                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?;
+                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?.detach();
                 var.set(&decayed)?;
             }
 
             // Apply update: w = w - lr * update
             let scaled_update = (&update * self.lr)?;
-            let new_val = var.as_tensor().sub(&scaled_update)?;
+            let new_val = var.as_tensor().sub(&scaled_update)?.detach();
             var.set(&new_val)?;
         }
         Ok(())
@@ -279,13 +279,13 @@ impl QuantizedMuon {
 
             // Weight decay (multiplicative)
             if self.weight_decay > 0.0 {
-                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?;
+                let decayed = (var.as_tensor() * (1.0 - self.lr * self.weight_decay))?.detach();
                 var.set(&decayed)?;
             }
 
             // Apply update: w = w - lr * update
             let scaled_update = (&update * self.lr)?;
-            let new_val = var.as_tensor().sub(&scaled_update)?;
+            let new_val = var.as_tensor().sub(&scaled_update)?.detach();
             var.set(&new_val)?;
         }
         Ok(())
