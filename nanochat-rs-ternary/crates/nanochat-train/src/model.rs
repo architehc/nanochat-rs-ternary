@@ -248,6 +248,71 @@ impl NanochatTrainModel {
         self.norm_final.forward(&x)
     }
 
+    /// Forward pass returning hidden state, with wavefield layers bypassed.
+    ///
+    /// Wavefield attention is bidirectional (Haar scatter-convolve-gather has no
+    /// causal mask). During training, this lets each position "peek" at future
+    /// tokens, producing artificially low loss. During autoregressive generation,
+    /// future tokens don't exist, so the wavefield gives a wrong signal → garbage.
+    ///
+    /// This method bypasses wavefield attention sub-layers (keeping their FFN
+    /// sub-layers active), so only the causal standard-attention layers contribute
+    /// to the representation. Use this for generation from wavefield models.
+    pub fn forward_hidden_only_causal(&self, token_ids: &Tensor) -> Result<Tensor> {
+        let (_batch, seq_len) = token_ids.dims2()?;
+
+        let x = self.tok_embed.forward(token_ids)?;
+        let mut x_exp = MhcLiteN2Train::expand_input(&x, self.config.dim)?;
+
+        let cos = self.freqs_cos.narrow(0, 0, seq_len)?;
+        let sin = self.freqs_sin.narrow(0, 0, seq_len)?;
+
+        let engram_indices: Option<Vec<Tensor>> = if self.config.use_engram {
+            let (batch, seq) = token_ids.dims2()?;
+            let ids_flat: Vec<u32> = token_ids.flatten_all()?.to_vec1()?;
+            let first_engram = self.blocks.iter()
+                .chain(self.local_blocks_before.iter())
+                .find_map(|b| b.engram.as_ref());
+            if let Some(engram) = first_engram {
+                let idx_vecs = engram.precompute_hash_indices(&ids_flat, batch, seq);
+                let tensors: Vec<Tensor> = idx_vecs
+                    .into_iter()
+                    .map(|v| Tensor::from_vec(v, batch * seq, token_ids.device()))
+                    .collect::<Result<_>>()?;
+                Some(tensors)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let engram_idx_ref = engram_indices.as_deref();
+
+        if let Some(ref loop_block) = self.shared_loop_block {
+            let loop_cfg = self.config.loop_config.as_ref().unwrap();
+            for block in &self.local_blocks_before {
+                x_exp = block.forward_inner(&x_exp, &cos, &sin, engram_idx_ref, true)?;
+            }
+            let mut global_state: Option<Tensor> = None;
+            for _ in 0..loop_cfg.loop_count {
+                let (x_out, g_state, _exit_prob) =
+                    loop_block.forward(&x_exp, global_state.as_ref())?;
+                x_exp = x_out;
+                global_state = Some(g_state);
+            }
+            for block in &self.local_blocks_after {
+                x_exp = block.forward_inner(&x_exp, &cos, &sin, engram_idx_ref, true)?;
+            }
+        } else {
+            for block in &self.blocks {
+                x_exp = block.forward_inner(&x_exp, &cos, &sin, engram_idx_ref, true)?;
+            }
+        }
+
+        let x = MhcLiteN2Train::collapse_output(&x_exp, self.config.dim)?;
+        self.norm_final.forward(&x)
+    }
+
     /// Project hidden states to logits via LM head.
     ///
     /// Supports both 3D hidden states `[batch, seq, dim]` and compact 2D hidden states `[n, dim]`.

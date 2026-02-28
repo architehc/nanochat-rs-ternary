@@ -343,11 +343,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 nanochat_train::train::Trainer::new(cfg.clone(), device)?
             };
 
-            // Apply --total-steps override (useful for chunked training).
-            // Sets stop_at_step WITHOUT changing config.total_steps — preserves LR schedule.
+            // Apply --total-steps override.
+            // Updates BOTH the stop point AND config.total_steps so the LR schedule
+            // extends properly (warmup stays fixed, stable phase extends, decay shifts).
             if let Some(ts) = total_steps {
                 trainer.stop_at_step = Some(ts);
-                tracing::info!("Will stop at step {} (LR schedule uses config total_steps={})", ts, cfg.total_steps);
+                let old_total = trainer.config.total_steps;
+                trainer.config.total_steps = ts;
+                cfg.total_steps = ts;
+                tracing::info!("Extended total_steps: {} → {} (LR schedule updated)", old_total, ts);
             }
 
             let effective_seq_len = match effective_seq_len(seq_len, &cfg) {

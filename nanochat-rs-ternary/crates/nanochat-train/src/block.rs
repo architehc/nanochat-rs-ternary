@@ -119,28 +119,60 @@ impl TransformerBlockTrain {
         sin: &Tensor,
         engram_indices: Option<&[Tensor]>,
     ) -> Result<Tensor> {
+        self.forward_inner(x_exp, cos, sin, engram_indices, false)
+    }
+
+    /// Forward with option to bypass wavefield attention layers.
+    ///
+    /// When `bypass_wavefield` is true, wavefield blocks skip the attention
+    /// sub-layer entirely (output zeros → mHC residual becomes identity),
+    /// keeping only the FFN sub-layer active. This is needed for autoregressive
+    /// generation because wavefield layers are bidirectional and leak future
+    /// token information during training, producing garbage at inference time.
+    pub fn forward_inner(
+        &self,
+        x_exp: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        engram_indices: Option<&[Tensor]>,
+        bypass_wavefield: bool,
+    ) -> Result<Tensor> {
         // Attention sub-layer with mHC
-        let attn_in = self.mhc_attn.prepare_input(x_exp, self.dim)?;
+        let x_exp = match (&self.attention, bypass_wavefield) {
+            (AttentionTrainLayer::WaveField(_), true) => {
+                // Skip wavefield attention — residual passes through unchanged.
+                // FFN sub-layer below still processes normally.
+                x_exp.clone()
+            }
+            _ => {
+                let attn_in = self.mhc_attn.prepare_input(x_exp, self.dim)?;
 
-        // Apply Engram enrichment before attention (if present)
-        let attn_in = if let (Some(engram), Some(indices)) = (&self.engram, engram_indices) {
-            engram.forward(&attn_in, indices)?
-        } else {
-            attn_in
-        };
+                // Apply Engram enrichment before attention (if present)
+                let attn_in = if let (Some(engram), Some(indices)) = (&self.engram, engram_indices) {
+                    engram.forward(&attn_in, indices)?
+                } else {
+                    attn_in
+                };
 
-        let attn_normed = self.norm_attn.forward(&attn_in)?;
-        let attn_out = match &self.attention {
-            AttentionTrainLayer::Standard(attn) => attn.forward(&attn_normed, cos, sin)?,
-            AttentionTrainLayer::WaveField(wf) => wf.forward(&attn_normed, self.max_seq_len)?,
+                let attn_normed = self.norm_attn.forward(&attn_in)?;
+                let attn_out = match &self.attention {
+                    AttentionTrainLayer::Standard(attn) => attn.forward(&attn_normed, cos, sin)?,
+                    AttentionTrainLayer::WaveField(wf) => wf.forward(&attn_normed, self.max_seq_len)?,
+                };
+                self.mhc_attn.apply(x_exp, &attn_out, self.dim)?
+            }
         };
-        let x_exp = self.mhc_attn.apply(x_exp, &attn_out, self.dim)?;
 
         // FFN sub-layer with mHC
         let ffn_in = self.mhc_ffn.prepare_input(&x_exp, self.dim)?;
         let ffn_normed = self.norm_ffn.forward(&ffn_in)?;
         let ffn_out = self.ffn.forward(&ffn_normed)?;
         self.mhc_ffn.apply(&x_exp, &ffn_out, self.dim)
+    }
+
+    /// Returns true if this block uses wavefield attention.
+    pub fn is_wavefield(&self) -> bool {
+        matches!(&self.attention, AttentionTrainLayer::WaveField(_))
     }
 
     /// Collect all linear weight parameters.
