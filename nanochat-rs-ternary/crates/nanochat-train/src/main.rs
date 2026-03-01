@@ -60,6 +60,21 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-275m-engram-mtp" | "nano_275m_engram_mtp" => {
             Some(TrainConfig::nano_275m_engram_mtp())
         }
+        "nano-275m-engram-v4" | "nano_275m_engram_v4" => {
+            Some(TrainConfig::nano_275m_engram_v4())
+        }
+        "nano-275m-engram-v5" | "nano_275m_engram_v5" => {
+            Some(TrainConfig::nano_275m_engram_v5())
+        }
+        "nano-275m-engram-v6" | "nano_275m_engram_v6" => {
+            Some(TrainConfig::nano_275m_engram_v6())
+        }
+        "nano-275m-engram-v7" | "nano_275m_engram_v7" => {
+            Some(TrainConfig::nano_275m_engram_v7())
+        }
+        "nano-275m-engram-wide" | "nano_275m_engram_wide" => {
+            Some(TrainConfig::nano_275m_engram_wide())
+        }
         "nano-275m-haar-v3" | "nano_275m_haar_v3" => {
             Some(TrainConfig::nano_275m_haar_v3())
         }

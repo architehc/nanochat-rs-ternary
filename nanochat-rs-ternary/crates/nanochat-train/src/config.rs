@@ -1710,6 +1710,52 @@ impl TrainConfig {
         cfg
     }
 
+    /// nano-275m Engram v4: 12K steps (decay at 9600), testing slightly longer training.
+    pub fn nano_275m_engram_v4() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 12_000;
+        cfg
+    }
+
+    /// nano-275m Engram v5: 30K steps — DIVERGED (gnorm blowup at step ~9K).
+    /// Archived config — do not reuse without fixing LR/grad_clip.
+    pub fn nano_275m_engram_v5() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 30_000;
+        cfg
+    }
+
+    /// nano-275m Engram v6: 20K steps with tighter grad_clip=0.5.
+    /// Fix for v5 divergence: grad_clip 1.0→0.5 prevents gnorm blowup.
+    /// Same arch as engram-v1 (best generation quality so far).
+    pub fn nano_275m_engram_v6() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 20_000;
+        cfg.grad_clip = 0.5;
+        cfg
+    }
+
+    /// nano-275m Engram v7: 10K steps with lower LR=0.008.
+    /// Tests if lower peak LR improves final loss without divergence.
+    /// Comparison: v1 used lr=0.012/10K, v7 uses lr=0.008/10K.
+    pub fn nano_275m_engram_v7() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 10_000;
+        cfg.lr = 0.008;
+        cfg
+    }
+
+    /// nano-275m Engram with more layers: engram on 5 layers spread across the model.
+    /// Tests whether spreading engram memory across more layers improves coherence.
+    pub fn nano_275m_engram_wide() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 10_000;
+        cfg.engram_layers = vec![0, 10, 19];
+        cfg.engram_d_mem = 32; // Minimal per-layer to fit VRAM with 3 layers
+        cfg.engram_table_size = 2003; // Small tables to reduce VRAM
+        cfg
+    }
+
     /// nano-275m Haar v3 — fresh run with matched hyperparams for fair comparison.
     /// 20 layers, 50% wavefield Haar, no MTP, total_steps=20000.
     pub fn nano_275m_haar_v3() -> Self {
