@@ -1745,6 +1745,26 @@ impl TrainConfig {
         cfg
     }
 
+    /// nano-275m Engram v8: 20K steps with lr=0.008.
+    /// Based on v7 success: lr=0.008 is stable, extend training for more convergence.
+    /// Decay at step 16K, final at 20K.
+    pub fn nano_275m_engram_v8() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 20_000;
+        cfg.lr = 0.008;
+        cfg
+    }
+
+    /// nano-275m Engram v9: 15K steps with lr=0.010.
+    /// Middle ground between v1 (0.012/10K) and v7 (0.008/10K).
+    /// Tests if slightly higher LR converges faster with enough decay.
+    pub fn nano_275m_engram_v9() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 15_000;
+        cfg.lr = 0.010;
+        cfg
+    }
+
     /// nano-275m Engram with more layers: engram on 5 layers spread across the model.
     /// Tests whether spreading engram memory across more layers improves coherence.
     pub fn nano_275m_engram_wide() -> Self {

@@ -72,6 +72,12 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-275m-engram-v7" | "nano_275m_engram_v7" => {
             Some(TrainConfig::nano_275m_engram_v7())
         }
+        "nano-275m-engram-v8" | "nano_275m_engram_v8" => {
+            Some(TrainConfig::nano_275m_engram_v8())
+        }
+        "nano-275m-engram-v9" | "nano_275m_engram_v9" => {
+            Some(TrainConfig::nano_275m_engram_v9())
+        }
         "nano-275m-engram-wide" | "nano_275m_engram_wide" => {
             Some(TrainConfig::nano_275m_engram_wide())
         }
