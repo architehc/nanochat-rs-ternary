@@ -1,0 +1,36 @@
+# Engram V12 Evaluation — BEST BIG DATASET MODEL
+# Config: lr=0.010, 20K steps, decay@40% (step 8K), BIG dataset (75M tok)
+# Final loss: 3.09, gnorm: 3.07, elapsed: 540 min (9.0 hours)
+# Temperature: 0.8, top-k: 50
+
+## Prompt: "fn main() {"
+fn main() {
+    let tokens = String::from("nu-test").unwrap();
+    let tokens = format!("{s = String"), "{}", tokens.len());
+    if tokens.is_empty() {
+        return Err(Shell
+
+## Prompt: "pub struct Config {"
+pub struct Config {
+    pub sys: usize,
+    pub wg_format: wg_format::WgslState,
+    pub wgsl_format: wgsl::WgslConfig,
+    pub wgsl_format: wgsl::USysDetail,
+    pub port
+
+## Prompt: "#[test]\nfn test_"
+#[test]
+fn test_empty_with_test() {
+    let a = &[(10, 2, 3, 3, 4, 5, 6];
+    let b = &[(10, 2, 4, 4, 6, -5]);
+    let b = &[(20, 2, 3, 3, 4], 0,
+
+## Assessment
+At loss 3.09 (perplexity 22): generates Rust-like code with correct use of
+String::from, format!, is_empty, Err, struct fields with module paths, #[test].
+Better diversity than v8 (3.05). Still not compilable — invented types,
+broken syntax. Need loss ~2.0 for coherent, compilable Rust.
+
+## Key Result
+lr=0.010 + 20K steps + 40% decay on big dataset = best big-dataset model.
+Gnorm never exceeded 4.5 (vs 300+ for lr=0.012 long runs).
