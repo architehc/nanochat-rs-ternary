@@ -1,0 +1,12 @@
+# Engram V13 Evaluation
+# Config: lr=0.012, 10K steps, decay@80% (step 8K), BIG dataset (75M tok)
+# Final loss: 3.52, gnorm: 6.13
+# Prompt: "pub struct Config {"
+# Temperature: 0.8, top-k: 50
+
+pub struct Config {    /// The default past functionment    pub pVertexAttr: String,}impl Config {    pub fn new_shell(self, name: String, status: bool, status: Shell) -> Result<Config> {
+
+# Assessment: Produces Rust-like structure (struct, impl, fn, Result) but with
+# invented words ("functionment"), duplicate param names. Not coherent.
+# V1 recipe on 75M dataset: loss 3.52 vs 2.19 on 36M.
+# Conclusion: bigger dataset needs more steps or lower LR for equivalent quality.

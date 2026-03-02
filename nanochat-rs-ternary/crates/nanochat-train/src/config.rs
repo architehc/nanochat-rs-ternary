@@ -1810,6 +1810,28 @@ impl TrainConfig {
         cfg
     }
 
+    /// nano-275m Engram v14: lr=0.010, 15K steps, decay at 53% (step 8K).
+    /// Uses SMALL dataset (rust_v2_prepared, 36M tok) — tests stable LR on v1's dataset.
+    /// Hypothesis: lr=0.010 avoids gnorm blowup while small dataset allows low loss.
+    pub fn nano_275m_engram_v14() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 15_000;
+        cfg.lr = 0.010;
+        cfg.decay_start_frac = 0.53; // Decay at step ~8K
+        cfg
+    }
+
+    /// nano-275m Engram v15: lr=0.010, 30K steps, decay at 27% (step 8K).
+    /// Uses BIG dataset (rust_big, 75M tok) — long run for enough epochs on big data.
+    /// With lr=0.010, gnorm should stay stable for the 8K full-LR window.
+    pub fn nano_275m_engram_v15() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 30_000;
+        cfg.lr = 0.010;
+        cfg.decay_start_frac = 0.27; // Decay at step ~8K
+        cfg
+    }
+
     /// nano-275m Engram with more layers: engram on 5 layers spread across the model.
     /// Tests whether spreading engram memory across more layers improves coherence.
     pub fn nano_275m_engram_wide() -> Self {
