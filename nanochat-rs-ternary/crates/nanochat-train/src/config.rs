@@ -1800,6 +1800,16 @@ impl TrainConfig {
         cfg
     }
 
+    /// nano-275m Engram v13: Exact replica of v1 (best model, loss 2.19).
+    /// lr=0.012, 10K steps, decay at 80% (step 8K). Uses bigger dataset (rust_big).
+    /// Tests reproducibility of v1's success on larger data.
+    pub fn nano_275m_engram_v13() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 10_000;
+        // Everything else matches engram_only defaults: lr=0.012, decay_start_frac=0.8
+        cfg
+    }
+
     /// nano-275m Engram with more layers: engram on 5 layers spread across the model.
     /// Tests whether spreading engram memory across more layers improves coherence.
     pub fn nano_275m_engram_wide() -> Self {
