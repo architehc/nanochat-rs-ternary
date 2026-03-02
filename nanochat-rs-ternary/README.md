@@ -487,8 +487,11 @@ All models: dim=1024, 20 layers, 16 heads, 4 KV heads, ~275M params, Muon+Lion o
 | v9 | 0.010 | 15K | 80% (12K) | 3.32 | 4.5-5.0 | OK | 75M tok | Middle ground, mild instability |
 | v10 | 0.012 | 15K | 50% (7.5K) | 3.35 | ~10 | OK | 75M tok | Early decay prevented divergence |
 | v11 | 0.012 | 25K | 32% (8K) | diverged | 25+ | Failed | 75M tok | Even 32% decay can't save 0.012 |
-| **v12** | **0.010** | **20K** | **40% (8K)** | **in progress** | **3.7** | **Running** | 75M tok | Most promising, very stable |
-| v13 | 0.012 | 10K | 80% (8K) | in progress | 5.5 | Running | 75M tok | V1 replica on bigger dataset |
+| v12 | 0.010 | 20K | 40% (8K) | 3.09 | 4.5 | OK | 75M tok | Best big-dataset model |
+| v13 | 0.012 | 10K | 80% (8K) | 3.52 | 6.1 | OK | 75M tok | V1 replica on big data — worse |
+| **v14** | **0.010** | **15K** | **53% (8K)** | **2.98** | **4.0** | **2nd best** | 36M tok | Stable LR on small data |
+| v15 | 0.010 | 30K | 27% (8K) | in progress | 4.1 | Running | 75M tok | Long run, big data |
+| v16 | 0.012 | 12K | 67% (8K) | in progress | TBD | Running | 36M tok | v1 recipe + more decay |
 | baseline-v1 (MTP) | 0.012 | 10K | 80% | H=2.92 | stable | OK | 36M tok | No engram, comparable |
 | haar-v5 (wavefield) | 0.012 | 30K | 80% | **1.17** | stable | OK | 75M tok | Bidirectional -- cannot generate |
 
