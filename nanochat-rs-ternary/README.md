@@ -470,33 +470,60 @@ NanochatTernary-275M (dim=1024, 20 layers, 16 heads, 4 KV heads)
 └── LM Head                                 Ternary BitLinear (1024 x 4096)
 ```
 
-### Training Configs and Results
+### Training Configs and Results (All Versions)
 
-| Config | LR | Steps | Decay Start | Loss | Gnorm | Notes |
-|--------|-----|-------|-------------|------|-------|-------|
-| **engram-v1** | 0.012 | 10K | 80% (8K) | **2.19** | stable | **Best generation quality** |
-| engram-only | 0.012 | 20K | 80% (16K) | 3.09 | stable early | Longer but not better |
-| engram-v5 | 0.012 | 30K | 80% (24K) | diverged | 300+ at 9K | LR too high for long runs |
-| engram-v6 | 0.012 | 20K | 80%, clip=0.5 | diverged | 15+ at 10K | Grad clip delays, doesn't fix |
-| **engram-v7** | 0.008 | 10K | 80% (8K) | **3.22** | 2.0-2.4 | Rock stable, lower LR |
-| engram-v8 | 0.008 | 20K | 80% (16K) | 3.12 | stable | Extending v7 approach |
-| engram-v9 | 0.010 | 15K | 80% (12K) | 3.32 | 4.5-5.0 | Middle ground, mild instability |
-| engram-v10 | 0.012 | 15K | **50%** (7.5K) | in progress | TBD | Early decay hypothesis |
-| baseline-v1 (MTP) | 0.012 | 10K | 80% | H=2.92 | stable | No engram, comparable |
-| haar-v5 (wavefield) | 0.012 | 30K | 80% | **1.17** | stable | Bidirectional -- cannot generate |
+All models: dim=1024, 20 layers, 16 heads, 4 KV heads, ~275M params, Muon+Lion optimizer, WSD schedule.
 
-### Key Finding: Learning Rate Stability
+| Version | LR | Steps | Decay Start | Final Loss | Gnorm Peak | Status | Dataset | Notes |
+|---------|------|-------|-------------|------------|------------|--------|---------|-------|
+| **v1** | 0.012 | 10K | 80% (8K) | **2.19** | ~5-6 | **BEST** | 36M tok | Best generation quality |
+| v2 | 0.012 | resumed | - | 2.94 | - | Failed | 36M tok | Resumed v1 at full LR, never recovered |
+| v3 | 0.012 | 12K | 80% (9.6K) | 2.48 | - | OK | 36M tok | Decent but worse than v1 |
+| v4 | 0.012 | resumed | - | ~4.5 | - | Failed | 36M tok | Resume broke optimizer state |
+| v5 | 0.012 | 30K | 80% (24K) | diverged | 300+ | Failed | 75M tok | Too long at full LR |
+| v6 | 0.012 | 20K | 80%, clip=0.5 | diverged | 15+ | Failed | 75M tok | Grad clip delays, doesn't fix |
+| **v7** | 0.008 | 10K | 80% (8K) | **3.22** | 2.0-2.4 | OK | 75M tok | Rock stable, slow learning |
+| v8 | 0.008 | 20K | 80% (16K) | 3.05 | 2.0-2.4 | OK | 75M tok | Stable but incoherent output |
+| v9 | 0.010 | 15K | 80% (12K) | 3.32 | 4.5-5.0 | OK | 75M tok | Middle ground, mild instability |
+| v10 | 0.012 | 15K | 50% (7.5K) | 3.35 | ~10 | OK | 75M tok | Early decay prevented divergence |
+| v11 | 0.012 | 25K | 32% (8K) | diverged | 25+ | Failed | 75M tok | Even 32% decay can't save 0.012 |
+| **v12** | **0.010** | **20K** | **40% (8K)** | **in progress** | **3.7** | **Running** | 75M tok | Most promising, very stable |
+| v13 | 0.012 | 10K | 80% (8K) | in progress | 5.5 | Running | 75M tok | V1 replica on bigger dataset |
+| baseline-v1 (MTP) | 0.012 | 10K | 80% | H=2.92 | stable | OK | 36M tok | No engram, comparable |
+| haar-v5 (wavefield) | 0.012 | 30K | 80% | **1.17** | stable | OK | 75M tok | Bidirectional -- cannot generate |
 
-`lr=0.012` is unstable past ~9K steps at full learning rate -- gradient norms
-blow up exponentially. The "early decay hypothesis" explains why engram-v1
-(10K steps, decay at step 8K) succeeded: the model only saw ~6.5K steps at
-full LR before cosine decay started reducing it.
+### Key Findings
 
-| LR | Max Stable Steps | Gradient Norm |
-|----|-----------------|---------------|
-| 0.012 | ~8-9K | Blows up to 100+ after |
-| 0.010 | ~12K+ | Elevated (4-5) but survivable |
-| 0.008 | 20K+ (indefinite) | Rock stable (2.0-2.4) |
+**1. Learning Rate Stability Threshold**
+
+`lr=0.012` is fundamentally unstable past ~8K steps at full learning rate --
+gradient norms blow up exponentially regardless of decay timing. The "early
+decay hypothesis" explains why v1 (10K steps, decay at step 8K) succeeded:
+the model only saw ~6.5K steps at full LR before cosine decay started.
+
+| LR | Max Stable Steps at Full LR | Gradient Norm Behavior |
+|----|----------------------------|------------------------|
+| 0.012 | ~8K | Blows up to 10+ by 9K, 100+ by 12K, 300+ by 15K |
+| 0.010 | ~12K+ | Elevated (3.5-4.0) but survives with decay |
+| 0.008 | 20K+ (indefinite) | Rock stable (2.0-2.4), plateaus at loss ~3.0 |
+
+**2. Resumes Always Fail**
+
+Both v2 and v4 resumed from good checkpoints and permanently destabilized.
+Resuming at full LR after convergence spikes loss from 2.19 to 2.94+.
+**Always train fresh** with more total_steps rather than resuming.
+
+**3. WSD Decay is Critical**
+
+Loss plateau breaks when cosine decay starts. Without decay (like large-gpu
+at 22K steps), loss stalls. The decay phase is where most final quality gains
+happen.
+
+**4. Dataset Size vs Quality**
+
+V1 (loss 2.19) used 36M tokens, while v7-v13 use 75M tokens. Larger dataset
+gives higher absolute loss but may generalize better. V13 tests this directly
+as a v1 replica on the bigger dataset.
 
 ### Coherence Benchmark (Automated)
 
