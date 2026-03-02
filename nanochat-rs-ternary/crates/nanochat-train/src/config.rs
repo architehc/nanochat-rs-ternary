@@ -1765,6 +1765,19 @@ impl TrainConfig {
         cfg
     }
 
+    /// nano-275m Engram v10: 15K steps, lr=0.012, EARLY decay (50% instead of 80%).
+    /// Hypothesis: v1 succeeded at lr=0.012 because decay started at step 8K (80% of 10K),
+    /// limiting full-LR exposure to ~6.5K steps (8K minus 1.5K warmup). With 15K steps and
+    /// decay_start_frac=0.5, decay starts at step 7500 → only 6K steps at full LR (safe)
+    /// → 7500 steps of decay (vs v1's 2000) → should converge deeper.
+    pub fn nano_275m_engram_v10() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 15_000;
+        cfg.lr = 0.012;
+        cfg.decay_start_frac = 0.5; // Early decay: at step 7500
+        cfg
+    }
+
     /// nano-275m Engram with more layers: engram on 5 layers spread across the model.
     /// Tests whether spreading engram memory across more layers improves coherence.
     pub fn nano_275m_engram_wide() -> Self {
