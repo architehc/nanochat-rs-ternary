@@ -1,0 +1,48 @@
+# Engram V14 Evaluation — SECOND BEST MODEL (loss 2.98)
+# Config: lr=0.010, 15K steps, decay@53% (step 8K), SMALL dataset (36M tok)
+# Final loss: 2.98, gnorm: 2.82, elapsed: 398 min (6.6 hours)
+# Temperature: 0.8, top-k: 50
+
+## Prompt: "fn main() {"
+fn main() {
+    let p = project()
+        .file("0.1.0:0.0.0.0"), 0.0.0.0")
+        .file(
+            "build.rs",
+            r#"
+                [package]
+                name = "foo"
+                version = "0.5.0"
+
+## Prompt: "pub struct Config {"
+pub struct Config {
+    #[primary_span]
+    pub span: Option<Span>,
+}
+impl Config {
+    pub fn subdiagFlex(self) -> syn::Result<()> {
+        self.span_suggestion_verbose_bug(self.span, msg, msg, msg, msg, "sub");
+    }
+
+## Prompt: "#[test]\nfn test_"
+#[test]
+fn test_help_rename() {
+    let _ = Command::new("test")
+        .arg(Command::new("foo")
+            .arg(Command::new("test").action(ArgAction::SetTrue))
+        .arg(Command::new("cmd")
+            .arg(Command::new("test")
+                .arg(Arg::new("some
+
+## Assessment
+At loss 2.98 (perplexity 20): SIGNIFICANT improvement over V12 (3.09).
+- Recognizes real crate patterns: Cargo.toml structure, syn types, clap builder
+- Uses project().file() pattern (Cargo test harness)
+- Generates #[primary_span] attribute, syn::Result, ArgAction::SetTrue
+- Still not compilable but approaching coherent code structure
+- lr=0.010 training was completely stable: gnorm never exceeded 4.0
+
+## Key Finding
+lr=0.010 with more decay steps on small dataset achieves 2.98.
+Better than all big-dataset runs (best: 3.09) but worse than v1 (2.19).
+lr=0.012's aggressive exploration still leads to better minima — v16 tests this.
