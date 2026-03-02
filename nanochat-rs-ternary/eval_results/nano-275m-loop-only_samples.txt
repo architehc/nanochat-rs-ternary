@@ -1,0 +1,45 @@
+============================================
+ MODEL: nano-275m-loop-only
+ Loss: 0.0, Step: 20000
+============================================
+
+--- PROMPT: fn main() { ---
+fn main() {    let a = _mm256_set1_epi64x(1);    let r = _mm256_set1[ERROR]
+
+
+--- PROMPT: pub struct Config { ---
+pub struct Config {    /// Get the controller of the configuration.    pub sender: Sender<Receiver>,    /// Get[ERROR]
+
+
+--- PROMPT: pub fn parse(input: &str) -> Result< ---
+pub fn parse(input: &str) -> Result<bool, ShellError> {    let input_name = input.as_ref().unwrap_or(input);    if[ERROR]
+
+
+--- PROMPT: impl Iterator for ---
+impl Iterator for RegistryId {    fn serialize(&self, serialize: &mut Self) -> Self {        self.inner.iter().[ERROR]
+
+
+--- PROMPT: fn fibonacci(n: u64) -> u64 { ---
+fn fibonacci(n: u64) -> u64 {    let (i, i) = (i as i64) else {        let a = _mm512_set_epi[ERROR]
+
+
+--- PROMPT: pub fn sort(arr: &mut [i32]) { ---
+pub fn sort(arr: &mut [i32]) {    let mut n = n.bits();    let n = n.bits();    for n inN {}}/// Takes[ERROR]
+
+
+--- PROMPT: use std::collections::HashMap; ---
+use std::collections::HashMap;use std::ops::Range;use rustc_span_::Span;use rustc_span::Span;use rustc_span::Span[ERROR]
+
+
+--- PROMPT: #[test] ---
+#[test]#[cfg_attr(not(feature = "derive"), wasm_bindgen_test::wasm_bindgen_test)]#[cfg[ERROR]
+
+
+--- PROMPT: async fn fetch_url(url: &str) -> Result<String ---
+async fn fetch_url(url: &str) -> Result<String, io::Error> {    let mut config_type = match config_type {        Some(key) => &mut config_[ERROR]
+
+
+--- PROMPT: /// A thread-safe counter. ---
+/// A thread-safe counter.////// The thread in the thread.////// This function does not want to fine the [`f32`]/// is used to use[ERROR]
+
+

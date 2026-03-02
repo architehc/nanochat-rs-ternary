@@ -1,0 +1,45 @@
+============================================
+ MODEL: nano-275m-haar-v3
+ Loss: 0.0, Step: 20000
+============================================
+
+--- PROMPT: fn main() { ---
+fn main() {hellet will Or Copy Copy Aame, Aormal::{::{::{::{edhell::hell]iiiveive lintive const T::[ERROR]
+
+
+--- PROMPT: pub struct Config { ---
+pub struct Config {pubcrossver local exnotnotnotnot AifiedherExnot use use usenotnotnotnot A subp_toepep55[ERROR]
+
+
+--- PROMPT: pub fn parse(input: &str) -> Result< ---
+pub fn parse(input: &str) -> Result<mut ConfigExecececains touse accackackack useuse crate will component liatibleabioixistred[ERROR]
+
+
+--- PROMPT: impl Iterator for ---
+impl Iterator foryncQ couldimpl at<ious: impl impl Apt-etepanceptptarted to to to fn fn fn use formatpect[ERROR]
+
+
+--- PROMPT: fn fibonacci(n: u64) -> u64 { ---
+fn fibonacci(n: u64) -> u64 {            dpdal_flowurethethe localmonew !new: #[unstable #[cfg(feature(static not not pub as[ERROR]
+
+
+--- PROMPT: pub fn sort(arr: &mut [i32]) { ---
+pub fn sort(arr: &mut [i32]) {        }, fn VueIN2NNll a a is exlation Disserialresh.range`]. impl struct impl Rdestructbe[ERROR]
+
+
+--- PROMPT: use std::collections::HashMap; ---
+use std::collections::HashMap;use enum Default use rustctrtrust CustomperperificcttxctTrperperper(&StordInust_x_ared[ERROR]
+
+
+--- PROMPT: #[test] ---
+#[test]"))ature.reflect Safety where}impl Alylyonon//!//! use tokioangepanicsAurs A AEararar A A[ERROR]
+
+
+--- PROMPT: async fn fetch_url(url: &str) -> Result<String ---
+async fn fetch_url(url: &str) -> Result<String;// Fileet<<<astfig::Nanignignlete, _ _rs fn coain fn(mutmut A fn[ERROR]
+
+
+--- PROMPT: /// A thread-safe counter. ---
+/// A thread-safe counter.rcrc>::dyn(|| returnxfn v vicuse rustc rustc intexteses retextame usedame can reynot used can[ERROR]
+
+

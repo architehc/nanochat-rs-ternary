@@ -449,6 +449,155 @@ Pre-defined configurations in `config.rs`:
 
 ---
 
+## Rust Code Generation Training (275M, Engram Architecture)
+
+In addition to TinyStories, the model has been trained on ~97M tokens of Rust
+source code (from clap, serde, tokio, and other crates) using a BPE tokenizer
+with vocab=4096. The training uses the **Engram memory** architecture -- an
+n-gram hash table memory attached to select transformer layers for improved
+pattern recall.
+
+### Architecture: nano-275m-engram
+
+```
+NanochatTernary-275M (dim=1024, 20 layers, 16 heads, 4 KV heads)
+├── Token Embedding         4.2M params     FP16 (4096 x 1024)
+├── 20x Transformer Block   ~13M each       Ternary BitLinear + FP32 norms
+│   ├── GQA Attention (16Q/4KV heads)       Ternary BitLinear
+│   ├── SwiGLU FFN                          Ternary BitLinear
+│   └── Engram Memory (layers 0, 19)        n-gram hash table (d=128, table=10007)
+├── Final RMSNorm                           FP32
+└── LM Head                                 Ternary BitLinear (1024 x 4096)
+```
+
+### Training Configs and Results
+
+| Config | LR | Steps | Decay Start | Loss | Gnorm | Notes |
+|--------|-----|-------|-------------|------|-------|-------|
+| **engram-v1** | 0.012 | 10K | 80% (8K) | **2.19** | stable | **Best generation quality** |
+| engram-only | 0.012 | 20K | 80% (16K) | 3.09 | stable early | Longer but not better |
+| engram-v5 | 0.012 | 30K | 80% (24K) | diverged | 300+ at 9K | LR too high for long runs |
+| engram-v6 | 0.012 | 20K | 80%, clip=0.5 | diverged | 15+ at 10K | Grad clip delays, doesn't fix |
+| **engram-v7** | 0.008 | 10K | 80% (8K) | **3.22** | 2.0-2.4 | Rock stable, lower LR |
+| engram-v8 | 0.008 | 20K | 80% (16K) | 3.12 | stable | Extending v7 approach |
+| engram-v9 | 0.010 | 15K | 80% (12K) | 3.32 | 4.5-5.0 | Middle ground, mild instability |
+| engram-v10 | 0.012 | 15K | **50%** (7.5K) | in progress | TBD | Early decay hypothesis |
+| baseline-v1 (MTP) | 0.012 | 10K | 80% | H=2.92 | stable | No engram, comparable |
+| haar-v5 (wavefield) | 0.012 | 30K | 80% | **1.17** | stable | Bidirectional -- cannot generate |
+
+### Key Finding: Learning Rate Stability
+
+`lr=0.012` is unstable past ~9K steps at full learning rate -- gradient norms
+blow up exponentially. The "early decay hypothesis" explains why engram-v1
+(10K steps, decay at step 8K) succeeded: the model only saw ~6.5K steps at
+full LR before cosine decay started reducing it.
+
+| LR | Max Stable Steps | Gradient Norm |
+|----|-----------------|---------------|
+| 0.012 | ~8-9K | Blows up to 100+ after |
+| 0.010 | ~12K+ | Elevated (4-5) but survivable |
+| 0.008 | 20K+ (indefinite) | Rock stable (2.0-2.4) |
+
+### Coherence Benchmark (Automated)
+
+| Model | Composite | Syntax | Brackets | Repetition (3-gram) |
+|-------|-----------|--------|----------|---------------------|
+| **engram-v1** (loss 2.19) | **0.752** | **0.608** | 0.918 | **0.888** |
+| engram-v2 (loss 2.94) | 0.740 | 0.617 | 0.951 | 0.818 |
+| baseline-v1 (H=2.92) | 0.699 | 0.500 | 0.936 | 0.767 |
+
+### Generation Quality vs Loss
+
+- **loss ~3.5** (perplexity 33): gibberish, stuck on `{` repetition
+- **loss ~3.0** (perplexity 20): recognizes Rust patterns (vec![], struct), incoherent flow
+- **loss ~2.2** (perplexity 9): semi-coherent Rust with Cargo test patterns, struct/impl blocks
+- **loss ~1.5-2.0** (estimated): needed for fully coherent code generation
+
+### Sample Output (engram-v1, loss 2.19, temperature=0.8)
+
+```rust
+// Prompt: "pub struct Config {"
+pub struct Config {
+    pub id: String,
+}
+impl Config {
+    pub id: Vec<Span>,
+}
+impl Config for Config {}
+impl Config {
+    pub fn new(s: &Path) -> Config {
+        unsafe { Self(s) }
+    }
+}
+impl Config {
+    /// Config this is a `Serializer<Path>`.
+    pub fn sample(&self) -> Config {
+        self.0
+    }
+}
+```
+
+```rust
+// Prompt: "async fn handle_request(req: Request) -> Response {"
+async fn handle_request(req: Request) -> Response {
+    let (req, _) = mock_request(req);
+    let (req, _) = mock_request(req, service);
+    match (req, Err(err) {
+        Ok(err) => {
+            let (req, _) = mock_request(req, client).unwrap();
+            Ok(err.into_bytes())
+        } else {
+            None
+        })
+    }
+    Ok(req)
+}
+```
+
+The model generates syntactically plausible Rust code with correct use of
+`impl`, `struct`, `fn`, `match`, `async`, `Result`, `Option`, and other Rust
+idioms. While not compilable, it demonstrates that a 275M ternary-weight model
+can learn meaningful code structure from ~97M tokens.
+
+### Training Hardware (Rust Code Models)
+
+| Component | Specification |
+|-----------|--------------|
+| GPUs | 2x NVIDIA GeForce RTX 4090 (24 GB VRAM each) |
+| Training | Dual GPU concurrent runs (one model per GPU) |
+| Throughput | ~420 tok/s per GPU (batch=2, seq=256, dim=1024) |
+| VRAM usage | ~20-22 GB per model |
+
+### Quick Start (Rust Training)
+
+```bash
+# Build with CUDA support
+cd nanochat-rs-ternary
+cargo build --release -p nanochat-train --features cuda
+
+# Train engram-v1 config
+LD_LIBRARY_PATH=/usr/lib/wsl/lib:$LD_LIBRARY_PATH \
+./target/release/nanochat-train train \
+    --config nano-275m-engram-v1 \
+    --dataset tokens \
+    --data-path data/rust_v2_prepared/tokens.bin \
+    --batch-size 2 --seq-len 256 --epochs 999 \
+    --total-steps 10000 \
+    --checkpoint-dir checkpoints/nano-275m-engram-v1 \
+    --checkpoint-interval 2000 \
+    --log-interval 50 --device cuda
+
+# Generate text from checkpoint
+./target/release/nanochat-train generate \
+    --checkpoint checkpoints/nano-275m-engram-v1/final \
+    --tokenizer data/rust_v2_prepared/tokenizer.json \
+    --device cuda \
+    --prompt "fn main() {" \
+    --max-tokens 200 --temperature 0.8 --top-k 50
+```
+
+---
+
 ## Design Constraints
 
 1. **VPERMW/PSHUFB kernels are primary.** LUT-Grouped degrades at large K (L1 overflow).
