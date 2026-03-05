@@ -71,9 +71,9 @@ SAVE_INTERVAL_HOURS = 1
 GIT_PUSH_INTERVAL_HOURS = 2
 
 # Hyperparameters optimized for 5090 + QLoRA
-BATCH_SIZE = 2              # Per-device (QLoRA allows higher)
-GRAD_ACCUM_STEPS = 8        # Effective batch = 2 * 8 = 16
-MAX_SEQ_LEN = 8192          # Long context
+BATCH_SIZE = 1              # Per-device (151K vocab is huge)
+GRAD_ACCUM_STEPS = 16       # Effective batch = 1 * 16 = 16
+MAX_SEQ_LEN = 4096          # 151K vocab × 8192 OOMs; 4096 proven to work
 LEARNING_RATE = 1e-4        # Lower LR for long training (7 days)
 WEIGHT_DECAY = 0.05         # Slightly higher for regularization
 WARMUP_RATIO = 0.01         # 1% warmup (short relative to 7 days)
@@ -169,20 +169,17 @@ def gpu_info_str():
 
 
 def find_latest_checkpoint():
-    """Find latest checkpoint to resume from."""
-    if not CHECKPOINT_DIR.exists():
-        return None
-
+    """Find latest checkpoint to resume from. Only valid HF Trainer checkpoints."""
+    search_dirs = [CHECKPOINT_DIR, OUTPUT_DIR]
     checkpoints = []
-    for d in CHECKPOINT_DIR.iterdir():
-        if d.is_dir() and (d / "adapter_model.safetensors").exists():
-            # Get modification time
-            mtime = (d / "adapter_model.safetensors").stat().st_mtime
-            checkpoints.append((mtime, d))
 
-    # Also check HF trainer checkpoints in output dir
-    for d in OUTPUT_DIR.iterdir():
-        if d.is_dir() and d.name.startswith("checkpoint-"):
+    for search_dir in search_dirs:
+        if not search_dir.exists():
+            continue
+        for d in search_dir.iterdir():
+            if not d.is_dir():
+                continue
+            # Must have trainer_state.json to be a valid resume point
             trainer_state = d / "trainer_state.json"
             if trainer_state.exists():
                 mtime = trainer_state.stat().st_mtime
@@ -384,10 +381,11 @@ def main():
     logger.info(f"GPU: {gpu_info_str()}")
 
     # Enable optimizations
+    os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     torch._inductor.config.triton.cudagraphs = False
-    torch.cuda.set_per_process_memory_fraction(0.95, device=0)
+    torch.cuda.set_per_process_memory_fraction(0.97, device=0)
     logger.info("TF32 + BF16 enabled for Blackwell")
 
     # Load tokenizer
@@ -482,6 +480,19 @@ def main():
         ddp_find_unused_parameters=False,
         label_names=["labels"],
     )
+
+    # Truncate dataset if prepared with longer sequences
+    def truncate_to_max_len(example):
+        for key in ["input_ids", "attention_mask", "labels"]:
+            if key in example and len(example[key]) > MAX_SEQ_LEN:
+                example[key] = example[key][:MAX_SEQ_LEN]
+        return example
+
+    sample_len = len(dataset["train"][0]["input_ids"])
+    if sample_len > MAX_SEQ_LEN:
+        logger.info(f"Truncating sequences from {sample_len} to {MAX_SEQ_LEN}")
+        dataset["train"] = dataset["train"].map(truncate_to_max_len, num_proc=8)
+        dataset["validation"] = dataset["validation"].map(truncate_to_max_len, num_proc=8)
 
     # Data collator
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
