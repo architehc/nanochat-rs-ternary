@@ -1,16 +1,12 @@
 {
-  "timestamp": "2026-03-05T10:24:15.390218",
-  "step": 0,
+  "timestamp": "2026-03-05T11:26:43.504220",
+  "step": 92,
   "loss": 0,
-  "elapsed_hours": 0.2,
-  "remaining_hours": 167.8,
+  "elapsed_hours": 1.0,
+  "remaining_hours": 167.0,
   "gpu": {
-    "mem_allocated_gb": 22.471832576,
-    "mem_reserved_gb": 28.194111488,
-    "mem_total_gb": 34.19045888,
-    "temp_c": 52,
-    "power_w": 60.49,
-    "fan_pct": 0,
-    "gpu_util_pct": 0
+    "mem_allocated_gb": 18.20108544,
+    "mem_reserved_gb": 30.320623616,
+    "mem_total_gb": 34.19045888
   }
 }

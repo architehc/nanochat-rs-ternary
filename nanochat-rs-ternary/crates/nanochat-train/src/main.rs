@@ -105,6 +105,12 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-275m-haar-v3" | "nano_275m_haar_v3" => {
             Some(TrainConfig::nano_275m_haar_v3())
         }
+        "nano-500m-engram-5090" | "nano_500m_engram_5090" => {
+            Some(TrainConfig::nano_500m_engram_5090())
+        }
+        "nano-275m-engram-5090" | "nano_275m_engram_5090" => {
+            Some(TrainConfig::nano_275m_engram_5090())
+        }
         _ => None,
     }
 }

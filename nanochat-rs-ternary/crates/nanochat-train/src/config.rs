@@ -1930,6 +1930,104 @@ impl TrainConfig {
         }
     }
 
+    /// nano-500m Engram v1 for RTX 5090 (32GB GDDR7).
+    /// Combines the best-performing architecture (engram) at larger 500M scale.
+    /// 121M token Rust dataset → ~100K steps for 7-day training.
+    /// Uses extra VRAM headroom for larger batch size + MTP.
+    pub fn nano_500m_engram_5090() -> Self {
+        Self {
+            dim: 1280,
+            n_layers: 16,
+            n_heads: 16,
+            n_kv_heads: 4,     // GQA 4:1
+            ffn_mult: 2.6875,  // ffn_dim = 3456, aligned to 128
+            vocab_size: 4096,
+            max_seq_len: 1024,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: None,
+
+            lr: 0.010,         // Conservative for long training (v14 best)
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 4,     // 5090 has 32GB (vs 24GB on 4090)
+            grad_accum_steps: 1, // Candle memory management
+            warmup_steps: 2000,
+            total_steps: 100_000, // 7 days target
+            decay_start_frac: 0.53, // Decay at ~53K steps (v14-style early decay)
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+
+            // MTP for data efficiency
+            use_mtp: true,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: true,
+            async_n_workers: 8,   // 5090 system has many cores
+            async_prefetch_size: 16,
+
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.01, // Gentle entropy regularization
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+
+            use_wave_field: false,
+            wavefield_field_size: 256,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 0.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
+
+            // Engram on 3 layers (early, mid, late)
+            use_engram: true,
+            engram_d_mem: 128,
+            engram_n_gram_orders: vec![2, 3],
+            engram_n_heads: 4,
+            engram_table_size: 10007,
+            engram_layers: vec![0, 8, 15],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
+        }
+    }
+
+    /// nano-275m Engram for RTX 5090 — larger batch, more steps, 7-day run.
+    /// Based on v13/v14 (best losses) but extended for 5090's extra VRAM.
+    pub fn nano_275m_engram_5090() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.batch_size = 4;        // 5090 can handle this
+        cfg.total_steps = 100_000; // 7-day training
+        cfg.lr = 0.010;            // v14 LR (stable)
+        cfg.warmup_steps = 2000;
+        cfg.decay_start_frac = 0.53;
+        cfg.use_mtp = true;
+        cfg.mtp_n_tokens = 3;
+        cfg.mtp_weight = 0.2;
+        cfg.entropy_weight = 0.01;
+        cfg.async_n_workers = 8;
+        cfg.async_prefetch_size = 16;
+        cfg
+    }
+
     /// 125M hybrid: 50% standard attention + 50% wave field (interleaved).
     pub fn nano_125m_hybrid() -> Self {
         let mut cfg = Self::nano_125m();
