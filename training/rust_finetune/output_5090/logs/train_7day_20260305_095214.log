@@ -1,0 +1,115 @@
+2026-03-05 09:52:14,268 [INFO] Logging to /home/galic/nanochat-rs-ternary/training/rust_finetune/output_5090/logs/train_7day_20260305_095214.log
+2026-03-05 09:52:14,268 [INFO] ======================================================================
+2026-03-05 09:52:14,268 [INFO] 7-DAY RTX 5090 BLACKWELL TRAINING: RUST CODE LLM
+2026-03-05 09:52:14,268 [INFO] ======================================================================
+2026-03-05 09:52:14,268 [INFO] Model: Qwen/Qwen2.5-Coder-7B
+2026-03-05 09:52:14,269 [INFO] QLoRA: True (4-bit NF4)
+2026-03-05 09:52:14,269 [INFO] LoRA rank: 256, alpha: 512
+2026-03-05 09:52:14,269 [INFO] Batch: 2 x 8 = 16
+2026-03-05 09:52:14,269 [INFO] Seq length: 8192
+2026-03-05 09:52:14,269 [INFO] Duration: 7 days (168 hours)
+2026-03-05 09:52:14,326 [INFO] GPU: VRAM: 0.0/34GB | Temp: 30°C | Power: 42W | Util: 1%
+2026-03-05 09:52:14,326 [INFO] TF32 + BF16 enabled for Blackwell
+2026-03-05 09:52:14,476 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 09:52:14,484 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
+2026-03-05 09:52:14,517 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 09:52:14,523 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-03-05 09:52:14,551 [INFO] HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-Coder-7B/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-03-05 09:52:14,584 [INFO] HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-Coder-7B/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-03-05 09:52:14,968 [INFO] HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-Coder-7B "HTTP/1.1 200 OK"
+2026-03-05 09:52:14,969 [INFO] Loading model: Qwen/Qwen2.5-Coder-7B
+2026-03-05 09:52:14,969 [INFO] Using QLoRA 4-bit NF4 quantization
+2026-03-05 09:52:14,998 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 09:52:15,009 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
+2026-03-05 09:52:15,046 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 09:52:15,057 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
+2026-03-05 09:52:29,230 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/generation_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 09:52:29,240 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/generation_config.json "HTTP/1.1 200 OK"
+2026-03-05 09:52:29,271 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/custom_generate/generate.py "HTTP/1.1 404 Not Found"
+2026-03-05 09:52:29,346 [INFO] Model loaded. VRAM: 7.8/34GB | Temp: 32°C | Power: 84W | Util: 10%
+2026-03-05 09:52:31,918 [INFO] LoRA r=256: 646M trainable / 8.26B total (7.82%)
+2026-03-05 09:52:31,943 [INFO] After LoRA: VRAM: 10.4/34GB | Temp: 31°C | Power: 58W | Util: 5%
+2026-03-05 09:52:31,943 [INFO] Loading dataset from: /home/galic/nanochat-rs-ternary/training/rust_finetune/data/rust_code_v2
+2026-03-05 09:52:31,951 [INFO] Train: 38,550 sequences, Val: 389 sequences
+2026-03-05 09:52:31,951 [INFO] Max steps: 302,400
+2026-03-05 09:52:31,951 [INFO] Steps per epoch: 2,409
+2026-03-05 09:52:31,951 [INFO] Expected epochs: 125.5
+2026-03-05 09:52:31,975 [INFO] Running initial evaluation...
+2026-03-05 10:02:04,468 [INFO] Initial eval loss: 0.7164
+2026-03-05 10:02:04,468 [INFO] ======================================================================
+2026-03-05 10:02:04,468 [INFO] STARTING 7-DAY TRAINING
+2026-03-05 10:02:04,468 [INFO] Target: 168h, 302,400 steps
+2026-03-05 10:02:04,468 [INFO] ======================================================================
+2026-03-05 10:02:08,017 [ERROR] Training error: CUDA out of memory. Tried to allocate 9.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 3.50 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. 30.25 GiB allowed; Of the allocated memory 23.28 GiB is allocated by PyTorch, and 3.25 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+Traceback (most recent call last):
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/train_7day.py", line 529, in main
+    train_result = trainer.train(resume_from_checkpoint=resume_checkpoint)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1424, in train
+    return inner_training_loop(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1506, in _inner_training_loop
+    self._run_epoch(
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1734, in _run_epoch
+    tr_loss_step = self.training_step(model, inputs, num_items_in_batch)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/train_7day.py", line 306, in training_step
+    loss = super().training_step(model, inputs, num_items_in_batch)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1906, in training_step
+    loss = self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1978, in compute_loss
+    outputs = model(**inputs)
+              ^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/accelerate/utils/operations.py", line 823, in forward
+    return model_forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/accelerate/utils/operations.py", line 811, in __call__
+    return convert_to_fp32(self.model_forward(*args, **kwargs))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/amp/autocast_mode.py", line 44, in decorate_autocast
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/accelerate/utils/operations.py", line 823, in forward
+    return model_forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/accelerate/utils/operations.py", line 811, in __call__
+    return convert_to_fp32(self.model_forward(*args, **kwargs))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/amp/autocast_mode.py", line 44, in decorate_autocast
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/peft/peft_model.py", line 1923, in forward
+    return self.base_model(
+           ^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/peft/tuners/tuners_utils.py", line 311, in forward
+    return self.model.forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/utils/generic.py", line 843, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/models/qwen2/modeling_qwen2.py", line 494, in forward
+    loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/loss/loss_utils.py", line 55, in ForCausalLMLoss
+    logits = logits.float()
+             ^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 9.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 3.50 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. 30.25 GiB allowed; Of the allocated memory 23.28 GiB is allocated by PyTorch, and 3.25 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+2026-03-05 10:02:08,147 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 10:02:08,158 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
+2026-03-05 10:02:08,183 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 10:02:08,194 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
+2026-03-05 10:02:11,312 [INFO] Emergency save: /home/galic/nanochat-rs-ternary/training/rust_finetune/output_5090/checkpoints/checkpoint-emergency

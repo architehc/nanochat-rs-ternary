@@ -1,0 +1,282 @@
+======================================================================
+EXPANDED DATA DOWNLOAD FOR 7-DAY RTX 5090 TRAINING
+Target: 500M+ tokens from 120 repos
+======================================================================
+
+Cloning 120 repos...
+  [OK] rustlings
+  [OK] hashbrown
+  [OK] mdBook
+  [OK] rustfmt
+  [OK] miri
+  [OK] serde
+  [OK] syn
+  [OK] anyhow
+  [OK] proc-macro2
+  [OK] quote
+  [OK] semver
+  [OK] paste
+  [OK] mio
+  [OK] axum
+  [OK] tracing
+  [OK] cargo
+  [OK] rust-clippy
+  [OK] tokio
+  [OK] bytes
+  [OK] rust-analyzer
+  [OK] hyper
+  [OK] reqwest
+  [OK] thiserror
+  [OK] actix-web
+  [OK] quinn
+  [OK] json
+  [OK] rustls
+  [FAIL] csv: Cloning into '/home/galic/nanochat-rs-ternary/training/rust_finetune/data/rust_repos_v2/csv-rs_csv'...
+remote: Repository not found.
+fatal: repository 'https://github.com/csv-rs/csv.git/' not found
+
+  [OK] serde-yaml
+  [OK] toml
+  [OK] fd
+  [OK] ripgrep
+  [OK] hyperfine
+  [OK] delta
+  [OK] quiche
+  [OK] bat
+  [OK] eza
+  [OK] zoxide
+  [OK] tonic
+  [OK] exa
+  [OK] dust
+  [OK] procs
+  [OK] tokei
+  [OK] rayon
+  [OK] lazy-static.rs
+  [OK] bandwhich
+  [OK] crossbeam
+  [OK] starship
+  [OK] console
+  [OK] alacritty
+  [OK] gluon
+  [OK] bottom
+  [OK] pest
+  [OK] nickel
+  [FAIL] grmtools: Cloning into '/home/galic/nanochat-rs-ternary/training/rust_finetune/data/rust_repos_v2/grmtools_grmtools'...
+remote: Repository not found.
+fatal: repository 'https://github.com/grmtools/grmtools.git/
+  [OK] lalrpop
+  [OK] tree-sitter
+  [OK] grmtools
+  [OK] nushell
+  [OK] sqlx
+  [OK] zellij
+  [OK] sea-orm
+  [OK] poem
+  [OK] iron
+  [OK] salvo
+  [OK] diesel
+  [OK] hashes
+  [OK] tikv
+  [OK] block-ciphers
+  [OK] ring
+  [OK] nannou
+  [OK] datafusion
+  [OK] embassy
+  [OK] eyre
+  [OK] trybuild
+  [OK] rCore-Tutorial-v3
+  [OK] log
+  [OK] env_logger
+  [OK] surrealdb
+  [OK] predicates-rs
+  [OK] proptest
+  [OK] ndarray
+  [OK] nalgebra
+  [OK] image
+  [OK] bevy
+  [OK] bazel-lib
+  [OK] clap
+  [OK] itertools
+  [OK] chrono
+  [FAIL] regex: Cloning into '/home/galic/nanochat-rs-ternary/training/rust_finetune/data/rust_repos_v2/regex-rs_regex'...
+remote: Repository not found.
+fatal: repository 'https://github.com/regex-rs/regex.git/' not 
+  [OK] candle
+  [OK] blog_os
+  [OK] bitflags
+  [OK] uuid
+  [OK] rand
+  [OK] tokenizers
+  [OK] linked-hash-map
+  [OK] indexmap
+  [OK] wgpu
+  [OK] memchr
+  [OK] nickel.rs
+  [OK] pyo3
+  [OK] sccache
+  [OK] tract
+  [OK] burn
+  [OK] petgraph
+  [OK] meilisearch
+  [OK] deno_core
+  [OK] rust-libp2p
+  [OK] uv
+  [OK] wezterm
+  [OK] pixi
+  [OK] typst
+  [OK] tch-rs
+  [OK] foundry
+  [OK] solana
+  [OK] substrate
+  [OK] reth
+  [OK] ruff
+  [OK] aptos-core
+
+Cloned: 117/120 repos (3 failed)
+
+Extracting Rust files...
+  BurntSushi_memchr: 45 files (0.6 MB)
+  BurntSushi_ripgrep: 89 files (1.4 MB)
+  ClementTsang_bottom: 146 files (1.0 MB)
+  LaurentMazare_tch-rs: 113 files (0.7 MB)
+  PyO3_pyo3: 385 files (3.3 MB)
+  RustCrypto_block-ciphers: 97 files (0.6 MB)
+  RustCrypto_hashes: 129 files (0.6 MB)
+  SeaQL_sea-orm: 989 files (5.3 MB)
+  XAMPPRocky_tokei: 19 files (0.2 MB)
+  actix_actix-web: 294 files (2.6 MB)
+  ajeetdsouza_zoxide: 18 files (0.1 MB)
+  alacritty_alacritty: 87 files (1.0 MB)
+  apache_datafusion: 1242 files (18.7 MB)
+  aptos-labs_aptos-core: 3440 files (32.9 MB)
+  assert-rs_predicates-rs: 29 files (0.1 MB)
+  astral-sh_ruff: 1691 files (15.9 MB)
+  astral-sh_uv: 516 files (7.8 MB)
+  bevyengine_bevy: 1535 files (17.3 MB)
+  bitflags_bitflags: 78 files (0.2 MB)
+  bluss_petgraph: 95 files (1.2 MB)
+  bootandy_dust: 16 files (0.1 MB)
+  briansmith_ring: 197 files (1.1 MB)
+  chronotope_chrono: 44 files (1.3 MB)
+  clap-rs_clap: 287 files (2.0 MB)
+  cloudflare_quiche: 199 files (3.1 MB)
+  contain-rs_linked-hash-map: 6 files (0.1 MB)
+  crossbeam-rs_crossbeam: 109 files (1.3 MB)
+  dalance_procs: 100 files (0.4 MB)
+  dandavison_delta: 79 files (0.9 MB)
+  denoland_deno_core: 176 files (1.7 MB)
+  diesel-rs_diesel: 697 files (4.2 MB)
+  dimforge_nalgebra: 386 files (3.0 MB)
+  dtolnay_anyhow: 31 files (0.2 MB)
+  dtolnay_paste: 12 files (0.0 MB)
+  dtolnay_proc-macro2: 21 files (0.2 MB)
+  dtolnay_quote: 12 files (0.1 MB)
+  dtolnay_semver: 14 files (0.1 MB)
+  dtolnay_serde: 96 files (1.3 MB)
+  dtolnay_serde-yaml: 27 files (0.4 MB)
+  dtolnay_syn: 114 files (1.3 MB)
+  dtolnay_thiserror: 40 files (0.1 MB)
+  dtolnay_trybuild: 32 files (0.1 MB)
+  embassy-rs_embassy: 1644 files (11.0 MB)
+  env-logger-rs_env_logger: 25 files (0.1 MB)
+  eza-community_eza: 63 files (0.6 MB)
+  foundry-rs_foundry: 525 files (5.8 MB)
+  gfx-rs_wgpu: 568 files (8.4 MB)
+  gluon-lang_gluon: 181 files (2.3 MB)
+  huggingface_candle: 540 files (6.0 MB)
+  huggingface_tokenizers: 113 files (1.2 MB)
+  hyperium_hyper: 78 files (0.8 MB)
+  hyperium_tonic: 298 files (2.0 MB)
+  image-rs_image: 88 files (1.3 MB)
+  imsnif_bandwhich: 28 files (0.2 MB)
+  indexmap-rs_indexmap: 33 files (0.5 MB)
+  iron_iron: 42 files (0.1 MB)
+  lalrpop_lalrpop: 136 files (0.9 MB)
+  launchbadge_sqlx: 433 files (2.6 MB)
+  libp2p_rust-libp2p: 410 files (4.0 MB)
+  meilisearch_meilisearch: 644 files (7.9 MB)
+  mozilla_sccache: 70 files (1.3 MB)
+  nannou-org_nannou: 323 files (2.3 MB)
+  nickel-lang_nickel: 183 files (2.6 MB)
+  nickel-org_nickel.rs: 72 files (0.2 MB)
+  nushell_nushell: 1524 files (10.4 MB)
+  ogham_exa: 53 files (0.4 MB)
+  paradigmxyz_reth: 1192 files (12.7 MB)
+  paritytech_substrate: 1686 files (17.8 MB)
+  pest-parser_pest: 64 files (0.7 MB)
+  poem-web_poem: 388 files (1.9 MB)
+  prefix-dev_pixi: 486 files (4.8 MB)
+  proptest-rs_proptest: 176 files (1.0 MB)
+  quinn-rs_quinn: 91 files (1.2 MB)
+  rayon-rs_rayon: 181 files (1.1 MB)
+  rcore-os_rCore-Tutorial-v3: 128 files (0.3 MB)
+  rust-itertools_itertools: 63 files (0.5 MB)
+  rust-lang-nursery_lazy-static.rs: 7 files (0.0 MB)
+  rust-lang_cargo: 892 files (8.2 MB)
+  rust-lang_hashbrown: 26 files (0.3 MB)
+  rust-lang_log: 12 files (0.2 MB)
+  rust-lang_mdBook: 79 files (0.5 MB)
+  rust-lang_miri: 1065 files (3.9 MB)
+  rust-lang_rust-analyzer: 895 files (13.5 MB)
+  rust-lang_rust-clippy: 1938 files (8.0 MB)
+  rust-lang_rustfmt: 355 files (1.7 MB)
+  rust-lang_rustlings: 180 files (0.3 MB)
+  rust-ndarray_ndarray: 134 files (1.2 MB)
+  rust-random_rand: 33 files (0.4 MB)
+  rustls_rustls: 163 files (2.5 MB)
+  salvo-rs_salvo: 373 files (2.9 MB)
+  seanmonstar_reqwest: 73 files (0.7 MB)
+  serde-rs_json: 50 files (0.7 MB)
+  sharkdp_bat: 60 files (0.4 MB)
+  sharkdp_fd: 21 files (0.2 MB)
+  sharkdp_hyperfine: 38 files (0.2 MB)
+  softdevteam_grmtools: 52 files (0.9 MB)
+  solana-labs_solana: 1027 files (13.2 MB)
+  sonos_tract: 732 files (5.1 MB)
+  starship_starship: 236 files (1.5 MB)
+  surrealdb_surrealdb: 1284 files (9.0 MB)
+  tikv_tikv: 1131 files (16.5 MB)
+  tokio-rs_axum: 250 files (1.3 MB)
+  tokio-rs_bytes: 31 files (0.4 MB)
+  tokio-rs_console: 70 files (0.6 MB)
+  tokio-rs_mio: 77 files (0.7 MB)
+  tokio-rs_tokio: 713 files (5.3 MB)
+  tokio-rs_tracing: 234 files (2.2 MB)
+  toml-rs_toml: 158 files (1.3 MB)
+  tracel-ai_burn: 1327 files (8.5 MB)
+  tree-sitter_tree-sitter: 93 files (1.5 MB)
+  typst_typst: 378 files (4.6 MB)
+  uuid-rs_uuid: 32 files (0.3 MB)
+  wez_wezterm: 419 files (5.3 MB)
+  yaahc_eyre: 59 files (0.3 MB)
+  zellij-org_zellij: 251 files (4.2 MB)
+
+Adding existing local data...
+  Added 156 local .rs files
+  Added 1140 chunks from /home/galic/nanochat-rs-ternary/nanochat-rs-ternary/data/combined_rust.txt
+
+Total: 42506 files, 389.0 MB raw text
+
+Tokenizing...
+Tokenizing (num_proc=16):   0%|          | 0/42506 [00:00<?, ? examples/s]Tokenizing (num_proc=16):   0%|          | 200/42506 [00:04<16:48, 41.93 examples/s]Tokenizing (num_proc=16):   1%|          | 400/42506 [00:06<09:40, 72.48 examples/s]Tokenizing (num_proc=16):   1%|▏         | 600/42506 [00:06<05:55, 117.72 examples/s]Tokenizing (num_proc=16):   2%|▏         | 800/42506 [00:07<04:18, 161.39 examples/s]Tokenizing (num_proc=16):   2%|▏         | 1000/42506 [00:07<03:07, 221.92 examples/s]Tokenizing (num_proc=16):   3%|▎         | 1200/42506 [00:08<02:51, 240.19 examples/s]Token indices sequence length is longer than the specified maximum sequence length for this model (37008 > 32768). Running this sequence through the model will result in indexing errors
+Tokenizing (num_proc=16):   3%|▎         | 1400/42506 [00:08<02:19, 295.37 examples/s]Tokenizing (num_proc=16):   4%|▍         | 1600/42506 [00:08<02:01, 336.81 examples/s]Tokenizing (num_proc=16):   4%|▍         | 1800/42506 [00:09<01:59, 340.82 examples/s]Tokenizing (num_proc=16):   5%|▌         | 2200/42506 [00:09<01:17, 522.95 examples/s]Tokenizing (num_proc=16):   6%|▌         | 2400/42506 [00:10<01:55, 346.35 examples/s]Tokenizing (num_proc=16):   7%|▋         | 3000/42506 [00:11<01:14, 533.80 examples/s]Token indices sequence length is longer than the specified maximum sequence length for this model (53353 > 32768). Running this sequence through the model will result in indexing errors
+Tokenizing (num_proc=16):   8%|▊         | 3400/42506 [00:11<00:57, 685.66 examples/s]Tokenizing (num_proc=16):   8%|▊         | 3600/42506 [00:12<00:57, 675.62 examples/s]Tokenizing (num_proc=16):   9%|▉         | 3800/42506 [00:13<01:28, 439.02 examples/s]Tokenizing (num_proc=16):   9%|▉         | 4000/42506 [00:13<01:23, 462.44 examples/s]Tokenizing (num_proc=16):  11%|█▏        | 4800/42506 [00:13<00:43, 873.33 examples/s]Tokenizing (num_proc=16):  12%|█▏        | 5000/42506 [00:13<00:39, 961.12 examples/s]Tokenizing (num_proc=16):  12%|█▏        | 5200/42506 [00:14<00:43, 850.28 examples/s]Tokenizing (num_proc=16):  13%|█▎        | 5400/42506 [00:14<00:47, 789.11 examples/s]Tokenizing (num_proc=16):  14%|█▎        | 5800/42506 [00:14<00:35, 1039.31 examples/s]Token indices sequence length is longer than the specified maximum sequence length for this model (53349 > 32768). Running this sequence through the model will result in indexing errors
+Tokenizing (num_proc=16):  15%|█▍        | 6200/42506 [00:15<00:57, 629.21 examples/s] Tokenizing (num_proc=16):  15%|█▌        | 6400/42506 [00:15<00:52, 689.80 examples/s]Tokenizing (num_proc=16):  17%|█▋        | 7200/42506 [00:16<00:30, 1146.78 examples/s]Tokenizing (num_proc=16):  17%|█▋        | 7400/42506 [00:16<00:36, 956.21 examples/s] Tokenizing (num_proc=16):  18%|█▊        | 7800/42506 [00:16<00:28, 1200.54 examples/s]Tokenizing (num_proc=16):  19%|█▉        | 8057/42506 [00:16<00:27, 1267.64 examples/s]Tokenizing (num_proc=16):  19%|█▉        | 8257/42506 [00:17<00:31, 1079.73 examples/s]Tokenizing (num_proc=16):  20%|█▉        | 8457/42506 [00:17<00:30, 1124.19 examples/s]Tokenizing (num_proc=16):  20%|██        | 8657/42506 [00:17<00:32, 1050.33 examples/s]Tokenizing (num_proc=16):  21%|██        | 8857/42506 [00:18<00:56, 594.38 examples/s] Tokenizing (num_proc=16):  21%|██▏       | 9057/42506 [00:18<00:53, 629.71 examples/s]Tokenizing (num_proc=16):  22%|██▏       | 9257/42506 [00:20<01:52, 296.33 examples/s]Tokenizing (num_proc=16):  24%|██▍       | 10114/42506 [00:20<00:43, 752.43 examples/s]Tokenizing (num_proc=16):  27%|██▋       | 11314/42506 [00:23<00:59, 528.38 examples/s]Tokenizing (num_proc=16):  34%|███▍      | 14371/42506 [00:24<00:24, 1131.99 examples/s]Tokenizing (num_proc=16):  35%|███▌      | 14971/42506 [00:26<00:34, 809.48 examples/s] Tokenizing (num_proc=16):  38%|███▊      | 16028/42506 [00:26<00:24, 1088.68 examples/s]Tokenizing (num_proc=16):  39%|███▊      | 16428/42506 [00:26<00:22, 1163.52 examples/s]Tokenizing (num_proc=16):  40%|███▉      | 16828/42506 [00:27<00:26, 961.42 examples/s] Tokenizing (num_proc=16):  41%|████      | 17428/42506 [00:29<00:37, 669.38 examples/s]Token indices sequence length is longer than the specified maximum sequence length for this model (35968 > 32768). Running this sequence through the model will result in indexing errors
+Token indices sequence length is longer than the specified maximum sequence length for this model (34883 > 32768). Running this sequence through the model will result in indexing errors
+Tokenizing (num_proc=16):  46%|████▋     | 19685/42506 [00:32<00:31, 718.18 examples/s]Tokenizing (num_proc=16):  49%|████▉     | 20885/42506 [00:32<00:23, 924.41 examples/s]Tokenizing (num_proc=16):  50%|████▉     | 21085/42506 [00:32<00:23, 903.30 examples/s]Tokenizing (num_proc=16):  50%|█████     | 21285/42506 [00:33<00:24, 852.09 examples/s]Tokenizing (num_proc=16):  54%|█████▎    | 22742/42506 [00:34<00:22, 863.51 examples/s]Token indices sequence length is longer than the specified maximum sequence length for this model (35246 > 32768). Running this sequence through the model will result in indexing errors
+Tokenizing (num_proc=16):  57%|█████▋    | 24399/42506 [00:37<00:25, 718.75 examples/s]Tokenizing (num_proc=16):  64%|██████▍   | 27256/42506 [00:40<00:17, 851.51 examples/s]Tokenizing (num_proc=16):  71%|███████   | 30113/42506 [00:43<00:13, 928.63 examples/s]Tokenizing (num_proc=16):  75%|███████▌  | 31970/42506 [00:44<00:09, 1070.26 examples/s]Tokenizing (num_proc=16):  80%|███████▉  | 33970/42506 [00:44<00:05, 1428.39 examples/s]Token indices sequence length is longer than the specified maximum sequence length for this model (33829 > 32768). Running this sequence through the model will result in indexing errors
+Tokenizing (num_proc=16):  81%|████████  | 34426/42506 [00:44<00:05, 1480.78 examples/s]Tokenizing (num_proc=16):  82%|████████▏ | 34826/42506 [00:45<00:05, 1339.66 examples/s]Tokenizing (num_proc=16):  83%|████████▎ | 35226/42506 [00:46<00:08, 878.41 examples/s] Tokenizing (num_proc=16):  86%|████████▌ | 36482/42506 [00:46<00:04, 1297.08 examples/s]Tokenizing (num_proc=16):  87%|████████▋ | 36882/42506 [00:47<00:04, 1174.73 examples/s]Tokenizing (num_proc=16):  88%|████████▊ | 37282/42506 [00:47<00:04, 1107.74 examples/s]Tokenizing (num_proc=16):  89%|████████▊ | 37682/42506 [00:49<00:06, 789.37 examples/s] Token indices sequence length is longer than the specified maximum sequence length for this model (41183 > 32768). Running this sequence through the model will result in indexing errors
+Tokenizing (num_proc=16):  91%|█████████ | 38482/42506 [00:49<00:03, 1104.03 examples/s]Tokenizing (num_proc=16):  91%|█████████▏| 38882/42506 [00:49<00:03, 960.11 examples/s] Tokenizing (num_proc=16):  92%|█████████▏| 39282/42506 [00:50<00:02, 1076.66 examples/s]Tokenizing (num_proc=16):  93%|█████████▎| 39538/42506 [00:50<00:03, 848.22 examples/s] Tokenizing (num_proc=16):  93%|█████████▎| 39738/42506 [00:51<00:03, 777.72 examples/s]Tokenizing (num_proc=16):  94%|█████████▍| 39938/42506 [00:52<00:05, 474.86 examples/s]Tokenizing (num_proc=16):  96%|█████████▌| 40794/42506 [00:52<00:02, 781.27 examples/s]Tokenizing (num_proc=16):  96%|█████████▋| 40994/42506 [00:53<00:02, 646.54 examples/s]Tokenizing (num_proc=16):  97%|█████████▋| 41194/42506 [00:54<00:02, 462.89 examples/s]Tokenizing (num_proc=16):  98%|█████████▊| 41594/42506 [00:54<00:01, 612.68 examples/s]Tokenizing (num_proc=16):  98%|█████████▊| 41794/42506 [00:55<00:01, 530.12 examples/s]Tokenizing (num_proc=16):  99%|█████████▉| 41994/42506 [00:55<00:00, 599.25 examples/s]Tokenizing (num_proc=16):  99%|█████████▉| 42250/42506 [00:56<00:00, 436.54 examples/s]Tokenizing (num_proc=16): 100%|█████████▉| 42450/42506 [00:57<00:00, 332.44 examples/s]Tokenizing (num_proc=16): 100%|██████████| 42506/42506 [00:59<00:00, 712.89 examples/s]
+
+Sequences: 38939
+Tokens: ~319M
+Saving the dataset (0/9 shards):   0%|          | 0/38550 [00:00<?, ? examples/s]Saving the dataset (0/9 shards):   5%|▌         | 2000/38550 [00:00<00:03, 10976.75 examples/s]Saving the dataset (0/9 shards):  10%|█         | 4000/38550 [00:00<00:03, 11412.55 examples/s]Saving the dataset (1/9 shards):  11%|█         | 4284/38550 [00:00<00:03, 11412.55 examples/s]Saving the dataset (1/9 shards):  14%|█▎        | 5284/38550 [00:00<00:02, 11578.85 examples/s]Saving the dataset (1/9 shards):  19%|█▉        | 7284/38550 [00:00<00:02, 11872.01 examples/s]Saving the dataset (1/9 shards):  22%|██▏       | 8568/38550 [00:00<00:02, 11969.74 examples/s]Saving the dataset (2/9 shards):  22%|██▏       | 8568/38550 [00:00<00:02, 11969.74 examples/s]Saving the dataset (2/9 shards):  27%|██▋       | 10568/38550 [00:00<00:02, 12149.58 examples/s]Saving the dataset (2/9 shards):  33%|███▎      | 12568/38550 [00:01<00:02, 12278.52 examples/s]Saving the dataset (3/9 shards):  33%|███▎      | 12852/38550 [00:01<00:02, 12278.52 examples/s]Saving the dataset (3/9 shards):  36%|███▌      | 13852/38550 [00:01<00:02, 12209.31 examples/s]Saving the dataset (3/9 shards):  41%|████      | 15852/38550 [00:01<00:01, 12018.88 examples/s]Saving the dataset (4/9 shards):  44%|████▍     | 17135/38550 [00:01<00:01, 12018.88 examples/s]Saving the dataset (4/9 shards):  47%|████▋     | 18135/38550 [00:01<00:01, 12521.25 examples/s]Saving the dataset (4/9 shards):  52%|█████▏    | 20135/38550 [00:01<00:01, 12542.40 examples/s]Saving the dataset (5/9 shards):  56%|█████▌    | 21418/38550 [00:01<00:01, 12542.40 examples/s]Saving the dataset (5/9 shards):  58%|█████▊    | 22418/38550 [00:01<00:01, 12608.98 examples/s]Saving the dataset (5/9 shards):  63%|██████▎   | 24418/38550 [00:01<00:01, 12696.16 examples/s]Saving the dataset (5/9 shards):  67%|██████▋   | 25701/38550 [00:02<00:01, 12558.67 examples/s]Saving the dataset (6/9 shards):  67%|██████▋   | 25701/38550 [00:02<00:01, 12558.67 examples/s]Saving the dataset (6/9 shards):  72%|███████▏  | 27701/38550 [00:02<00:00, 12635.02 examples/s]Saving the dataset (6/9 shards):  77%|███████▋  | 29701/38550 [00:02<00:00, 12782.50 examples/s]Saving the dataset (7/9 shards):  78%|███████▊  | 29984/38550 [00:02<00:00, 12782.50 examples/s]Saving the dataset (7/9 shards):  83%|████████▎ | 31984/38550 [00:02<00:00, 12942.34 examples/s]Saving the dataset (7/9 shards):  88%|████████▊ | 33984/38550 [00:02<00:00, 12856.29 examples/s]Saving the dataset (8/9 shards):  89%|████████▉ | 34267/38550 [00:02<00:00, 12856.29 examples/s]Saving the dataset (8/9 shards):  94%|█████████▍| 36267/38550 [00:02<00:00, 13095.33 examples/s]Saving the dataset (8/9 shards):  99%|█████████▉| 38267/38550 [00:03<00:00, 13155.65 examples/s]Saving the dataset (9/9 shards): 100%|██████████| 38550/38550 [00:03<00:00, 13155.65 examples/s]Saving the dataset (9/9 shards): 100%|██████████| 38550/38550 [00:03<00:00, 12562.35 examples/s]
+Saving the dataset (0/1 shards):   0%|          | 0/389 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 389/389 [00:00<00:00, 15794.31 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 389/389 [00:00<00:00, 15529.73 examples/s]
+
+======================================================================
+DATA PREPARATION COMPLETE
+  Sequences: 38,939 (319M tokens)
+  Train: 38,550
+  Val: 389
+  Saved to: /home/galic/nanochat-rs-ternary/training/rust_finetune/data/rust_code_v2
+======================================================================
