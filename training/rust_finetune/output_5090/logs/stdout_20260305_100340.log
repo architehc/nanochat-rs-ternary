@@ -61,3 +61,17 @@ FileNotFoundError: [Errno 2] No such file or directory: '/home/galic/nanochat-rs
 2026-03-05 10:13:23,326 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
 2026-03-05 10:13:23,335 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
 2026-03-05 10:13:26,563 [INFO] Emergency save: /home/galic/nanochat-rs-ternary/training/rust_finetune/output_5090/checkpoints/checkpoint-emergency
+2026-03-05 10:13:27,148 [INFO] Pushed progress to 5090 branch (step 0)
+Traceback (most recent call last):
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/train_7day.py", line 572, in <module>
+    main()
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/train_7day.py", line 530, in main
+    train_result = trainer.train(resume_from_checkpoint=resume_checkpoint)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1413, in train
+    state = TrainerState.load_from_json(os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer_callback.py", line 152, in load_from_json
+    with open(json_path, encoding="utf-8") as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/galic/nanochat-rs-ternary/training/rust_finetune/output_5090/checkpoints/checkpoint-emergency/trainer_state.json'
