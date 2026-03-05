@@ -1,16 +1,16 @@
 {
-  "timestamp": "2026-03-05T10:02:11.312981",
+  "timestamp": "2026-03-05T10:13:26.563631",
   "step": 0,
   "loss": 0,
   "elapsed_hours": 0.2,
   "remaining_hours": 167.8,
   "gpu": {
-    "mem_allocated_gb": 23.634955264,
-    "mem_reserved_gb": 28.487712768,
+    "mem_allocated_gb": 10.321225728,
+    "mem_reserved_gb": 29.404168192,
     "mem_total_gb": 34.19045888,
     "temp_c": 53,
-    "power_w": 60.73,
+    "power_w": 60.54,
     "fan_pct": 0,
-    "gpu_util_pct": 0
+    "gpu_util_pct": 1
   }
 }

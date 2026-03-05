@@ -116,3 +116,74 @@ torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 9.28 GiB. GPU 0 ha
 2026-03-05 10:02:08,183 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
 2026-03-05 10:02:08,194 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
 2026-03-05 10:02:11,312 [INFO] Emergency save: /home/galic/nanochat-rs-ternary/training/rust_finetune/output_5090/checkpoints/checkpoint-emergency
+2026-03-05 10:02:11,928 [INFO] Pushed progress to 5090 branch (step 0)
+Traceback (most recent call last):
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/train_7day.py", line 571, in <module>
+    main()
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/train_7day.py", line 529, in main
+    train_result = trainer.train(resume_from_checkpoint=resume_checkpoint)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1424, in train
+    return inner_training_loop(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1506, in _inner_training_loop
+    self._run_epoch(
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1734, in _run_epoch
+    tr_loss_step = self.training_step(model, inputs, num_items_in_batch)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/train_7day.py", line 306, in training_step
+    loss = super().training_step(model, inputs, num_items_in_batch)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1906, in training_step
+    loss = self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1978, in compute_loss
+    outputs = model(**inputs)
+              ^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/accelerate/utils/operations.py", line 823, in forward
+    return model_forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/accelerate/utils/operations.py", line 811, in __call__
+    return convert_to_fp32(self.model_forward(*args, **kwargs))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/amp/autocast_mode.py", line 44, in decorate_autocast
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/accelerate/utils/operations.py", line 823, in forward
+    return model_forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/accelerate/utils/operations.py", line 811, in __call__
+    return convert_to_fp32(self.model_forward(*args, **kwargs))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/amp/autocast_mode.py", line 44, in decorate_autocast
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/peft/peft_model.py", line 1923, in forward
+    return self.base_model(
+           ^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/peft/tuners/tuners_utils.py", line 311, in forward
+    return self.model.forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/utils/generic.py", line 843, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/models/qwen2/modeling_qwen2.py", line 494, in forward
+    loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/loss/loss_utils.py", line 55, in ForCausalLMLoss
+    logits = logits.float()
+             ^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 9.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 3.50 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. 30.25 GiB allowed; Of the allocated memory 23.28 GiB is allocated by PyTorch, and 3.25 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+  0%|          | 0/302400 [00:47<?, ?it/s]

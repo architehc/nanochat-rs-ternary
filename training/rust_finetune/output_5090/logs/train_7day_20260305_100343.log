@@ -1,0 +1,60 @@
+2026-03-05 10:03:43,742 [INFO] Logging to /home/galic/nanochat-rs-ternary/training/rust_finetune/output_5090/logs/train_7day_20260305_100343.log
+2026-03-05 10:03:43,742 [INFO] ======================================================================
+2026-03-05 10:03:43,742 [INFO] 7-DAY RTX 5090 BLACKWELL TRAINING: RUST CODE LLM
+2026-03-05 10:03:43,742 [INFO] ======================================================================
+2026-03-05 10:03:43,742 [INFO] Model: Qwen/Qwen2.5-Coder-7B
+2026-03-05 10:03:43,742 [INFO] QLoRA: True (4-bit NF4)
+2026-03-05 10:03:43,742 [INFO] LoRA rank: 256, alpha: 512
+2026-03-05 10:03:43,742 [INFO] Batch: 1 x 16 = 16
+2026-03-05 10:03:43,742 [INFO] Seq length: 8192
+2026-03-05 10:03:43,743 [INFO] Duration: 7 days (168 hours)
+2026-03-05 10:03:43,794 [INFO] GPU: VRAM: 0.0/34GB | Temp: 35°C | Power: 40W | Util: 1%
+2026-03-05 10:03:43,794 [INFO] TF32 + BF16 enabled for Blackwell
+2026-03-05 10:03:43,881 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 10:03:43,889 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
+2026-03-05 10:03:43,922 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 10:03:43,928 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-03-05 10:03:43,956 [INFO] HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-Coder-7B/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-03-05 10:03:43,987 [INFO] HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-Coder-7B/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-03-05 10:03:44,367 [INFO] HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-Coder-7B "HTTP/1.1 200 OK"
+2026-03-05 10:03:44,369 [INFO] Loading model: Qwen/Qwen2.5-Coder-7B
+2026-03-05 10:03:44,369 [INFO] Using QLoRA 4-bit NF4 quantization
+2026-03-05 10:03:44,401 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 10:03:44,409 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
+2026-03-05 10:03:44,439 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 10:03:44,448 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
+2026-03-05 10:03:48,507 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/generation_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 10:03:48,516 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/generation_config.json "HTTP/1.1 200 OK"
+2026-03-05 10:03:48,544 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/custom_generate/generate.py "HTTP/1.1 404 Not Found"
+2026-03-05 10:03:48,610 [INFO] Model loaded. VRAM: 7.7/34GB | Temp: 36°C | Power: 98W | Util: 0%
+2026-03-05 10:03:51,189 [INFO] LoRA r=256: 646M trainable / 8.26B total (7.82%)
+2026-03-05 10:03:51,214 [INFO] After LoRA: VRAM: 10.3/34GB | Temp: 36°C | Power: 81W | Util: 5%
+2026-03-05 10:03:51,214 [INFO] Loading dataset from: /home/galic/nanochat-rs-ternary/training/rust_finetune/data/rust_code_v2
+2026-03-05 10:03:51,223 [INFO] Train: 38,550 sequences, Val: 389 sequences
+2026-03-05 10:03:51,223 [INFO] Max steps: 302,400
+2026-03-05 10:03:51,223 [INFO] Steps per epoch: 2,409
+2026-03-05 10:03:51,223 [INFO] Expected epochs: 125.5
+2026-03-05 10:03:51,223 [INFO] Resuming from: /home/galic/nanochat-rs-ternary/training/rust_finetune/output_5090/checkpoints/checkpoint-emergency
+2026-03-05 10:03:51,250 [INFO] Running initial evaluation...
+2026-03-05 10:13:22,719 [INFO] Initial eval loss: 0.7164
+2026-03-05 10:13:22,719 [INFO] ======================================================================
+2026-03-05 10:13:22,719 [INFO] STARTING 7-DAY TRAINING
+2026-03-05 10:13:22,719 [INFO] Target: 168h, 302,400 steps
+2026-03-05 10:13:22,719 [INFO] ======================================================================
+2026-03-05 10:13:23,181 [ERROR] Training error: [Errno 2] No such file or directory: '/home/galic/nanochat-rs-ternary/training/rust_finetune/output_5090/checkpoints/checkpoint-emergency/trainer_state.json'
+Traceback (most recent call last):
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/train_7day.py", line 530, in main
+    train_result = trainer.train(resume_from_checkpoint=resume_checkpoint)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer.py", line 1413, in train
+    state = TrainerState.load_from_json(os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/galic/nanochat-rs-ternary/training/rust_finetune/.venv/lib/python3.12/site-packages/transformers/trainer_callback.py", line 152, in load_from_json
+    with open(json_path, encoding="utf-8") as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/galic/nanochat-rs-ternary/training/rust_finetune/output_5090/checkpoints/checkpoint-emergency/trainer_state.json'
+2026-03-05 10:13:23,290 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 10:13:23,299 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
+2026-03-05 10:13:23,326 [INFO] HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-Coder-7B/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-03-05 10:13:23,335 [INFO] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-Coder-7B/0396a76181e127dfc13e5c5ec48a8cee09938b02/config.json "HTTP/1.1 200 OK"
+2026-03-05 10:13:26,563 [INFO] Emergency save: /home/galic/nanochat-rs-ternary/training/rust_finetune/output_5090/checkpoints/checkpoint-emergency
