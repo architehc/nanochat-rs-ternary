@@ -7,23 +7,23 @@
 - **Schedule**: WSD lr=0.008, decay at 20% (step 6K), 30K total steps
 - **Resumed from**: v2/step_4000 (loss 3.5, gnorm 2.2)
 
-## Latest Metrics (2026-03-06 09:20)
+## Latest Metrics (2026-03-06 09:50)
 | Metric | Value |
 |--------|-------|
 | Step | 0 / 30,000 |
-| Loss | 3.0970 |
-| Grad Norm | 1.94 |
-| Learning Rate | 0.006756 |
-| Tokens/sec | 963 |
-| Elapsed | 2h (9170s) |
+| Loss | 3.0611 |
+| Grad Norm | 1.98 |
+| Learning Rate | 0.006118 |
+| Tokens/sec | 929 |
+| Elapsed | 3h (10938s) |
 
 ## GPU Status
 | Metric | Value |
 |--------|-------|
-| Temperature | 55°C |
-| Utilization | 71% |
+| Temperature | 56°C |
+| Utilization | 86% |
 | VRAM | 20441, 32607 MiB |
-| Power | 247.49W |
+| Power | 248.85W |
 
 ## Training History
 | Version | Dataset | Steps | Final Loss | Notes |
@@ -32,7 +32,7 @@
 | v14 | 36M tok | 15K | 2.98 | lr=0.010, decay@53% |
 | 5090-v1 | 121M tok | 41K/100K | ~6.0 | Plateaued, killed |
 | 5090-v2 | 106M tok | 21K/150K | ~4.1 | gnorm blowup (lr=0.012), killed |
-| **5090-v3** | **106M tok** | **0/30K** | **3.0970** | **Current (lr=0.008, resumed from v2/4K)** |
+| **5090-v3** | **106M tok** | **0/30K** | **3.0611** | **Current (lr=0.008, resumed from v2/4K)** |
 
 ## Loss Trajectory (last 20 readings)
 ```
@@ -40,4 +40,4 @@ No data yet
 ```
 
 ---
-*Auto-updated by monitor_5090.sh every 30 min at 2026-03-06 09:20:05*
+*Auto-updated by monitor_5090.sh every 30 min at 2026-03-06 09:50:06*
