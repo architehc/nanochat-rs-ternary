@@ -2052,6 +2052,27 @@ impl TrainConfig {
         cfg
     }
 
+    /// nano-275m Engram 5090 V3 — stable long training with earlier decay.
+    ///
+    /// V2 used lr=0.012 which caused gnorm blowup after step 6K (2.2→70).
+    /// V3 fixes: lr=0.008 (stable), decay at 20% (step 6K of 30K total).
+    /// Resume from v2's step_4000 checkpoint (loss 3.5, gnorm 2.2).
+    /// Strategy: 4K steps already done + 26K more = 30K total.
+    ///   - Steps 4K-6K: full lr=0.008 (2K more exploration)
+    ///   - Steps 6K-30K: cosine decay → expected loss < 2.5
+    pub fn nano_275m_engram_5090_v3() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 30_000;    // 30K total (resume from 4K)
+        cfg.warmup_steps = 0;        // Already warmed up, resuming
+        cfg.lr = 0.008;              // Stable LR (no gnorm blowup)
+        cfg.decay_start_frac = 0.20; // Decay at step 6K (2K more exploration)
+        cfg.engram_layers = vec![0, 10, 19];
+        cfg.entropy_weight = 0.01;
+        cfg.async_n_workers = 8;
+        cfg.async_prefetch_size = 16;
+        cfg
+    }
+
     /// 125M hybrid: 50% standard attention + 50% wave field (interleaved).
     pub fn nano_125m_hybrid() -> Self {
         let mut cfg = Self::nano_125m();

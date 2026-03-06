@@ -114,6 +114,9 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-275m-engram-5090-v2" | "nano_275m_engram_5090_v2" => {
             Some(TrainConfig::nano_275m_engram_5090_v2())
         }
+        "nano-275m-engram-5090-v3" | "nano_275m_engram_5090_v3" => {
+            Some(TrainConfig::nano_275m_engram_5090_v3())
+        }
         _ => None,
     }
 }
@@ -376,22 +379,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Resume from checkpoint if specified
             let mut trainer = if let Some(ref ckpt_dir) = resume {
                 tracing::info!("Resuming from checkpoint: {}", ckpt_dir);
+                // Save CLI config's training hyperparameters before checkpoint overwrites them
+                let cli_lr = cfg.lr;
+                let cli_warmup = cfg.warmup_steps;
+                let cli_decay_frac = cfg.decay_start_frac;
+                let cli_total_steps = cfg.total_steps;
+
                 let mut trainer = nanochat_train::train::Trainer::from_checkpoint(ckpt_dir, device)?;
                 let meta_json = std::fs::read_to_string(format!("{}/meta.json", ckpt_dir))?;
                 let meta: nanochat_train::checkpoint::CheckpointMeta =
                     serde_json::from_str(&meta_json)?;
                 tracing::info!("Resumed at step {} (loss={:.4})", meta.step, meta.loss);
-                // Use checkpoint's config for dataset/logging to avoid mismatch
-                // (e.g. CLI --config d20 but checkpoint was trained with nano-125m)
+                // Use checkpoint's config for model architecture (dim, layers, etc.)
+                // but re-apply CLI config's training hyperparameters
                 cfg = trainer.config.clone();
                 // Re-apply CLI overrides on top of checkpoint config
                 if let Err(message) = apply_batch_size_override(&mut cfg, batch_size) {
                     eprintln!("{}", message);
                     std::process::exit(1);
                 }
-                // Sync override back to trainer so the actual training loop uses it
+                // Override training schedule from CLI config
+                cfg.lr = cli_lr;
+                cfg.warmup_steps = cli_warmup;
+                cfg.decay_start_frac = cli_decay_frac;
+                cfg.total_steps = cli_total_steps;
+                // Sync all overrides back to trainer
                 trainer.config.batch_size = cfg.batch_size;
-                tracing::info!("Using checkpoint config (vocab_size={}, dim={})", cfg.vocab_size, cfg.dim);
+                trainer.config.lr = cli_lr;
+                trainer.config.warmup_steps = cli_warmup;
+                trainer.config.decay_start_frac = cli_decay_frac;
+                trainer.config.total_steps = cli_total_steps;
+                trainer.base_lr_muon = cli_lr;
+                trainer.base_lr_lion = cfg.mhc_lr;
+                tracing::info!("Using checkpoint model (vocab_size={}, dim={}) with CLI schedule (lr={}, decay_frac={}, total_steps={})",
+                    cfg.vocab_size, cfg.dim, cli_lr, cli_decay_frac, cli_total_steps);
                 trainer
             } else {
                 nanochat_train::train::Trainer::new(cfg.clone(), device)?

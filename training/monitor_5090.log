@@ -21,3 +21,9 @@
 [2026-03-06 05:17:07] Pushed to 5090
 [2026-03-06 06:17:07] --- Hourly Check ---
 [2026-03-06 06:17:07] RUNNING: step=20350 loss=3.9961 temp=52C util=83%
+[2026-03-06 06:17:08] Pushed to 5090
+[2026-03-06 06:50:01] === Monitor started (v3) ===
+[2026-03-06 06:50:01] Training log: /home/galic/nanochat-rs-ternary/training/5090_v3_train.log
+[2026-03-06 06:50:01] Check interval: 1800s (30 min)
+[2026-03-06 06:50:01] --- 30-min Check ---
+[2026-03-06 06:50:01] RUNNING: step=0 loss=3.6174 gnorm=2.19 temp=53C util=89%
