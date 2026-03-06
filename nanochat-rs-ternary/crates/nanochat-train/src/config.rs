@@ -2073,6 +2073,25 @@ impl TrainConfig {
         cfg
     }
 
+    /// nano-275m Engram 5090 V4 — extended training on bigger dataset (142M tokens).
+    ///
+    /// V3 result: loss 2.72 at 30K steps on 106M tokens (lr=0.008).
+    /// V4: same proven lr=0.008, 50K total steps on 142M tokens (465MB).
+    /// Resume from v3/final checkpoint. Decay at 40% (step 20K).
+    /// Dataset includes 65K files from 187 repos + synthetic code.
+    pub fn nano_275m_engram_5090_v4() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 50_000;    // 50K steps on bigger dataset
+        cfg.warmup_steps = 500;      // Brief warmup for new data distribution
+        cfg.lr = 0.006;              // Slightly lower than v3 for longer run
+        cfg.decay_start_frac = 0.40; // Decay at step 20K
+        cfg.engram_layers = vec![0, 10, 19];
+        cfg.entropy_weight = 0.01;
+        cfg.async_n_workers = 8;
+        cfg.async_prefetch_size = 16;
+        cfg
+    }
+
     /// 125M hybrid: 50% standard attention + 50% wave field (interleaved).
     pub fn nano_125m_hybrid() -> Self {
         let mut cfg = Self::nano_125m();

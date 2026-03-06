@@ -1,29 +1,29 @@
 # RTX 5090 Training Progress
 
-## Current Run: nano-275m-engram-5090-v3
+## Current Run: nano-275m-engram-5090-v4
 - **Config**: 275M params, dim=1024, 20 layers, Engram on [0,10,19]
-- **Dataset**: rust_v3 (106M tokens, 37K files, vocab=4096)
-- **Includes**: Synthetic CS algorithms, data structures, compiler-validated primitives
-- **Schedule**: WSD lr=0.008, decay at 20% (step 6K), 30K total steps
-- **Resumed from**: v2/step_4000 (loss 3.5, gnorm 2.2)
+- **Dataset**: rust_v4 (143M tokens, 65K files from 187 repos, vocab=4096)
+- **Includes**: tokio, serde, bevy, rust-lang/rust stdlib, solana, reth, CS algorithms
+- **Schedule**: WSD lr=0.006, decay at 40% (step 20K), 50K total steps
+- **Resumed from**: v3/final (loss 2.72, 30K steps)
 
-## Latest Metrics (2026-03-06 14:20)
+## Latest Metrics (2026-03-06 14:48)
 | Metric | Value |
 |--------|-------|
-| Step | 0 / 30,000 |
-| Loss | 2.6393 |
-| Grad Norm | 1.44 |
-| Learning Rate | 0.000815 |
-| Tokens/sec | 967 |
-| Elapsed | 7h (27174s) |
+| Step | 0 / 50,000 |
+| Loss |  |
+| Grad Norm |  |
+| Learning Rate |  |
+| Tokens/sec |  |
+| Elapsed | h (s) |
 
 ## GPU Status
 | Metric | Value |
 |--------|-------|
-| Temperature | 52°C |
-| Utilization | 78% |
-| VRAM | 20466, 32607 MiB |
-| Power | 249.99W |
+| Temperature | 47°C |
+| Utilization | 44% |
+| VRAM | 31995, 32607 MiB |
+| Power | 151.60W |
 
 ## Training History
 | Version | Dataset | Steps | Final Loss | Notes |
@@ -32,7 +32,8 @@
 | v14 | 36M tok | 15K | 2.98 | lr=0.010, decay@53% |
 | 5090-v1 | 121M tok | 41K/100K | ~6.0 | Plateaued, killed |
 | 5090-v2 | 106M tok | 21K/150K | ~4.1 | gnorm blowup (lr=0.012), killed |
-| **5090-v3** | **106M tok** | **0/30K** | **2.6393** | **Current (lr=0.008, resumed from v2/4K)** |
+| 5090-v3 | 106M tok | 30K | 2.72 | lr=0.008, decay@20%, stable |
+| **5090-v4** | **143M tok** | **0/50K** | **** | **Current (lr=0.006, 65K files, 187 repos)** |
 
 ## Loss Trajectory (last 20 readings)
 ```
@@ -40,4 +41,4 @@ No data yet
 ```
 
 ---
-*Auto-updated by monitor_5090.sh every 30 min at 2026-03-06 14:20:13*
+*Auto-updated by monitor_5090.sh every 30 min at 2026-03-06 14:48:25*

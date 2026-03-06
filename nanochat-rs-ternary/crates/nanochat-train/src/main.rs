@@ -117,6 +117,9 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-275m-engram-5090-v3" | "nano_275m_engram_5090_v3" => {
             Some(TrainConfig::nano_275m_engram_5090_v3())
         }
+        "nano-275m-engram-5090-v4" | "nano_275m_engram_5090_v4" => {
+            Some(TrainConfig::nano_275m_engram_5090_v4())
+        }
         _ => None,
     }
 }
