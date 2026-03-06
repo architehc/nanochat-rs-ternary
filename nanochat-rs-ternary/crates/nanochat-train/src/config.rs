@@ -2028,6 +2028,30 @@ impl TrainConfig {
         cfg
     }
 
+    /// nano-275m Engram 5090 V2 — optimized 7-day training.
+    ///
+    /// Based on v13 (best loss 2.19): same LR/schedule, proven architecture.
+    /// Keeps vocab_size=4096 (proven). seq_len=1024, entropy reg, 3 engram layers.
+    /// batch_size=2, seq_len=1024 is proven to fit on 24GB (4090), so 32GB is fine.
+    /// Dataset: rust_v3 (106M tokens from 37K quality-filtered files + synthetic CS code).
+    /// 150K steps ≈ 7 days at ~1000 tok/s.
+    pub fn nano_275m_engram_5090_v2() -> Self {
+        let mut cfg = Self::nano_275m_engram_only();
+        cfg.total_steps = 150_000;   // ~7 days at 1000 tok/s
+        cfg.warmup_steps = 2000;
+        // v13 LR schedule (best: loss 2.19): lr=0.012, decay at 80%
+        cfg.lr = 0.012;
+        cfg.decay_start_frac = 0.80;
+        // Engram on 3 layers (5090 has extra VRAM headroom)
+        cfg.engram_layers = vec![0, 10, 19];
+        // Entropy regularization to prevent logit collapse
+        cfg.entropy_weight = 0.01;
+        // Fast async data loading
+        cfg.async_n_workers = 8;
+        cfg.async_prefetch_size = 16;
+        cfg
+    }
+
     /// 125M hybrid: 50% standard attention + 50% wave field (interleaved).
     pub fn nano_125m_hybrid() -> Self {
         let mut cfg = Self::nano_125m();

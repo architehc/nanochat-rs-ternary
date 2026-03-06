@@ -1,0 +1,5 @@
+[2026-03-06 00:17:03] === Monitor started ===
+[2026-03-06 00:17:03] Training log: /home/galic/nanochat-rs-ternary/training/5090_v2_train.log
+[2026-03-06 00:17:03] Check interval: 3600s
+[2026-03-06 00:17:03] --- Hourly Check ---
+[2026-03-06 00:17:03] RUNNING: step=250 loss=6.8278 temp=54C util=83%
