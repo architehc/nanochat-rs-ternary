@@ -2073,18 +2073,21 @@ impl TrainConfig {
         cfg
     }
 
-    /// nano-275m Engram 5090 V4 — extended training on bigger dataset (142M tokens).
+    /// nano-275m Engram 5090 V4 — extended training on bigger dataset (143M tokens).
     ///
     /// V3 result: loss 2.72 at 30K steps on 106M tokens (lr=0.008).
-    /// V4: same proven lr=0.008, 50K total steps on 142M tokens (465MB).
-    /// Resume from v3/final checkpoint. Decay at 40% (step 20K).
-    /// Dataset includes 65K files from 187 repos + synthetic code.
+    /// V4: 143M tokens from 65K files (187 repos), resume from v3/final.
+    /// Schedule accounts for resuming at step 30K:
+    ///   - total_steps=55000 (25K more steps after resume)
+    ///   - warmup_steps=500 (brief warmup for new data distribution)
+    ///   - lr=0.006 (proven stable from v3)
+    ///   - decay at 75% = step 41250 (11K stable steps to learn new data)
     pub fn nano_275m_engram_5090_v4() -> Self {
         let mut cfg = Self::nano_275m_engram_only();
-        cfg.total_steps = 50_000;    // 50K steps on bigger dataset
+        cfg.total_steps = 55_000;    // 25K more steps after step 30K resume
         cfg.warmup_steps = 500;      // Brief warmup for new data distribution
-        cfg.lr = 0.006;              // Slightly lower than v3 for longer run
-        cfg.decay_start_frac = 0.40; // Decay at step 20K
+        cfg.lr = 0.006;              // Stable LR for extended training
+        cfg.decay_start_frac = 0.75; // Decay at step 41250 — 11K stable steps first
         cfg.engram_layers = vec![0, 10, 19];
         cfg.entropy_weight = 0.01;
         cfg.async_n_workers = 8;
