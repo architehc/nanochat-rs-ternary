@@ -86,6 +86,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_deltanet_conv_kernel() -> usize {
+    4
+}
+
 /// Adaptive loop control for inference (LoopLM).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdaptiveLoopConfig {
@@ -282,6 +286,24 @@ pub struct TrainConfig {
     /// Default false for backward compat with old checkpoints.
     #[serde(default)]
     pub wavefield_haar_direct: bool,
+
+    // Gated DeltaNet hybrid layers (ICLR 2025, arXiv:2412.06464)
+    /// Enable Gated DeltaNet layers in hybrid pattern
+    #[serde(default)]
+    pub use_deltanet: bool,
+    /// DeltaNet head count (0 = use n_heads)
+    #[serde(default)]
+    pub deltanet_n_heads: usize,
+    /// Hybrid layer pattern: e.g. [0,0,0,1] = 3 DeltaNet, 1 Attention (repeating).
+    /// 0 = DeltaNet, 1 = standard attention. Empty = all standard.
+    #[serde(default)]
+    pub deltanet_pattern: Vec<usize>,
+    /// Enable output gating on standard attention layers
+    #[serde(default)]
+    pub gated_attention: bool,
+    /// Short convolution kernel size for DeltaNet (default: 4, 0 = disabled)
+    #[serde(default = "default_deltanet_conv_kernel")]
+    pub deltanet_conv_kernel: usize,
 
     // Engram: O(1) N-gram lookup memory (arXiv 2601.07372)
     /// Enable Engram N-gram memory tables
@@ -511,6 +533,18 @@ impl TrainConfig {
         false
     }
 
+    /// Determine whether a layer should use Gated DeltaNet attention.
+    ///
+    /// Uses `deltanet_pattern` (repeating) to decide. Pattern values:
+    /// 0 = DeltaNet, 1 = standard attention. Returns false if `use_deltanet` is off.
+    pub fn is_deltanet_layer(&self, layer_idx: usize) -> bool {
+        if !self.use_deltanet || self.deltanet_pattern.is_empty() {
+            return false;
+        }
+        let idx = layer_idx % self.deltanet_pattern.len();
+        self.deltanet_pattern[idx] == 0
+    }
+
     /// Compute FFN hidden dimension from dim and ffn_mult, aligned to group_size.
     pub fn ffn_dim(&self) -> usize {
         let raw = (self.dim as f32 * self.ffn_mult) as usize;
@@ -610,6 +644,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -680,6 +720,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -772,6 +818,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -842,6 +894,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -922,6 +980,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -993,6 +1057,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -1063,6 +1133,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -1133,6 +1209,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -1203,6 +1285,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -1356,6 +1444,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -1442,6 +1536,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -1535,6 +1635,12 @@ impl TrainConfig {
             engram_layers: vec![0, 4], // first and last unique layers
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -1617,6 +1723,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -1695,6 +1807,12 @@ impl TrainConfig {
             engram_layers: vec![0, 19],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -1927,6 +2045,12 @@ impl TrainConfig {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -2007,6 +2131,12 @@ impl TrainConfig {
             engram_layers: vec![0, 8, 15],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
@@ -2104,6 +2234,91 @@ impl TrainConfig {
         cfg.wavefield_head_coupling = true;
         cfg.wavefield_ratio = 0.5; // half the layers
         cfg
+    }
+
+    /// Qwen3.5-style hybrid architecture: 3:1 DeltaNet:Attention, ~370M params.
+    ///
+    /// Pattern: 6 × (3 GatedDeltaNet + 1 GatedAttention) = 24 layers
+    /// - 75% linear-recurrent (O(1) memory per token at inference)
+    /// - 25% softmax attention (global context via KV cache)
+    /// - dim=1024, 8 attention heads, 16 DeltaNet heads
+    /// - Gated output on both DeltaNet and attention layers
+    pub fn qwen35_hybrid() -> Self {
+        Self {
+            dim: 1024,
+            n_layers: 24,
+            n_heads: 8,
+            n_kv_heads: 2,      // GQA 4:1 for attention layers
+            ffn_mult: 3.5,      // ffn_dim = 3584
+            vocab_size: 4096,
+            max_seq_len: 512,
+            group_size: 128,
+            mhc_n_streams: 2,
+            weight_tied: true,
+            rope_theta: 10000.0,
+            loop_config: None,
+
+            lr: 0.008,
+            mhc_lr: 1e-4,
+            weight_decay: 0.0,
+            batch_size: 2,
+            grad_accum_steps: 1,
+            warmup_steps: 2000,
+            total_steps: 50_000,
+            decay_start_frac: 0.80,
+            grad_clip: 1.0,
+            ns_steps: 5,
+            muon_momentum: 0.95,
+            lion_betas: (0.9, 0.99),
+
+            use_8bit_optim: false,
+            use_galore: false,
+            galore_rank: 256,
+            galore_update_freq: 200,
+            use_mtp: false,
+            mtp_n_tokens: 3,
+            mtp_weight: 0.2,
+            use_collider: false,
+            collider_threshold: 0.3,
+            collider_sparsity: 0.35,
+            use_async_loader: true,
+            async_n_workers: 8,
+            async_prefetch_size: 16,
+            label_smooth_eps: 0.1,
+            entropy_weight: 0.01,
+            use_fp4: false,
+            fp4_stochastic_rounding: true,
+            distill_teacher: None,
+            distill_kl_weight: 0.0,
+            loop_scale_penalty: 0.0,
+
+            use_wave_field: false,
+            wavefield_field_size: 1024,
+            wavefield_n_heads: 0,
+            wavefield_head_coupling: true,
+            wavefield_ratio: 0.0,
+            wavefield_convolve_mode: None,
+            wavefield_haar_levels: None,
+            wavefield_physics_lr: 5e-4,
+            wavefield_warmup_delay: 0,
+            wavefield_haar_direct: true,
+
+            use_engram: false,
+            engram_d_mem: 256,
+            engram_n_gram_orders: vec![],
+            engram_n_heads: 4,
+            engram_table_size: 50021,
+            engram_layers: vec![],
+            engram_conv_kernel: 4,
+            engram_lr_mult: 5.0,
+
+            // Hybrid DeltaNet: [0,0,0,1] = 3 DeltaNet + 1 Attention, repeating
+            use_deltanet: true,
+            deltanet_n_heads: 16,           // More heads for DeltaNet (head_dim=64)
+            deltanet_pattern: vec![0, 0, 0, 1], // 75% DeltaNet, 25% attention
+            gated_attention: true,          // Output gating on attention layers
+            deltanet_conv_kernel: 4,
+        }
     }
 }
 
