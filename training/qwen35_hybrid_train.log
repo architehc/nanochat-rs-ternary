@@ -573,3 +573,22 @@
 [ 19100/50000 ] loss=3.6926 H=3.78 lr=0.008000 gnorm=2.85 tok/s=132 elapsed=115203s
 [ 19150/50000 ] loss=3.5998 H=3.72 lr=0.008000 gnorm=2.05 tok/s=129 elapsed=115412s
 [ 19200/50000 ] loss=3.6575 H=3.77 lr=0.008000 gnorm=3.05 tok/s=121 elapsed=115634s
+[ 19250/50000 ] loss=3.6125 H=3.70 lr=0.008000 gnorm=4.55 tok/s=138 elapsed=115826s
+[ 19300/50000 ] loss=3.6388 H=3.75 lr=0.008000 gnorm=1.87 tok/s=125 elapsed=116042s
+[ 19350/50000 ] loss=3.6410 H=3.79 lr=0.008000 gnorm=4.33 tok/s=140 elapsed=116231s
+[ 19400/50000 ] loss=3.7020 H=3.83 lr=0.008000 gnorm=2.39 tok/s=123 elapsed=116450s
+[ 19450/50000 ] loss=3.5794 H=3.67 lr=0.008000 gnorm=2.80 tok/s=131 elapsed=116654s
+[ 19500/50000 ] loss=3.5770 H=3.67 lr=0.008000 gnorm=2.31 tok/s=128 elapsed=116864s
+[ 19550/50000 ] loss=3.6290 H=3.73 lr=0.008000 gnorm=2.08 tok/s=130 elapsed=117070s
+[ 19600/50000 ] loss=3.5395 H=3.66 lr=0.008000 gnorm=2.47 tok/s=136 elapsed=117265s
+[ 19650/50000 ] loss=3.5902 H=3.69 lr=0.008000 gnorm=2.34 tok/s=121 elapsed=117486s
+[ 19700/50000 ] loss=3.6258 H=3.73 lr=0.008000 gnorm=2.12 tok/s=139 elapsed=117676s
+[ 19750/50000 ] loss=3.6351 H=3.77 lr=0.008000 gnorm=2.63 tok/s=128 elapsed=117887s
+[ 19800/50000 ] loss=3.6620 H=3.76 lr=0.008000 gnorm=1.80 tok/s=129 elapsed=118096s
+[ 19850/50000 ] loss=3.5831 H=3.66 lr=0.008000 gnorm=2.06 tok/s=129 elapsed=118304s
+[ 19900/50000 ] loss=3.5158 H=3.63 lr=0.008000 gnorm=2.00 tok/s=118 elapsed=118531s
+[ 19950/50000 ] loss=3.5761 H=3.67 lr=0.008000 gnorm=2.01 tok/s=136 elapsed=118727s
+[ 20000/50000 ] loss=3.5762 H=3.70 lr=0.008000 gnorm=2.13 tok/s=124 elapsed=118944s
+  -> checkpoint saved to checkpoints/qwen35_hybrid/step_20000 (1.92GB)
+[ 20050/50000 ] loss=3.6438 H=3.73 lr=0.008000 gnorm=1.99 tok/s=134 elapsed=119147s
+[ 20100/50000 ] loss=3.6101 H=3.69 lr=0.008000 gnorm=3.38 tok/s=135 elapsed=119344s
