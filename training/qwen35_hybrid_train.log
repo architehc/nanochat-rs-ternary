@@ -662,3 +662,22 @@
 [ 22650/50000 ] loss=3.5511 H=3.64 lr=0.008000 gnorm=1.63 tok/s=131 elapsed=133206s
 [ 22700/50000 ] loss=3.5776 H=3.69 lr=0.008000 gnorm=2.62 tok/s=136 elapsed=133403s
 [ 22750/50000 ] loss=3.5750 H=3.70 lr=0.008000 gnorm=1.66 tok/s=128 elapsed=133612s
+[ 22800/50000 ] loss=3.5451 H=3.66 lr=0.008000 gnorm=2.26 tok/s=137 elapsed=133805s
+[ 22850/50000 ] loss=3.6297 H=3.71 lr=0.008000 gnorm=2.23 tok/s=121 elapsed=134027s
+[ 22900/50000 ] loss=3.5926 H=3.70 lr=0.008000 gnorm=2.03 tok/s=139 elapsed=134217s
+[2m2026-03-08T18:49:13.821835Z[0m [31mERROR[0m [2mnanochat_train::train[0m[2m:[0m NaN/Inf loss detected at step 22918 (consecutive: 1)
+[ 22050/50000 ] loss=3.5118 H=3.62 lr=0.004000 gnorm=1.99 tok/s=126 elapsed=134511s
+[ 22100/50000 ] loss=3.6083 H=3.73 lr=0.004000 gnorm=2.03 tok/s=130 elapsed=134717s
+[ 22150/50000 ] loss=3.5899 H=3.74 lr=0.008000 gnorm=1.78 tok/s=135 elapsed=134913s
+[ 22200/50000 ] loss=3.4988 H=3.65 lr=0.008000 gnorm=2.20 tok/s=120 elapsed=135137s
+[ 22250/50000 ] loss=3.5631 H=3.64 lr=0.008000 gnorm=2.95 tok/s=136 elapsed=135334s
+[2m2026-03-08T19:07:45.955268Z[0m [31mERROR[0m [2mnanochat_train::train[0m[2m:[0m NaN/Inf loss detected at step 22266 (consecutive: 1)
+[ 22050/50000 ] loss=3.6223 H=3.73 lr=0.004000 gnorm=1.90 tok/s=129 elapsed=135609s
+[ 22100/50000 ] loss=3.5718 H=3.69 lr=0.004000 gnorm=2.08 tok/s=127 elapsed=135820s
+[ 22150/50000 ] loss=3.5473 H=3.69 lr=0.008000 gnorm=1.74 tok/s=139 elapsed=136009s
+[ 22200/50000 ] loss=3.4455 H=3.59 lr=0.008000 gnorm=2.48 tok/s=127 elapsed=136219s
+[ 22250/50000 ] loss=3.5770 H=3.68 lr=0.008000 gnorm=2.56 tok/s=137 elapsed=136413s
+[ 22300/50000 ] loss=3.5716 H=3.69 lr=0.008000 gnorm=2.04 tok/s=125 elapsed=136628s
+[ 22350/50000 ] loss=3.5323 H=3.65 lr=0.008000 gnorm=4.68 tok/s=125 elapsed=136843s
+[ 22400/50000 ] loss=3.6256 H=3.72 lr=0.008000 gnorm=2.33 tok/s=134 elapsed=137043s
+[ 22450/50000 ] loss=3.4879 H=3.62 lr=0.008000 gnorm=2.50 tok/s=124 elapsed=137260s
