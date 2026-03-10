@@ -1232,3 +1232,22 @@
   -> checkpoint saved to checkpoints/qwen35_hybrid/step_40000 (1.92GB)
 [ 40050/50000 ] loss=3.3559 H=3.43 lr=0.008000 gnorm=2.07 tok/s=134 elapsed=245014s
 [ 40100/50000 ] loss=3.4017 H=3.51 lr=0.007998 gnorm=1.90 tok/s=122 elapsed=245235s
+[ 40150/50000 ] loss=3.3169 H=3.42 lr=0.007996 gnorm=1.58 tok/s=136 elapsed=245428s
+[ 40200/50000 ] loss=3.4353 H=3.55 lr=0.007993 gnorm=1.94 tok/s=121 elapsed=245650s
+[ 40250/50000 ] loss=3.3506 H=3.47 lr=0.007989 gnorm=1.78 tok/s=137 elapsed=245842s
+[ 40300/50000 ] loss=3.3294 H=3.46 lr=0.007984 gnorm=1.78 tok/s=127 elapsed=246054s
+[ 40350/50000 ] loss=3.3246 H=3.42 lr=0.007978 gnorm=1.85 tok/s=129 elapsed=246261s
+[ 40400/50000 ] loss=3.4464 H=3.56 lr=0.007972 gnorm=2.06 tok/s=130 elapsed=246467s
+[ 40450/50000 ] loss=3.3661 H=3.50 lr=0.007964 gnorm=1.53 tok/s=120 elapsed=246691s
+[ 40500/50000 ] loss=3.3911 H=3.50 lr=0.007956 gnorm=1.71 tok/s=137 elapsed=246884s
+[2m2026-03-10T02:08:00.352217Z[0m [31mERROR[0m [2mnanochat_train::train[0m[2m:[0m NaN/Inf loss detected at step 40531 (consecutive: 1)
+[ 40050/50000 ] loss=3.3473 H=3.47 lr=0.004000 gnorm=1.73 tok/s=128 elapsed=247224s
+[ 40100/50000 ] loss=3.3633 H=3.47 lr=0.003999 gnorm=1.66 tok/s=120 elapsed=247448s
+[ 40150/50000 ] loss=3.2799 H=3.44 lr=0.007996 gnorm=1.67 tok/s=137 elapsed=247641s
+[2m2026-03-10T02:19:10.817252Z[0m [31mERROR[0m [2mnanochat_train::train[0m[2m:[0m NaN/Inf loss detected at step 40161 (consecutive: 1)
+[ 40050/50000 ] loss=3.3742 H=3.44 lr=0.004000 gnorm=1.99 tok/s=124 elapsed=247908s
+[ 40100/50000 ] loss=3.3470 H=3.47 lr=0.003999 gnorm=1.73 tok/s=127 elapsed=248119s
+[ 40150/50000 ] loss=3.3578 H=3.49 lr=0.007996 gnorm=1.79 tok/s=135 elapsed=248314s
+[ 40200/50000 ] loss=3.3135 H=3.44 lr=0.007993 gnorm=1.94 tok/s=121 elapsed=248536s
+[ 40250/50000 ] loss=3.3210 H=3.45 lr=0.007989 gnorm=1.92 tok/s=138 elapsed=248727s
+[ 40300/50000 ] loss=3.4433 H=3.56 lr=0.007984 gnorm=1.83 tok/s=123 elapsed=248946s
