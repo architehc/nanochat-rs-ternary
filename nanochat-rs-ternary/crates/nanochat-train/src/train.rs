@@ -1443,6 +1443,7 @@ fn apply_collider_gradient_mask(logits: &Tensor, mask: &Tensor) -> Result<Tensor
 ///
 /// Calling `cuMemPoolTrimTo(pool, 0)` after each optimizer step releases all cached
 /// blocks back to the driver, keeping VRAM usage stable.
+#[allow(dead_code)]
 #[cfg(feature = "cuda")]
 fn trim_cuda_memory_pool(device: &Device) {
     use candle_core::DeviceLocation;

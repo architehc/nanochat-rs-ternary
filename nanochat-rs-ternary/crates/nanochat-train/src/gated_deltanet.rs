@@ -518,6 +518,122 @@ mod tests {
         Ok(())
     }
 
+    /// CPU/CUDA agreement for the whole module, forward and backward.
+    ///
+    /// Guards two things that only break on GPU:
+    ///  - op coverage. `softplus` uses relu/abs/neg/exp/log; candle does not
+    ///    have a CUDA kernel for every op (this module already avoids
+    ///    `candle_nn::ops::sigmoid` for exactly that reason), and a missing
+    ///    kernel surfaces only when a tensor is on the device.
+    ///  - numerical agreement, so a GPU training run and a CPU export/eval
+    ///    path cannot silently diverge.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_gated_deltanet_cpu_cuda_agreement() -> Result<()> {
+        let cuda = match Device::new_cuda(0) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("skipping: no CUDA device available ({e})");
+                return Ok(());
+            }
+        };
+        let cpu = Device::Cpu;
+        let (dim, heads, batch, seq) = (64, 4, 2, 8);
+
+        // Same weights on both devices: build on CPU, then copy the varmap data.
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &cpu);
+        let dn_cpu = GatedDeltaNetTrain::new(dim, heads, 64, vb.pp("t"))?;
+
+        let varmap_gpu = VarMap::new();
+        let vb_gpu = VarBuilder::from_varmap(&varmap_gpu, DType::F32, &cuda);
+        let dn_gpu = GatedDeltaNetTrain::new(dim, heads, 64, vb_gpu.pp("t"))?;
+        {
+            // Mirror every CPU tensor onto the GPU model so outputs are comparable.
+            let src = varmap.data().lock().unwrap();
+            let dst = varmap_gpu.data().lock().unwrap();
+            for (name, var) in src.iter() {
+                let target = dst
+                    .get(name)
+                    .unwrap_or_else(|| panic!("gpu varmap missing {name}"));
+                target.set(&var.as_tensor().to_device(&cuda)?)?;
+            }
+        }
+
+        let x_cpu = Tensor::randn(0.0f32, 1.0, (batch, seq, dim), &cpu)?;
+        let x_gpu = x_cpu.to_device(&cuda)?;
+
+        // Forward must run on the device at all, then agree with CPU.
+        let y_cpu = dn_cpu.forward(&x_cpu)?;
+        let y_gpu = dn_gpu.forward(&x_gpu)?;
+        assert_eq!(y_gpu.dims(), &[batch, seq, dim]);
+
+        let a = y_cpu.flatten_all()?.to_vec1::<f32>()?;
+        let b = y_gpu.to_device(&cpu)?.flatten_all()?.to_vec1::<f32>()?;
+        let max_diff = a
+            .iter()
+            .zip(b.iter())
+            .map(|(p, q)| (p - q).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            b.iter().all(|v| v.is_finite()),
+            "CUDA forward produced non-finite values"
+        );
+        assert!(
+            max_diff < 1e-3,
+            "CPU/CUDA forward disagree: max_diff={max_diff}"
+        );
+
+        // Backward must also run on the device (this is where a missing kernel
+        // for abs/relu in the softplus path would surface).
+        let loss = y_gpu.sum_all()?;
+        let grads = loss.backward()?;
+        for (label, t) in [
+            ("wq", dn_gpu.wq.weight()),
+            ("a_log", &dn_gpu.a_log),
+            ("dt_bias", &dn_gpu.dt_bias),
+        ] {
+            let g = grads
+                .get(t)
+                .unwrap_or_else(|| panic!("{label} has no gradient on CUDA"));
+            let norm = g.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?;
+            assert!(norm.is_finite(), "{label} CUDA gradient is not finite");
+        }
+        println!("CPU/CUDA agreement: max_diff={max_diff:.2e}");
+        Ok(())
+    }
+
+    /// softplus must survive large inputs on the GPU too — the overflow path
+    /// is where NaN gradients would appear during a real training instability.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_softplus_cuda_large_input() -> Result<()> {
+        let cuda = match Device::new_cuda(0) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("skipping: no CUDA device available ({e})");
+                return Ok(());
+            }
+        };
+        let x = candle_core::Var::from_tensor(&Tensor::new(&[120.0f32, 0.0, -60.0], &cuda)?)?;
+        let y = softplus(x.as_tensor())?;
+        let vals = y.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        assert!(
+            vals.iter().all(|v| v.is_finite()),
+            "CUDA softplus overflowed: {vals:?}"
+        );
+        assert!((vals[0] - 120.0).abs() < 1e-2, "got {}", vals[0]);
+        assert!((vals[1] - std::f32::consts::LN_2).abs() < 1e-4, "got {}", vals[1]);
+
+        let grads = y.sum_all()?.backward()?;
+        let g = grads.get(&x).expect("no gradient").to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        assert!(
+            g.iter().all(|v| v.is_finite()),
+            "CUDA softplus gradient not finite: {g:?}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_softplus() -> Result<()> {
         let device = Device::Cpu;
