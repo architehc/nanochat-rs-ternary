@@ -2256,7 +2256,12 @@ impl TrainConfig {
             n_kv_heads: 2,      // GQA 4:1 for attention layers
             ffn_mult: 3.5,      // ffn_dim = 3584
             vocab_size: 4096,
-            max_seq_len: 256,   // Proven stable at 17.7GB on 32GB VRAM
+            // 512 measured at 17.3GB on the 32GB 5090 with the chunkwise
+            // recurrence. The earlier 256 was forced by the sequential form,
+            // which peaked at 32.1GB here and left no headroom.
+            // Note: pass --seq-len 512 explicitly; the trainer otherwise
+            // defaults to max_seq_len / 2.
+            max_seq_len: 512,
             group_size: 128,
             mhc_n_streams: 2,
             weight_tied: true,
