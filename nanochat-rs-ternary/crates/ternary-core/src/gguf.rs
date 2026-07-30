@@ -751,6 +751,50 @@ fn write_gguf_value(w: &mut impl Write, v: &GgufValue) -> io::Result<()> {
             w.write_all(&10u32.to_le_bytes())?;
             w.write_all(&val.to_le_bytes())
         }
+        // Array (type 9): element type, u64 element count, then the raw
+        // elements with no per-element type tag. Element types mirror the
+        // reader's support (U32 / F32 / String); arrays must be homogeneous.
+        GgufValue::Array(items) => {
+            w.write_all(&9u32.to_le_bytes())?;
+            let elem_type: u32 = match items.first() {
+                // An empty array has no element type to infer. Rather than
+                // guessing, refuse it — callers should omit the key instead.
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "cannot write an empty GGUF array: element type is unknown",
+                    ));
+                }
+                Some(GgufValue::U32(_)) => 4,
+                Some(GgufValue::F32(_)) => 6,
+                Some(GgufValue::String(_)) => 8,
+                Some(other) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        format!("unsupported GGUF array element type: {other:?}"),
+                    ));
+                }
+            };
+            w.write_all(&elem_type.to_le_bytes())?;
+            w.write_all(&(items.len() as u64).to_le_bytes())?;
+            for item in items {
+                match (elem_type, item) {
+                    (4, GgufValue::U32(v)) => w.write_all(&v.to_le_bytes())?,
+                    (6, GgufValue::F32(v)) => w.write_all(&v.to_le_bytes())?,
+                    (8, GgufValue::String(v)) => write_gguf_string(w, v)?,
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!(
+                                "heterogeneous GGUF array: expected element type {elem_type}, \
+                                 got {item:?}"
+                            ),
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "write not implemented for this value type",
@@ -1228,6 +1272,101 @@ mod tests {
             Some(GgufValue::Bool(false)) => {}
             other => panic!("expected Bool(false), got {:?}", other),
         }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_gguf_write_array_roundtrip() {
+        let path = test_path("test_write_array.gguf");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut writer = GgufWriter::new();
+        writer.add_metadata(
+            "u32_arr",
+            GgufValue::Array(vec![
+                GgufValue::U32(0),
+                GgufValue::U32(0),
+                GgufValue::U32(0),
+                GgufValue::U32(1),
+            ]),
+        );
+        writer.add_metadata(
+            "f32_arr",
+            GgufValue::Array(vec![GgufValue::F32(1.5), GgufValue::F32(-2.5)]),
+        );
+        writer.add_metadata(
+            "str_arr",
+            GgufValue::Array(vec![GgufValue::String("a".into()), GgufValue::String("bc".into())]),
+        );
+        writer.add_f32_tensor("t", &[1], &[1.0]);
+        writer.write(&path).unwrap();
+
+        let gguf = GgufFile::open(&path).unwrap();
+        match gguf.metadata.get("u32_arr") {
+            Some(GgufValue::Array(arr)) => {
+                let vals: Vec<u32> = arr
+                    .iter()
+                    .map(|v| match v {
+                        GgufValue::U32(x) => *x,
+                        other => panic!("expected U32, got {:?}", other),
+                    })
+                    .collect();
+                assert_eq!(vals, vec![0, 0, 0, 1]);
+            }
+            other => panic!("expected Array, got {:?}", other),
+        }
+        match gguf.metadata.get("f32_arr") {
+            Some(GgufValue::Array(arr)) => {
+                assert_eq!(arr.len(), 2);
+                match (&arr[0], &arr[1]) {
+                    (GgufValue::F32(a), GgufValue::F32(b)) => {
+                        assert!((*a - 1.5).abs() < 1e-6);
+                        assert!((*b + 2.5).abs() < 1e-6);
+                    }
+                    other => panic!("expected F32 pair, got {:?}", other),
+                }
+            }
+            other => panic!("expected Array, got {:?}", other),
+        }
+        match gguf.metadata.get("str_arr") {
+            Some(GgufValue::Array(arr)) => {
+                let vals: Vec<&str> = arr
+                    .iter()
+                    .map(|v| match v {
+                        GgufValue::String(s) => s.as_str(),
+                        other => panic!("expected String, got {:?}", other),
+                    })
+                    .collect();
+                assert_eq!(vals, vec!["a", "bc"]);
+            }
+            other => panic!("expected Array, got {:?}", other),
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_gguf_write_empty_array_rejected() {
+        let path = test_path("test_write_empty_array.gguf");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut writer = GgufWriter::new();
+        writer.add_metadata("empty", GgufValue::Array(vec![]));
+        writer.add_f32_tensor("t", &[1], &[1.0]);
+        // An empty array has no inferable element type — writing must fail
+        // loudly rather than emit a file the reader cannot interpret.
+        assert!(writer.write(&path).is_err());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_gguf_write_heterogeneous_array_rejected() {
+        let path = test_path("test_write_hetero_array.gguf");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut writer = GgufWriter::new();
+        writer.add_metadata(
+            "mixed",
+            GgufValue::Array(vec![GgufValue::U32(1), GgufValue::F32(2.0)]),
+        );
+        writer.add_f32_tensor("t", &[1], &[1.0]);
+        assert!(writer.write(&path).is_err());
         std::fs::remove_file(&path).ok();
     }
 

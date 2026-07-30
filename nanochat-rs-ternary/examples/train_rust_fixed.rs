@@ -7,7 +7,6 @@ use nanochat_train::{
     data::{Dataset, TokenFileDataset},
     train::Trainer,
 };
-use std::path::Path;
 
 #[derive(Parser, Debug)]
 #[command(name = "train_rust_fixed")]

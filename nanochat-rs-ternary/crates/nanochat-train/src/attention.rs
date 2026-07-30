@@ -67,6 +67,8 @@ pub struct AttentionTrain {
     pub wk: BitLinearSTE,
     pub wv: BitLinearSTE,
     pub wo: BitLinearSTE,
+    /// Optional output gate for gated attention (SiLU-activated).
+    pub w_gate: Option<BitLinearSTE>,
     pub n_heads: usize,
     pub n_kv_heads: usize,
     pub head_dim: usize,
@@ -80,16 +82,33 @@ impl AttentionTrain {
         group_size: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
+        Self::new_with_gate(dim, n_heads, n_kv_heads, group_size, false, vb)
+    }
+
+    pub fn new_with_gate(
+        dim: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
+        group_size: usize,
+        gated: bool,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let head_dim = dim / n_heads;
         let wq = BitLinearSTE::new(dim, n_heads * head_dim, group_size, vb.pp("wq"))?;
         let wk = BitLinearSTE::new(dim, n_kv_heads * head_dim, group_size, vb.pp("wk"))?;
         let wv = BitLinearSTE::new(dim, n_kv_heads * head_dim, group_size, vb.pp("wv"))?;
         let wo = BitLinearSTE::new(n_heads * head_dim, dim, group_size, vb.pp("wo"))?;
+        let w_gate = if gated {
+            Some(BitLinearSTE::new(dim, dim, group_size, vb.pp("w_gate"))?)
+        } else {
+            None
+        };
         Ok(Self {
             wq,
             wk,
             wv,
             wo,
+            w_gate,
             n_heads,
             n_kv_heads,
             head_dim,
@@ -146,17 +165,30 @@ impl AttentionTrain {
             attn_out
                 .transpose(1, 2)?
                 .reshape((batch, seq_len, self.n_heads * self.head_dim))?;
-        self.wo.forward(&attn_out)
+
+        // Apply output gating if enabled: output = wo(silu(gate) * attn_out)
+        if let Some(ref w_gate) = self.w_gate {
+            let gate = w_gate.forward(x)?;
+            let gate = candle_nn::ops::silu(&gate)?;
+            let gated_out = (attn_out * gate)?;
+            self.wo.forward(&gated_out)
+        } else {
+            self.wo.forward(&attn_out)
+        }
     }
 
     /// Collect weight tensors for param groups.
     pub fn linear_params(&self) -> Vec<&Tensor> {
-        vec![
+        let mut params = vec![
             self.wq.weight(),
             self.wk.weight(),
             self.wv.weight(),
             self.wo.weight(),
-        ]
+        ];
+        if let Some(ref w_gate) = self.w_gate {
+            params.push(w_gate.weight());
+        }
+        params
     }
 }
 

@@ -79,8 +79,12 @@ impl NanochatTrainModel {
                 let before: Vec<_> = (0..loop_cfg.local_before)
                     .map(|i| {
                         let layer_vb = vb.pp(format!("local_before.{i}"));
-                        let mut block = if config.is_wavefield_layer(i) {
+                        let mut block = if config.is_deltanet_layer(i) {
+                            TransformerBlockTrain::new_deltanet(config, layer_vb.clone())?
+                        } else if config.is_wavefield_layer(i) {
                             TransformerBlockTrain::new_wavefield(config, layer_vb.clone())?
+                        } else if config.gated_attention {
+                            TransformerBlockTrain::new_gated_standard(config, layer_vb.clone())?
                         } else {
                             TransformerBlockTrain::new(config, layer_vb.clone())?
                         };
@@ -98,8 +102,12 @@ impl NanochatTrainModel {
                     .map(|i| {
                         let unique_idx = after_offset + i;
                         let layer_vb = vb.pp(format!("local_after.{i}"));
-                        let mut block = if config.is_wavefield_layer(unique_idx) {
+                        let mut block = if config.is_deltanet_layer(unique_idx) {
+                            TransformerBlockTrain::new_deltanet(config, layer_vb.clone())?
+                        } else if config.is_wavefield_layer(unique_idx) {
                             TransformerBlockTrain::new_wavefield(config, layer_vb.clone())?
+                        } else if config.gated_attention {
+                            TransformerBlockTrain::new_gated_standard(config, layer_vb.clone())?
                         } else {
                             TransformerBlockTrain::new(config, layer_vb.clone())?
                         };
@@ -117,8 +125,12 @@ impl NanochatTrainModel {
                 let blocks = (0..config.n_layers)
                     .map(|i| {
                         let layer_vb = vb.pp(format!("blocks.{i}"));
-                        let mut block = if config.is_wavefield_layer(i) {
+                        let mut block = if config.is_deltanet_layer(i) {
+                            TransformerBlockTrain::new_deltanet(config, layer_vb.clone())?
+                        } else if config.is_wavefield_layer(i) {
                             TransformerBlockTrain::new_wavefield(config, layer_vb.clone())?
+                        } else if config.gated_attention {
+                            TransformerBlockTrain::new_gated_standard(config, layer_vb.clone())?
                         } else {
                             TransformerBlockTrain::new(config, layer_vb.clone())?
                         };
@@ -485,6 +497,12 @@ mod tests {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 

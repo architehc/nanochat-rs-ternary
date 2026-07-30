@@ -424,6 +424,12 @@ mod tests {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 

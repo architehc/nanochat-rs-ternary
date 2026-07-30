@@ -6,7 +6,7 @@ use std::io;
 use crate::attention::{Attention, KvCache, RopeFreqs};
 use crate::bitlinear::BitLinear;
 use crate::block::{AttentionLayer, AttentionState, TransformerBlock};
-use crate::config::{LayerSequence, ModelConfig};
+use crate::config::{LayerSequence, LayerType, ModelConfig};
 use crate::deltanet::DeltaNetAttention;
 use crate::embed::Embedding;
 use crate::ffn::{FeedForward, FfnLayer, MoeExperts};
@@ -54,11 +54,6 @@ impl NanochatModel {
             config.mhc_n_streams == 2,
             "Only mhc_n_streams=2 is currently supported; N4 integration is not yet implemented"
         );
-
-        if config.gated_attention {
-            // gated_attention is configured but not yet implemented; ignoring
-            eprintln!("WARNING: gated_attention is configured but not yet implemented; ignoring");
-        }
 
         let rope = RopeFreqs::new(
             config.head_dim(),
@@ -211,11 +206,6 @@ impl NanochatModel {
             )
         })?;
 
-        if config.gated_attention {
-            // gated_attention is configured but not yet implemented; ignoring
-            eprintln!("WARNING: gated_attention is configured but not yet implemented; ignoring");
-        }
-
         Self::validate_tensor_names(&gguf, &config)?;
         let group_size = config.group_size;
 
@@ -332,12 +322,49 @@ impl NanochatModel {
                     &format!("{prefix}.attention.w_beta.weight"),
                     group_size,
                 )?);
+                // Gated DeltaNet parameters. Required as a set when the file
+                // declares itself gated — a partial set would otherwise load as
+                // a silently different (ungated) model. Plain DeltaNet files
+                // omit all five.
+                let (w_alpha, a_log, dt_bias, w_gate_dn, out_norm_weight) =
+                    if config.gated_deltanet {
+                        (
+                            Some(BitLinear::new(gguf.load_planar_weights(
+                                &format!("{prefix}.attention.w_alpha.weight"),
+                                group_size,
+                            )?)),
+                            Some(Self::load_f32_vec(
+                                &gguf,
+                                &format!("{prefix}.attention.a_log"),
+                            )?),
+                            Some(Self::load_f32_vec(
+                                &gguf,
+                                &format!("{prefix}.attention.dt_bias"),
+                            )?),
+                            Some(BitLinear::new(gguf.load_planar_weights(
+                                &format!("{prefix}.attention.w_gate.weight"),
+                                group_size,
+                            )?)),
+                            Some(Self::load_f32_vec(
+                                &gguf,
+                                &format!("{prefix}.attention.out_norm.weight"),
+                            )?),
+                        )
+                    } else {
+                        (None, None, None, None, None)
+                    };
+
                 AttentionLayer::DeltaNet(DeltaNetAttention {
                     wq,
                     wk,
                     wv,
                     wo,
                     w_beta,
+                    w_alpha,
+                    a_log,
+                    dt_bias,
+                    w_gate: w_gate_dn,
+                    out_norm_weight,
                     n_heads: config.deltanet_qk_heads.unwrap_or(config.n_heads),
                     head_dim: config.deltanet_qk_head_dim(),
                 })
@@ -355,11 +382,24 @@ impl NanochatModel {
                 let wo = BitLinear::new(
                     gguf.load_planar_weights(&format!("{prefix}.attention.wo.weight"), group_size)?,
                 );
+                // Optional gated attention
+                let w_gate_attn = if config.gated_attention {
+                    gguf.load_planar_weights(
+                        &format!("{prefix}.attention.w_gate.weight"),
+                        group_size,
+                    )
+                    .ok()
+                    .map(BitLinear::new)
+                } else {
+                    None
+                };
+
                 AttentionLayer::Standard(Attention {
                     wq,
                     wk,
                     wv,
                     wo,
+                    w_gate: w_gate_attn,
                     n_heads: config.n_heads,
                     n_kv_heads: config.n_kv_heads,
                     head_dim: config.head_dim(),
@@ -726,6 +766,50 @@ impl NanochatModel {
             _ => None,
         };
 
+        // Explicit hybrid layer pattern, one entry per repeating slot:
+        // 0 = DeltaNet, 1 = standard attention (the training-side encoding).
+        // Takes precedence over deltanet_ratio, which cannot express an
+        // arbitrary pattern. Absent => Interleaved, preserving older files.
+        let layer_sequence = match gguf.metadata.get("nanochat.deltanet_pattern") {
+            Some(GgufValue::Array(entries)) if !entries.is_empty() => {
+                let mut pattern = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    let slot = match entry {
+                        GgufValue::U32(v) => *v,
+                        other => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!(
+                                    "nanochat.deltanet_pattern must be an array of U32, got {other:?}"
+                                ),
+                            ));
+                        }
+                    };
+                    pattern.push(match slot {
+                        0 => LayerType::DeltaNetAttention,
+                        1 => LayerType::StandardAttention,
+                        other => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!(
+                                    "nanochat.deltanet_pattern entry {other} is not a known layer \
+                                     type (0 = DeltaNet, 1 = standard attention)"
+                                ),
+                            ));
+                        }
+                    });
+                }
+                LayerSequence::Pattern(pattern)
+            }
+            _ => LayerSequence::Interleaved,
+        };
+
+        let gated_deltanet = match gguf.metadata.get("nanochat.gated_deltanet") {
+            Some(GgufValue::Bool(v)) => *v,
+            Some(GgufValue::U32(v)) => *v != 0,
+            _ => false,
+        };
+
         let ffn_mult = match gguf.metadata.get("nanochat.ffn_mult") {
             Some(GgufValue::F32(v)) => *v,
             _ => 2.667,
@@ -852,9 +936,10 @@ impl NanochatModel {
             use_shared_expert,
             expert_dim,
             deltanet_ratio,
-            layer_sequence: LayerSequence::Interleaved, // Default to interleaved
+            layer_sequence,
             weight_tied,
             gated_attention,
+            gated_deltanet,
             loop_config,
             wavefield_config: {
                 use crate::config::WaveFieldConfig;
@@ -969,6 +1054,8 @@ impl NanochatModel {
             is_deltanet: bool,
             is_wavefield: bool,
             wavefield_has_coupling: bool,
+            gated_attention: bool,
+            gated_deltanet: bool,
         ) {
             if is_wavefield {
                 // Wave field attention: ternary projections + physics params
@@ -988,6 +1075,17 @@ impl NanochatModel {
                 names.insert(format!("{prefix}.attention.wo.weight"));
                 if is_deltanet {
                     names.insert(format!("{prefix}.attention.w_beta.weight"));
+                    if gated_deltanet {
+                        // Gated DeltaNet: alpha decay gate, output gate, out RMSNorm
+                        names.insert(format!("{prefix}.attention.w_alpha.weight"));
+                        names.insert(format!("{prefix}.attention.w_gate.weight"));
+                        names.insert(format!("{prefix}.attention.a_log"));
+                        names.insert(format!("{prefix}.attention.dt_bias"));
+                        names.insert(format!("{prefix}.attention.out_norm.weight"));
+                    }
+                } else if gated_attention {
+                    // Gated standard attention: SiLU output gate
+                    names.insert(format!("{prefix}.attention.w_gate.weight"));
                 }
             }
             names.insert(format!("{prefix}.norm_attn.weight"));
@@ -1032,6 +1130,8 @@ impl NanochatModel {
                     config.is_deltanet_layer(layer_idx),
                     config.is_wavefield_layer(layer_idx),
                     wf_coupling,
+                    config.gated_attention,
+                    config.gated_deltanet,
                 );
                 add_ffn_tensors(&mut names, &prefix, config);
             }
@@ -1057,6 +1157,8 @@ impl NanochatModel {
                     config.is_deltanet_layer(layer_idx),
                     config.is_wavefield_layer(layer_idx),
                     wf_coupling,
+                    config.gated_attention,
+                    config.gated_deltanet,
                 );
                 add_ffn_tensors(&mut names, &prefix, config);
             }
@@ -1068,6 +1170,8 @@ impl NanochatModel {
                     config.is_deltanet_layer(i),
                     config.is_wavefield_layer(i),
                     wf_coupling,
+                    config.gated_attention,
+                    config.gated_deltanet,
                 );
                 add_ffn_tensors(&mut names, &prefix, config);
             }
@@ -1950,6 +2054,7 @@ mod tests {
         // Test Interleaved with no ratio: all standard
         let config = ModelConfig {
             deltanet_ratio: None,
+            gated_deltanet: false,
             n_layers: 4,
             ..ModelConfig::d20()
         };
@@ -1959,6 +2064,7 @@ mod tests {
         // Test Interleaved with ratio 0.0: all standard
         let config = ModelConfig {
             deltanet_ratio: Some(0.0),
+            gated_deltanet: false,
             n_layers: 4,
             ..ModelConfig::d20()
         };
@@ -1967,6 +2073,7 @@ mod tests {
         // Test Interleaved with ratio 1.0: all DeltaNet
         let config = ModelConfig {
             deltanet_ratio: Some(1.0),
+            gated_deltanet: false,
             n_layers: 4,
             ..ModelConfig::d20()
         };
@@ -1976,6 +2083,7 @@ mod tests {
         // Test Interleaved with ratio 0.5: expect 2 DeltaNet layers
         let config = ModelConfig {
             deltanet_ratio: Some(0.5),
+            gated_deltanet: false,
             n_layers: 4,
             ..ModelConfig::d20()
         };
@@ -2000,6 +2108,7 @@ mod tests {
         let config_std = ModelConfig::test_config(128, 2, 4, 256);
         let config_dn = ModelConfig {
             deltanet_ratio: Some(1.0),
+            gated_deltanet: false,
             ..config_std.clone()
         };
 

@@ -25,6 +25,12 @@ struct DeltaNetScratch {
     beta_raw: Vec<f32>,
     attn_out: Vec<f32>,
     sk: Vec<f32>,
+    /// Alpha gate raw output: [n_heads]
+    alpha_raw: Vec<f32>,
+    /// Output gate: [dim]
+    gate_out: Vec<f32>,
+    /// Pre-gating normalized output: [dim]
+    normed_out: Vec<f32>,
 }
 
 impl DeltaNetScratch {
@@ -39,6 +45,9 @@ impl DeltaNetScratch {
             beta_raw: vec![0.0; n_heads],
             attn_out: vec![0.0; dim],
             sk: vec![0.0; head_dim],
+            alpha_raw: vec![0.0; n_heads],
+            gate_out: vec![0.0; dim],
+            normed_out: vec![0.0; dim],
         }
     }
 
@@ -67,6 +76,15 @@ impl DeltaNetScratch {
         }
         if self.sk.len() != head_dim {
             self.sk.resize(head_dim, 0.0);
+        }
+        if self.alpha_raw.len() != n_heads {
+            self.alpha_raw.resize(n_heads, 0.0);
+        }
+        if self.gate_out.len() != dim {
+            self.gate_out.resize(dim, 0.0);
+        }
+        if self.normed_out.len() != dim {
+            self.normed_out.resize(dim, 0.0);
         }
     }
 }
@@ -113,6 +131,9 @@ impl DeltaNetState {
 ///
 /// Uses linear recurrent attention with delta rule updates instead of
 /// softmax attention + KV cache. All projections are BitLinear (ternary).
+///
+/// When `gated` is true (Gated DeltaNet), uses Mamba2-style alpha decay gate
+/// and SiLU output gating with per-head RMSNorm.
 #[derive(Debug)]
 pub struct DeltaNetAttention {
     /// Query projection: dim -> dim
@@ -125,11 +146,26 @@ pub struct DeltaNetAttention {
     pub wo: BitLinear,
     /// Beta gate projection: dim -> n_heads (one scalar beta per head)
     pub w_beta: BitLinear,
+    /// Alpha gate projection: dim -> n_heads (Mamba2-style decay gate, optional)
+    pub w_alpha: Option<BitLinear>,
+    /// Learnable log-space decay rate: [n_heads] (optional)
+    pub a_log: Option<Vec<f32>>,
+    /// Learnable bias for softplus in alpha gate: [n_heads] (optional)
+    pub dt_bias: Option<Vec<f32>>,
+    /// Output gate projection: dim -> dim (optional)
+    pub w_gate: Option<BitLinear>,
+    /// Per-head RMSNorm weights: [head_dim] (optional)
+    pub out_norm_weight: Option<Vec<f32>>,
     pub n_heads: usize,
     pub head_dim: usize,
 }
 
 impl DeltaNetAttention {
+    /// Returns true if this is a Gated DeltaNet (has alpha gate + output gate).
+    pub fn is_gated(&self) -> bool {
+        self.w_alpha.is_some()
+    }
+
     fn forward_token(&self, x: &[f32], state: &mut DeltaNetState, out: &mut [f32]) {
         let n_heads = self.n_heads;
         let hd = self.head_dim;
@@ -153,11 +189,51 @@ impl DeltaNetAttention {
             *b = sigmoid(*b);
         }
 
-        // Normalize K per head (L2 normalization)
+        // L2-normalize Q and K per head
         scratch.k_norm.copy_from_slice(&scratch.k);
         for h in 0..n_heads {
             let offset = h * hd;
             l2_normalize(&mut scratch.k_norm[offset..offset + hd]);
+        }
+        // Alpha decay needs w_alpha + a_log + dt_bias together; a checkpoint
+        // carrying only some of them would otherwise panic on unwrap mid-inference.
+        let alpha_gate = match (&self.w_alpha, &self.a_log, &self.dt_bias) {
+            (Some(w), Some(a), Some(d)) => Some((w, a, d)),
+            _ => None,
+        };
+
+        // Gated DeltaNet L2-normalizes Q as well as K. Keyed on the gated path
+        // so pre-existing non-gated checkpoints keep their original numerics.
+        if alpha_gate.is_some() {
+            for h in 0..n_heads {
+                let offset = h * hd;
+                l2_normalize(&mut scratch.q[offset..offset + hd]);
+            }
+        }
+
+        // Compute alpha decay if gated
+        if let Some((w_alpha, a_log, dt_bias)) = alpha_gate {
+            w_alpha.forward_quantized(&scratch.x_q, act_scale, &mut scratch.alpha_raw);
+            for h in 0..n_heads {
+                // g = -exp(a_log) * softplus(alpha_raw + dt_bias)
+                let input = scratch.alpha_raw[h] + dt_bias[h];
+                let sp = softplus_scalar(input);
+                let decay = (-a_log[h].exp() * sp).exp(); // in (0, 1)
+                // Apply decay to state for this head
+                let s_offset = h * hd * hd;
+                for i in 0..hd * hd {
+                    s[s_offset + i] *= decay;
+                }
+            }
+        }
+
+        // Compute output gate if gated
+        if let Some(ref w_gate) = self.w_gate {
+            w_gate.forward_quantized(&scratch.x_q, act_scale, &mut scratch.gate_out);
+            // Apply SiLU to gate
+            for v in scratch.gate_out.iter_mut() {
+                *v = *v * sigmoid(*v);
+            }
         }
 
         // Per-head recurrent update + output computation
@@ -175,9 +251,7 @@ impl DeltaNetAttention {
                 *sk_val = sum;
             }
 
-            // Update S:
-            // S = S - beta * sk @ k_norm^T + beta * v @ k_norm^T
-            // = S + beta * (v - sk) @ k_norm^T
+            // Delta update: S += k_norm @ (beta * (v - sk))^T
             for i in 0..hd {
                 let diff_i = scratch.v[h_offset + i] - scratch.sk[i];
                 for j in 0..hd {
@@ -195,16 +269,59 @@ impl DeltaNetAttention {
             }
         }
 
+        // Per-head RMSNorm + output gating. Each is keyed on its own weight
+        // rather than on the alpha gate: a checkpoint with an output gate but no
+        // alpha gate must still have the gate applied — it was computed above,
+        // so skipping it here would burn the projection and discard the result.
+        if let Some(ref norm_w) = self.out_norm_weight {
+            for h in 0..n_heads {
+                let offset = h * hd;
+                rms_norm_inplace(&mut scratch.attn_out[offset..offset + hd], norm_w);
+            }
+        }
+        if self.w_gate.is_some() {
+            for (a, g) in scratch.attn_out.iter_mut().zip(scratch.gate_out.iter()) {
+                *a *= g;
+            }
+        }
+
         let out_scale = quantize_activations_i8_into(&scratch.attn_out, &mut scratch.x_q);
         self.wo.forward_quantized(&scratch.x_q, out_scale, out);
     }
 
     /// Create DeltaNet attention with random weights (for testing).
     pub fn new_random(config: &ModelConfig) -> Self {
+        Self::new_random_gated(config, false)
+    }
+
+    /// Create DeltaNet attention with random weights, optionally gated.
+    pub fn new_random_gated(config: &ModelConfig, gated: bool) -> Self {
         let dim = config.dim;
         let hd = config.deltanet_qk_head_dim();
         let gs = config.group_size;
         let n_heads = config.deltanet_qk_heads.unwrap_or(config.n_heads);
+
+        let (w_alpha, a_log, dt_bias, w_gate, out_norm_weight) = if gated {
+            (
+                Some(BitLinear::from_float(
+                    &random_weights(n_heads, dim, 25),
+                    n_heads,
+                    dim,
+                    gs,
+                )),
+                Some(vec![0.5f32; n_heads]),
+                Some(vec![0.0f32; n_heads]),
+                Some(BitLinear::from_float(
+                    &random_weights(dim, dim, 26),
+                    dim,
+                    dim,
+                    gs,
+                )),
+                Some(vec![1.0f32; hd]),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
 
         Self {
             wq: BitLinear::from_float(&random_weights(dim, dim, 20), dim, dim, gs),
@@ -212,6 +329,11 @@ impl DeltaNetAttention {
             wv: BitLinear::from_float(&random_weights(dim, dim, 22), dim, dim, gs),
             wo: BitLinear::from_float(&random_weights(dim, dim, 23), dim, dim, gs),
             w_beta: BitLinear::from_float(&random_weights(n_heads, dim, 24), n_heads, dim, gs),
+            w_alpha,
+            a_log,
+            dt_bias,
+            w_gate,
+            out_norm_weight,
             n_heads,
             head_dim: hd,
         }
@@ -264,6 +386,27 @@ impl DeltaNetAttention {
 #[inline]
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
+}
+
+/// Softplus activation: log(1 + exp(x))
+#[inline]
+fn softplus_scalar(x: f32) -> f32 {
+    if x > 20.0 {
+        x // For large x, softplus ≈ x
+    } else {
+        (1.0 + x.exp()).ln()
+    }
+}
+
+/// In-place RMSNorm: x[i] = x[i] / rms(x) * weight[i]
+fn rms_norm_inplace(x: &mut [f32], weight: &[f32]) {
+    assert_eq!(x.len(), weight.len());
+    let n = x.len() as f32;
+    let rms_sq: f32 = x.iter().map(|v| v * v).sum::<f32>() / n;
+    let inv_rms = 1.0 / (rms_sq + 1e-6).sqrt();
+    for (v, w) in x.iter_mut().zip(weight.iter()) {
+        *v = *v * inv_rms * w;
+    }
 }
 
 /// L2-normalize a vector in-place, with epsilon for numerical stability.

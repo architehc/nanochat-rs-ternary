@@ -694,19 +694,73 @@ impl RLTrainer {
 
     /// Generate coding prompts (tasks for the model).
     fn generate_prompts(&self, n_prompts: usize) -> Vec<String> {
-        vec![
-            "Write a function to calculate the factorial of a number using recursion.".to_string(),
-            "Implement a struct representing a 2D point with methods for distance calculation."
-                .to_string(),
-            "Create a function that filters even numbers from a vector using iterators."
-                .to_string(),
-            "Write a function that reads a file and returns its contents as a String, handling errors properly.".to_string(),
-            "Implement a simple binary search tree with insert and search methods.".to_string(),
-        ]
-        .into_iter()
-        .cycle()
-        .take(n_prompts)
-        .collect()
+        let prompts: Vec<String> = vec![
+            // === Core Language ===
+            "Write a function to calculate the factorial of a number using recursion.",
+            "Implement a struct representing a 2D point with methods for distance calculation.",
+            "Create a function that filters even numbers from a vector using iterators.",
+            "Write a function that reads a file and returns its contents as a String, handling errors properly.",
+            "Implement a simple binary search tree with insert and search methods.",
+            // Pattern matching
+            "Write a function that uses pattern matching to parse a simple command string into an enum with variants like Quit, Echo(String), and Move { x: i32, y: i32 }.",
+            "Implement a function that uses if let and while let to process a sequence of Option values.",
+            // Error handling
+            "Define a custom error enum with multiple variants and implement std::fmt::Display and std::error::Error for it. Write functions that return Result with this error type.",
+            "Write a function that chains multiple fallible operations using the ? operator, converting between different error types with From implementations.",
+            // Ownership & borrowing
+            "Write a function that demonstrates ownership transfer, borrowing, and mutable borrowing. Include a struct with lifetime annotations.",
+            "Implement a function that takes a closure as an argument with appropriate Fn/FnMut/FnOnce bounds and demonstrate each.",
+            // Iterators
+            "Implement a custom iterator that generates the Fibonacci sequence. Use it with map, filter, take, and collect.",
+            "Write a function using iterator combinators (chain, zip, enumerate, flat_map, fold) to process two vectors into a HashMap.",
+            // Traits & generics
+            "Define a trait called Summary with a default method. Implement it for multiple structs. Write a function that accepts impl Summary and another that accepts &dyn Summary.",
+            "Write a generic function with multiple trait bounds using where clauses. Demonstrate associated types in a trait.",
+            // === Data Structures ===
+            "Implement a stack data structure using a Vec with push, pop, peek, and is_empty methods.",
+            "Implement a queue using two stacks (Vec) with enqueue and dequeue operations.",
+            "Implement a singly linked list with push_front, pop_front, peek, and an iterator.",
+            "Implement a HashMap from scratch using separate chaining with Vec<Vec<(K,V)>> buckets, with insert, get, and remove methods.",
+            "Implement a min-heap with push, pop, and peek operations.",
+            "Implement a trie (prefix tree) with insert, search, and starts_with methods.",
+            "Implement a disjoint set (Union-Find) with path compression and union by rank.",
+            "Implement an LRU cache with get and put operations using a HashMap and a doubly-linked list.",
+            // === Algorithms ===
+            "Implement quicksort for a Vec<i32> with a partition function.",
+            "Implement merge sort for a Vec<i32>.",
+            "Implement binary search that returns the index of a target in a sorted slice.",
+            "Implement BFS and DFS on an adjacency list graph representation.",
+            "Implement Dijkstra's shortest path algorithm using a BinaryHeap.",
+            "Implement dynamic programming for the 0/1 knapsack problem.",
+            "Implement the longest common subsequence algorithm for two strings.",
+            "Implement the edit distance (Levenshtein distance) between two strings.",
+            "Implement topological sort for a directed acyclic graph.",
+            "Implement a function to find all strongly connected components using Tarjan's algorithm.",
+            "Implement the Sieve of Eratosthenes to find all primes up to n.",
+            "Implement matrix multiplication for Vec<Vec<f64>> matrices.",
+            // === Rust Idioms & Patterns ===
+            "Implement the Builder pattern for a Config struct with multiple optional fields.",
+            "Implement a newtype wrapper around String that validates its contents (e.g., Email, Username).",
+            "Implement a state machine using enums and methods that consume self and return the next state.",
+            "Implement the RAII pattern with a custom struct that acquires a resource in new() and releases it in Drop.",
+            "Demonstrate interior mutability using RefCell inside an Rc for a shared mutable tree structure.",
+            "Implement From and Into conversions between multiple related types.",
+            "Implement Display and Debug traits for a custom struct with formatted output.",
+            "Write a struct that uses Cow<str> to avoid unnecessary cloning.",
+            // === Systems Programming ===
+            "Write a multi-threaded program that uses std::sync::mpsc channels to send messages between threads.",
+            "Implement a simple thread pool that executes closures submitted to it.",
+            "Write a program that uses Arc<Mutex<T>> to safely share and modify data across threads.",
+            "Write a function that uses std::sync::atomic types (AtomicUsize, Ordering) to implement a lock-free counter.",
+            "Write a program that reads a CSV file line by line, parses each line into a struct, and collects results into a Vec.",
+            "Implement a simple command-line argument parser without external crates.",
+            // === Advanced ===
+            "Implement a generic sorting function that works on any type implementing Ord, with a custom comparator option.",
+            "Write a recursive descent parser for simple arithmetic expressions (numbers, +, -, *, /, parentheses).",
+            "Implement a simple event system using trait objects: an EventBus that can register handlers and dispatch events.",
+            "Write a function that uses closures and higher-order functions to implement a pipeline of transformations on data.",
+        ].into_iter().map(|s| s.to_string()).collect();
+        prompts.into_iter().cycle().take(n_prompts).collect()
     }
 
     /// Template code generator retained for offline/unit-test paths.
@@ -825,10 +879,35 @@ mod tests {
     fn test_generate_prompts_cycles() {
         let config = RLConfig::default();
         let trainer = RLTrainer::new(config).unwrap();
-        let prompts = trainer.generate_prompts(7);
-        assert_eq!(prompts.len(), 7);
-        assert_eq!(prompts[0], prompts[5]);
-        assert_eq!(prompts[1], prompts[6]);
+
+        // Derive the pool size rather than hardcoding it, so growing the prompt
+        // list doesn't break this test. One cycle must be duplicate-free, which
+        // makes the first repeat of prompts[0] the cycle boundary.
+        let sample = trainer.generate_prompts(1024);
+        let pool_size = 1 + sample[1..]
+            .iter()
+            .position(|p| *p == sample[0])
+            .expect("prompt list should repeat within 1024 draws");
+        assert!(pool_size > 1, "prompt pool should hold more than one prompt");
+
+        let unique: std::collections::HashSet<_> = sample[..pool_size].iter().collect();
+        assert_eq!(
+            unique.len(),
+            pool_size,
+            "prompts within one cycle must be distinct"
+        );
+
+        // Requesting past the pool size wraps back to the start.
+        let n = pool_size + 2;
+        let prompts = trainer.generate_prompts(n);
+        assert_eq!(prompts.len(), n);
+        assert_eq!(prompts[0], prompts[pool_size]);
+        assert_eq!(prompts[1], prompts[pool_size + 1]);
+
+        // Fewer than one cycle is truncation, not repetition.
+        let short = trainer.generate_prompts(3);
+        assert_eq!(short.len(), 3);
+        assert_eq!(short.as_slice(), &sample[..3]);
     }
 
     #[test]

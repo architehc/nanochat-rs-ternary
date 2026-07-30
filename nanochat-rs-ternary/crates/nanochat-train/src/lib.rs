@@ -39,6 +39,7 @@ pub mod error;
 pub mod export;
 pub mod ffn;
 pub mod fp4;
+pub mod gated_deltanet;
 pub mod layers;
 pub mod logging;
 pub mod loop_block;

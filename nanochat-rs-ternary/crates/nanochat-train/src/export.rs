@@ -52,6 +52,42 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
     writer.add_metadata("nanochat.rope_theta", GgufValue::F32(config.rope_theta));
     writer.add_metadata("nanochat.ffn_mult", GgufValue::F32(config.ffn_mult));
 
+    // Gated standard attention (SiLU output gate on the attention projection).
+    writer.add_metadata(
+        "nanochat.gated_attention",
+        GgufValue::Bool(config.gated_attention),
+    );
+
+    // Hybrid DeltaNet metadata. Without these the loader cannot tell which
+    // layers are DeltaNet, and falls back to treating every layer as standard
+    // attention — which then fails on the missing tensor names.
+    if config.use_deltanet && !config.deltanet_pattern.is_empty() {
+        // One entry per repeating slot: 0 = DeltaNet, 1 = standard attention.
+        // A ratio scalar cannot express an arbitrary pattern, so the pattern is
+        // serialized verbatim and the loader replays the same modulo indexing.
+        writer.add_metadata(
+            "nanochat.deltanet_pattern",
+            GgufValue::Array(
+                config
+                    .deltanet_pattern
+                    .iter()
+                    .map(|slot| GgufValue::U32(*slot as u32))
+                    .collect(),
+            ),
+        );
+        // Training only implements the gated variant of DeltaNet.
+        writer.add_metadata("nanochat.gated_deltanet", GgufValue::Bool(true));
+        let dn_heads = if config.deltanet_n_heads > 0 {
+            config.deltanet_n_heads
+        } else {
+            config.n_heads
+        };
+        writer.add_metadata(
+            "nanochat.deltanet_qk_heads",
+            GgufValue::U32(dn_heads as u32),
+        );
+    }
+
     // LoopLM metadata (if present)
     if let Some(ref loop_cfg) = config.loop_config {
         writer.add_metadata(
@@ -179,6 +215,16 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
                 ] {
                     export_ternary_layer(writer, &format!("{}.{}.weight", prefix, name), layer)?;
                 }
+                // Gated attention output gate — present only when the block was
+                // built with config.gated_attention. Omitting it used to drop the
+                // gate silently, leaving inference to run an ungated model.
+                if let Some(ref w_gate) = attn.w_gate {
+                    export_ternary_layer(
+                        writer,
+                        &format!("{}.attention.w_gate.weight", prefix),
+                        w_gate,
+                    )?;
+                }
             }
             crate::block::AttentionTrainLayer::WaveField(wf) => {
                 // Ternary projections
@@ -226,6 +272,46 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
                         &coeffs_data,
                     );
                 }
+            }
+            crate::block::AttentionTrainLayer::GatedDeltaNet(dn) => {
+                // Names must match the inference loader in
+                // nanochat-model/src/model.rs, which reads DeltaNet layers under
+                // `attention.*` (shared with standard attention) and calls the
+                // gates w_alpha/w_beta/w_gate rather than a_proj/b_proj/g_proj.
+                // The training-side field names follow the paper; only the
+                // serialized names are translated here, so checkpoint keys are
+                // unaffected.
+                for (name, layer) in [
+                    ("attention.wq", &dn.wq),
+                    ("attention.wk", &dn.wk),
+                    ("attention.wv", &dn.wv),
+                    ("attention.wo", &dn.wo),
+                    ("attention.w_alpha", &dn.a_proj),
+                    ("attention.w_beta", &dn.b_proj),
+                    ("attention.w_gate", &dn.g_proj),
+                ] {
+                    export_ternary_layer(writer, &format!("{}.{}.weight", prefix, name), layer)?;
+                }
+                // FP32 scalar params
+                let a_log_data = dn.a_log.flatten_all()?.to_vec1::<f32>()?;
+                writer.add_f32_tensor(
+                    &format!("{}.attention.a_log", prefix),
+                    &[dn.n_heads as u64],
+                    &a_log_data,
+                );
+                let dt_bias_data = dn.dt_bias.flatten_all()?.to_vec1::<f32>()?;
+                writer.add_f32_tensor(
+                    &format!("{}.attention.dt_bias", prefix),
+                    &[dn.n_heads as u64],
+                    &dt_bias_data,
+                );
+                // DeltaNet output norm
+                let out_norm_data = dn.out_norm.weight().flatten_all()?.to_vec1::<f32>()?;
+                writer.add_f32_tensor(
+                    &format!("{}.attention.out_norm.weight", prefix),
+                    &[dn.head_dim as u64],
+                    &out_norm_data,
+                );
             }
         }
 
@@ -493,6 +579,12 @@ mod tests {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 

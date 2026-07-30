@@ -111,6 +111,8 @@ pub struct Attention {
     pub wk: BitLinear,
     pub wv: BitLinear,
     pub wo: BitLinear,
+    /// Optional output gate projection: dim -> dim (SiLU-activated)
+    pub w_gate: Option<BitLinear>,
     pub n_heads: usize,
     pub n_kv_heads: usize,
     pub head_dim: usize,
@@ -125,11 +127,18 @@ impl Attention {
         let kv_dim = config.n_kv_heads * hd;
         let gs = config.group_size;
 
+        let w_gate = if config.gated_attention {
+            Some(BitLinear::from_float(&random_weights(dim, dim, 5), dim, dim, gs))
+        } else {
+            None
+        };
+
         Self {
             wq: BitLinear::from_float(&random_weights(dim, dim, 1), dim, dim, gs),
             wk: BitLinear::from_float(&random_weights(kv_dim, dim, 2), kv_dim, dim, gs),
             wv: BitLinear::from_float(&random_weights(kv_dim, dim, 3), kv_dim, dim, gs),
             wo: BitLinear::from_float(&random_weights(dim, dim, 4), dim, dim, gs),
+            w_gate,
             n_heads: config.n_heads,
             n_kv_heads: config.n_kv_heads,
             head_dim: hd,
@@ -199,6 +208,17 @@ impl Attention {
                 for d in 0..self.head_dim {
                     attn_out_ws[out_offset + d] += w * cache.v[v_base + d];
                 }
+            }
+        }
+
+        // Apply output gating if enabled: out = wo(silu(gate(x)) * attn_out)
+        if let Some(ref w_gate) = self.w_gate {
+            // Reuse q_ws as gate workspace (same dim)
+            w_gate.forward_with_workspace(x, x_q_ws, q_ws);
+            // SiLU and multiply with attn_out
+            for (a, g) in attn_out_ws.iter_mut().zip(q_ws.iter()) {
+                let silu_g = *g * sigmoid(*g);
+                *a *= silu_g;
             }
         }
 
@@ -281,9 +301,26 @@ impl Attention {
                 }
             }
 
+            // Apply output gating if enabled
+            if let Some(ref w_gate) = self.w_gate {
+                let x_t = &x_batch[t * dim..(t + 1) * dim];
+                let gate_ws = &mut all_q_ws[t * dim..(t + 1) * dim];
+                w_gate.forward_with_workspace(x_t, x_q_ws, gate_ws);
+                for (a, g) in single_attn_out.iter_mut().zip(gate_ws.iter()) {
+                    let silu_g = *g * sigmoid(*g);
+                    *a *= silu_g;
+                }
+            }
+
             self.wo.forward_with_workspace(single_attn_out, x_q_ws, &mut out_batch[out_base..out_base + dim]);
         }
     }
+}
+
+/// Sigmoid activation: 1 / (1 + exp(-x))
+#[inline]
+fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
 }
 
 /// In-place softmax.

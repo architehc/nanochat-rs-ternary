@@ -131,6 +131,12 @@ pub struct ModelConfig {
     pub weight_tied: bool,
     /// Whether to use gated attention (multiply attention output by learned gate)
     pub gated_attention: bool,
+    /// DeltaNet layers carry the Gated DeltaNet parameters (alpha decay gate,
+    /// output gate, per-head output RMSNorm) in addition to q/k/v/o/beta.
+    ///
+    /// Serialized as `nanochat.gated_deltanet`. Absent (false) means a plain
+    /// DeltaNet checkpoint, whose tensor set and numerics are left untouched.
+    pub gated_deltanet: bool,
     /// LoopLM configuration (None = standard fixed-depth transformer)
     pub loop_config: Option<LoopConfig>,
     /// Wave Field attention configuration (None = no wave field layers)
@@ -161,6 +167,7 @@ impl ModelConfig {
             use_shared_expert: false,
             expert_dim: None,
             deltanet_ratio: None,
+            gated_deltanet: false,
             layer_sequence: LayerSequence::Interleaved,
             weight_tied: false,
             gated_attention: false,
@@ -191,6 +198,7 @@ impl ModelConfig {
             use_shared_expert: false,
             expert_dim: None,
             deltanet_ratio: None,
+            gated_deltanet: false,
             layer_sequence: LayerSequence::Interleaved,
             weight_tied: true,
             gated_attention: false, // Aligned with training config
@@ -231,6 +239,7 @@ impl ModelConfig {
             use_shared_expert: false,
             expert_dim: None,
             deltanet_ratio: None,
+            gated_deltanet: false,
             layer_sequence: LayerSequence::Interleaved,
             weight_tied: false,
             gated_attention: false,
@@ -261,6 +270,7 @@ impl ModelConfig {
             use_shared_expert: false,
             expert_dim: None,
             deltanet_ratio: None,
+            gated_deltanet: false,
             layer_sequence: LayerSequence::Interleaved,
             weight_tied: false,
             gated_attention: false,
@@ -291,6 +301,7 @@ impl ModelConfig {
             use_shared_expert: false,
             expert_dim: None,
             deltanet_ratio: None,
+            gated_deltanet: false,
             layer_sequence: LayerSequence::Interleaved,
             weight_tied: true,
             gated_attention: false,
@@ -321,6 +332,7 @@ impl ModelConfig {
             use_shared_expert: false,
             expert_dim: None,
             deltanet_ratio: None,
+            gated_deltanet: false,
             layer_sequence: LayerSequence::Interleaved,
             weight_tied: false,
             gated_attention: false,
@@ -351,6 +363,7 @@ impl ModelConfig {
             use_shared_expert: false,
             expert_dim: None,
             deltanet_ratio: None,
+            gated_deltanet: false,
             layer_sequence: LayerSequence::Interleaved,
             weight_tied: false,
             gated_attention: false,
@@ -381,6 +394,7 @@ impl ModelConfig {
             use_shared_expert: false,
             expert_dim: None,
             deltanet_ratio: None,
+            gated_deltanet: false,
             layer_sequence: LayerSequence::Interleaved,
             weight_tied: false,
             gated_attention: false,
@@ -436,6 +450,7 @@ impl ModelConfig {
             use_shared_expert: true,
             expert_dim: Some(512), // Small expert intermediate dim
             deltanet_ratio: None,  // Unused - we use explicit pattern
+            gated_deltanet: true,
             layer_sequence: LayerSequence::Pattern(pattern),
             weight_tied: false,
             gated_attention: true, // Qwen3 uses gated attention
@@ -528,6 +543,7 @@ impl ModelConfig {
             use_shared_expert: false,
             expert_dim: None,
             deltanet_ratio: None,
+            gated_deltanet: false,
             layer_sequence: LayerSequence::Interleaved,
             weight_tied: false,
             gated_attention: false,
@@ -634,6 +650,9 @@ impl ModelConfig {
                 }
             }
             LayerSequence::Pattern(pattern) => {
+                if pattern.is_empty() {
+                    return false;
+                }
                 let idx = layer_idx % pattern.len();
                 pattern[idx] == LayerType::DeltaNetAttention
             }

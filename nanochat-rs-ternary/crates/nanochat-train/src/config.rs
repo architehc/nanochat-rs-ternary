@@ -302,6 +302,11 @@ pub struct TrainConfig {
     #[serde(default)]
     pub gated_attention: bool,
     /// Short convolution kernel size for DeltaNet (default: 4, 0 = disabled)
+    ///
+    /// NOT YET IMPLEMENTED — reserved. `GatedDeltaNetTrain` does not read this
+    /// field, so setting it has no effect on the architecture. Gated DeltaNet as
+    /// published applies a short causal depthwise conv to q/k/v; wiring that up
+    /// also needs a matching inference path and GGUF tensors.
     #[serde(default = "default_deltanet_conv_kernel")]
     pub deltanet_conv_kernel: usize,
 
@@ -2246,12 +2251,12 @@ impl TrainConfig {
     pub fn qwen35_hybrid() -> Self {
         Self {
             dim: 1024,
-            n_layers: 24,
+            n_layers: 16,       // 12 DeltaNet + 4 Attention (~24GB, good throughput)
             n_heads: 8,
             n_kv_heads: 2,      // GQA 4:1 for attention layers
             ffn_mult: 3.5,      // ffn_dim = 3584
             vocab_size: 4096,
-            max_seq_len: 512,
+            max_seq_len: 256,   // Proven stable at 17.7GB on 32GB VRAM
             group_size: 128,
             mhc_n_streams: 2,
             weight_tied: true,
@@ -2314,7 +2319,7 @@ impl TrainConfig {
 
             // Hybrid DeltaNet: [0,0,0,1] = 3 DeltaNet + 1 Attention, repeating
             use_deltanet: true,
-            deltanet_n_heads: 16,           // More heads for DeltaNet (head_dim=64)
+            deltanet_n_heads: 8,            // head_dim=128 (dim/n_heads)
             deltanet_pattern: vec![0, 0, 0, 1], // 75% DeltaNet, 25% attention
             gated_attention: true,          // Output gating on attention layers
             deltanet_conv_kernel: 4,

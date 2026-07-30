@@ -70,6 +70,21 @@ fn tiny_config(weight_tied: bool) -> TrainConfig {
         wavefield_physics_lr: 5e-4,
         wavefield_warmup_delay: 0,
         wavefield_haar_direct: true,
+
+        use_engram: false,
+        engram_d_mem: 256,
+        engram_n_gram_orders: vec![],
+        engram_n_heads: 4,
+        engram_table_size: 50021,
+        engram_layers: vec![],
+        engram_conv_kernel: 4,
+        engram_lr_mult: 5.0,
+
+        use_deltanet: false,
+        deltanet_n_heads: 0,
+        deltanet_pattern: vec![],
+        gated_attention: false,
+        deltanet_conv_kernel: 4,
     }
 }
 
@@ -377,4 +392,177 @@ fn test_export_load_config_fields() {
         inf_model.config.rope_theta,
         cfg.rope_theta
     );
+}
+
+// ---------------------------------------------------------------------------
+// Hybrid Gated DeltaNet / gated attention export contract
+//
+// These exercise the export -> load path for the hybrid architecture. They are
+// stronger than they look: `NanochatModel::from_gguf` runs
+// `validate_tensor_names`, which rejects BOTH missing and unknown tensors. So a
+// successful load proves every exported tensor name matches exactly what the
+// loader expects — no silent drops, no orphans.
+//
+// Before the export cluster fix, all three of these failed: export wrote
+// `blocks.N.deltanet.*` while the loader read `blocks.N.attention.*`, no
+// architecture metadata was written at all (so every layer was treated as
+// standard attention), and the gated-attention `w_gate` was never exported.
+// ---------------------------------------------------------------------------
+
+fn tiny_gated_hybrid_config() -> TrainConfig {
+    let mut cfg = tiny_config(false);
+    cfg.n_layers = 4;
+    cfg.use_deltanet = true;
+    cfg.deltanet_n_heads = 4; // head_dim = 64 / 4 = 16
+    cfg.deltanet_pattern = vec![0, 0, 0, 1]; // 3 DeltaNet + 1 attention
+    cfg.gated_attention = true; // output gate on the attention layer
+    cfg
+}
+
+#[test]
+fn test_export_load_gated_hybrid_roundtrip() {
+    let cfg = tiny_gated_hybrid_config();
+    let device = Device::Cpu;
+    let varmap = VarMap::new();
+    let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let train_model = NanochatTrainModel::new(&cfg, vb).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let gguf_path = dir.path().join("test_hybrid.gguf");
+    let mhc_path = dir.path().join("test_hybrid.mhc");
+
+    export_model(
+        &train_model,
+        &cfg,
+        gguf_path.to_str().unwrap(),
+        mhc_path.to_str().unwrap(),
+    )
+    .unwrap();
+
+    let mut inf_model =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap())
+            .expect("gated hybrid GGUF must load — check tensor names and metadata");
+
+    // The architecture must be reconstructed, not guessed from a ratio.
+    assert!(
+        inf_model.config.gated_deltanet,
+        "gated_deltanet flag lost in roundtrip"
+    );
+    assert!(
+        inf_model.config.gated_attention,
+        "gated_attention flag lost in roundtrip"
+    );
+    assert_eq!(
+        inf_model.config.deltanet_qk_heads,
+        Some(cfg.deltanet_n_heads),
+        "deltanet head count lost in roundtrip"
+    );
+
+    // Every layer must be classified identically on both sides. A ratio scalar
+    // cannot express [0,0,0,1]: interleaving at 0.75 would pick different layers.
+    for i in 0..cfg.n_layers {
+        assert_eq!(
+            inf_model.config.is_deltanet_layer(i),
+            cfg.is_deltanet_layer(i),
+            "layer {i} type disagrees: inference={}, training={}",
+            inf_model.config.is_deltanet_layer(i),
+            cfg.is_deltanet_layer(i)
+        );
+    }
+    // Sanity-check the pattern itself rather than trusting agreement alone.
+    assert!(inf_model.config.is_deltanet_layer(0));
+    assert!(inf_model.config.is_deltanet_layer(1));
+    assert!(inf_model.config.is_deltanet_layer(2));
+    assert!(!inf_model.config.is_deltanet_layer(3));
+
+    inf_model.verify_mhc().unwrap();
+
+    let tokens = vec![1u32, 5, 10, 20, 42];
+    let logits = inf_model.forward_sequence(&tokens);
+    assert_eq!(logits.len(), cfg.vocab_size);
+    assert!(
+        logits.iter().all(|v| v.is_finite()),
+        "hybrid model produced non-finite logits"
+    );
+    assert!(
+        logits.iter().any(|&v| v != 0.0),
+        "hybrid model produced all-zero logits"
+    );
+}
+
+/// Gated attention with no DeltaNet layers: the `attention.w_gate` tensor must
+/// survive export. It previously did not, and the loader's `.ok()` swallowed the
+/// absence, so inference silently ran an ungated model.
+#[test]
+fn test_export_load_gated_attention_only_roundtrip() {
+    let mut cfg = tiny_config(false);
+    cfg.gated_attention = true;
+
+    let device = Device::Cpu;
+    let varmap = VarMap::new();
+    let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let train_model = NanochatTrainModel::new(&cfg, vb).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let gguf_path = dir.path().join("test_gated_attn.gguf");
+    let mhc_path = dir.path().join("test_gated_attn.mhc");
+
+    export_model(
+        &train_model,
+        &cfg,
+        gguf_path.to_str().unwrap(),
+        mhc_path.to_str().unwrap(),
+    )
+    .unwrap();
+
+    let mut inf_model =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap())
+            .expect("gated attention GGUF must load with attention.w_gate present");
+
+    assert!(inf_model.config.gated_attention);
+    for i in 0..cfg.n_layers {
+        assert!(
+            !inf_model.config.is_deltanet_layer(i),
+            "layer {i} should be standard attention"
+        );
+    }
+
+    let tokens = vec![1u32, 5, 10, 20, 42];
+    let logits = inf_model.forward_sequence(&tokens);
+    assert!(logits.iter().all(|v| v.is_finite()));
+    assert!(logits.iter().any(|&v| v != 0.0));
+}
+
+/// A plain (non-hybrid, non-gated) model must keep loading unchanged — the new
+/// metadata keys are additive and absent keys must fall back to the old
+/// behaviour.
+#[test]
+fn test_export_load_plain_model_unaffected() {
+    let cfg = tiny_config(false);
+    let device = Device::Cpu;
+    let varmap = VarMap::new();
+    let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let train_model = NanochatTrainModel::new(&cfg, vb).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let gguf_path = dir.path().join("test_plain.gguf");
+    let mhc_path = dir.path().join("test_plain.mhc");
+
+    export_model(
+        &train_model,
+        &cfg,
+        gguf_path.to_str().unwrap(),
+        mhc_path.to_str().unwrap(),
+    )
+    .unwrap();
+
+    let inf_model =
+        NanochatModel::from_gguf(gguf_path.to_str().unwrap(), mhc_path.to_str().unwrap()).unwrap();
+
+    assert!(!inf_model.config.gated_deltanet);
+    assert!(!inf_model.config.gated_attention);
+    assert!(matches!(
+        inf_model.config.layer_sequence,
+        nanochat_model::config::LayerSequence::Interleaved
+    ));
 }

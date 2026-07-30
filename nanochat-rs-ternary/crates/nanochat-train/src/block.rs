@@ -9,6 +9,7 @@ use crate::attention::AttentionTrain;
 use crate::config::TrainConfig;
 use crate::engram::EngramTrain;
 use crate::ffn::FeedForwardTrain;
+use crate::gated_deltanet::GatedDeltaNetTrain;
 use crate::layers::RMSNormTrain;
 use crate::mhc::MhcLiteN2Train;
 use crate::wavefield::WaveFieldAttentionTrain;
@@ -17,6 +18,7 @@ use crate::wavefield::WaveFieldAttentionTrain;
 pub enum AttentionTrainLayer {
     Standard(AttentionTrain),
     WaveField(WaveFieldAttentionTrain),
+    GatedDeltaNet(GatedDeltaNetTrain),
 }
 
 /// A single transformer block with mHC residual connections.
@@ -51,6 +53,55 @@ impl TransformerBlockTrain {
                 config.n_kv_heads,
                 config.group_size,
                 vb.pp("attn"),
+            )?),
+            ffn: FeedForwardTrain::new(config.dim, ffn_dim, config.group_size, vb.pp("ffn"))?,
+            engram: None,
+            dim: config.dim,
+            max_seq_len: config.max_seq_len,
+        })
+    }
+
+    /// Create a standard attention block with optional output gating.
+    pub fn new_gated_standard(config: &TrainConfig, vb: VarBuilder) -> Result<Self> {
+        let ffn_dim = config.ffn_dim();
+        Ok(Self {
+            mhc_attn: MhcLiteN2Train::new(vb.pp("mhc_attn"))?,
+            mhc_ffn: MhcLiteN2Train::new(vb.pp("mhc_ffn"))?,
+            norm_attn: RMSNormTrain::new(config.dim, vb.pp("norm_attn"))?,
+            norm_ffn: RMSNormTrain::new(config.dim, vb.pp("norm_ffn"))?,
+            attention: AttentionTrainLayer::Standard(AttentionTrain::new_with_gate(
+                config.dim,
+                config.n_heads,
+                config.n_kv_heads,
+                config.group_size,
+                config.gated_attention,
+                vb.pp("attn"),
+            )?),
+            ffn: FeedForwardTrain::new(config.dim, ffn_dim, config.group_size, vb.pp("ffn"))?,
+            engram: None,
+            dim: config.dim,
+            max_seq_len: config.max_seq_len,
+        })
+    }
+
+    /// Create a Gated DeltaNet attention block.
+    pub fn new_deltanet(config: &TrainConfig, vb: VarBuilder) -> Result<Self> {
+        let ffn_dim = config.ffn_dim();
+        let dn_heads = if config.deltanet_n_heads > 0 {
+            config.deltanet_n_heads
+        } else {
+            config.n_heads
+        };
+        Ok(Self {
+            mhc_attn: MhcLiteN2Train::new(vb.pp("mhc_attn"))?,
+            mhc_ffn: MhcLiteN2Train::new(vb.pp("mhc_ffn"))?,
+            norm_attn: RMSNormTrain::new(config.dim, vb.pp("norm_attn"))?,
+            norm_ffn: RMSNormTrain::new(config.dim, vb.pp("norm_ffn"))?,
+            attention: AttentionTrainLayer::GatedDeltaNet(GatedDeltaNetTrain::new(
+                config.dim,
+                dn_heads,
+                config.group_size,
+                vb.pp("deltanet"),
             )?),
             ffn: FeedForwardTrain::new(config.dim, ffn_dim, config.group_size, vb.pp("ffn"))?,
             engram: None,
@@ -158,6 +209,7 @@ impl TransformerBlockTrain {
                 let attn_out = match &self.attention {
                     AttentionTrainLayer::Standard(attn) => attn.forward(&attn_normed, cos, sin)?,
                     AttentionTrainLayer::WaveField(wf) => wf.forward(&attn_normed, self.max_seq_len)?,
+                    AttentionTrainLayer::GatedDeltaNet(dn) => dn.forward(&attn_normed)?,
                 };
                 self.mhc_attn.apply(x_exp, &attn_out, self.dim)?
             }
@@ -180,6 +232,7 @@ impl TransformerBlockTrain {
         let mut params = match &self.attention {
             AttentionTrainLayer::Standard(attn) => attn.linear_params(),
             AttentionTrainLayer::WaveField(wf) => wf.linear_params(),
+            AttentionTrainLayer::GatedDeltaNet(dn) => dn.linear_params(),
         };
         params.extend(self.ffn.linear_params());
         if let Some(engram) = &self.engram {
@@ -188,12 +241,15 @@ impl TransformerBlockTrain {
         params
     }
 
-    /// Collect all mHC parameters (includes wave field physics params).
+    /// Collect all mHC parameters (includes wave field physics params and DeltaNet scalar params).
     pub fn mhc_params(&self) -> Vec<&Tensor> {
         let mut params = self.mhc_attn.params().into_iter().collect::<Vec<_>>();
         params.extend(self.mhc_ffn.params());
         if let AttentionTrainLayer::WaveField(wf) = &self.attention {
             params.extend(wf.physics_params());
+        }
+        if let AttentionTrainLayer::GatedDeltaNet(dn) = &self.attention {
+            params.extend(dn.scalar_params());
         }
         params
     }
@@ -201,6 +257,9 @@ impl TransformerBlockTrain {
     /// Collect norm parameters.
     pub fn norm_params(&self) -> Vec<&Tensor> {
         let mut params = vec![self.norm_attn.weight(), self.norm_ffn.weight()];
+        if let AttentionTrainLayer::GatedDeltaNet(dn) = &self.attention {
+            params.extend(dn.norm_params());
+        }
         if let Some(engram) = &self.engram {
             params.extend(engram.norm_params());
             params.extend(engram.conv_params());
@@ -289,6 +348,12 @@ mod tests {
             engram_layers: vec![],
             engram_conv_kernel: 4,
             engram_lr_mult: 5.0,
+
+            use_deltanet: false,
+            deltanet_n_heads: 0,
+            deltanet_pattern: vec![],
+            gated_attention: false,
+            deltanet_conv_kernel: 4,
         }
     }
 
