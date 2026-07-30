@@ -36,6 +36,25 @@ use crate::layers::{BitLinearSTE, RMSNormTrain};
 /// updates but more intra-chunk work, which grows as CHUNK^2.
 pub const DEFAULT_CHUNK_SIZE: usize = 64;
 
+/// Sub-block size for the two-level triangular solve.
+///
+/// Diagonal blocks this size are inverted by repeated squaring of the Neumann
+/// series, which is exact here but diverges for large blocks. Measured f32
+/// residual `||(I+N)T - I||max` against plain forward substitution, chunk 64:
+///
+/// ```text
+///   regime                    cond(I+N)   fwdsub    B=8      B=16
+///   realistic |k.k| ~ 0.09      4.3e0     8.9e-8   8.2e-8   7.5e-8
+///   moderate  |n|   ~ 0.3       1.5e2     9.5e-7   9.5e-7   1.9e-6
+///   identical keys, beta = 1    8.2e1     0.0      0.0      0.0
+/// ```
+///
+/// B=8 matches forward substitution everywhere reachable; B=16 starts to drift.
+/// (A synthetic `|n| ~ 1` matrix has cond 3.7e8 and defeats *every* f32 method
+/// including forward substitution, but it is not reachable: `n` entries are
+/// `beta * decay * (k_s . k_t)` with L2-normalized keys.)
+const SOLVE_BLOCK: usize = 8;
+
 /// Log-space decay rate at init. `exp(0.5) ≈ 1.6487`.
 const A_LOG_INIT: f64 = 0.5;
 
@@ -339,11 +358,10 @@ fn chunked_recurrence(
             .broadcast_mul(&strict)?
             .broadcast_mul(&bc)?;
 
-        // U = (I + N)^-1 B (V - Gamma K S^T)
-        let t_inv = unit_lower_inverse(&n, c)?;
+        // Solve (I + N) U = B (V - Gamma K S^T) for U.
         let ks = kc.matmul(&s.transpose(2, 3)?)?; // [b, h, c, d]
         let rhs = (&vc - &ks.broadcast_mul(&gamma)?)?.broadcast_mul(&bc)?;
-        let u = t_inv.matmul(&rhs)?;
+        let u = solve_unit_lower(&n, &rhs, c)?;
 
         // O = Gamma (Q S^T) + M U, with M causal-inclusive.
         let qkt = qc.matmul(&kc.transpose(2, 3)?)?;
@@ -363,41 +381,116 @@ fn chunked_recurrence(
     Tensor::cat(&outputs, 2)
 }
 
-/// Inverse of `I + n`, where `n` is strictly lower triangular over its last two
-/// dims (so `I + n` is unit lower triangular and the inverse is exact).
+/// Solve `(I + n) X = rhs` for `X`, with `n` strictly lower triangular over its
+/// last two dims. `n` is `[b, h, c, c]`, `rhs` is `[b, h, c, d]`.
 ///
-/// Built by forward substitution, `T[t] = e_t - n[t, :t] @ T[:t]`, which is
-/// `c` steps on single `[.., 1, c]` rows.
+/// Two-level: the `c` diagonal blocks of size [`SOLVE_BLOCK`] are inverted
+/// *together* by repeated squaring (exact at that size), then the solution is
+/// carried across blocks by forward substitution. This turns `c` sequential
+/// row-steps into `c / SOLVE_BLOCK` block-steps, which matters because each step
+/// is a separate kernel launch and the per-row work is far too small to occupy a
+/// GPU — the launch overhead, not the arithmetic, was the bottleneck.
 ///
-/// The tempting alternative — the truncated Neumann series
-/// `sum_i (-n)^i` accumulated by repeated squaring in `log2(c)` steps — is *not*
-/// used, because the partial sums grow combinatorially even though the inverse
-/// itself is bounded. With `c = 64`, identical keys and `beta = 1`, it reaches a
-/// relative error of ~1e2 in f64 (and f32 is ~1e9x worse), while forward
-/// substitution stays at ~1e-15.
-fn unit_lower_inverse(n: &Tensor, c: usize) -> Result<Tensor> {
-    let dims = n.dims4()?;
-    let (batch, n_heads) = (dims.0, dims.1);
-    let device = n.device();
-    let dtype = n.dtype();
+/// Falls back to per-row substitution when `c` is not a whole number of blocks,
+/// which only happens for a ragged final chunk.
+fn solve_unit_lower(n: &Tensor, rhs: &Tensor, c: usize) -> Result<Tensor> {
+    if c < 2 * SOLVE_BLOCK || !c.is_multiple_of(SOLVE_BLOCK) {
+        return solve_unit_lower_rowwise(n, rhs, c);
+    }
+    let (batch, heads, _, _) = n.dims4()?;
+    let blk = SOLVE_BLOCK;
+    let n_blocks = c / blk;
 
+    // Invert every diagonal block in one batched pass. Candle's matmul does not
+    // batch over more than one leading dim, so the block index is folded into a
+    // flat batch rather than kept as a separate axis.
+    let mut diag = Vec::with_capacity(n_blocks);
+    for i in 0..n_blocks {
+        diag.push(n.narrow(2, i * blk, blk)?.narrow(3, i * blk, blk)?.contiguous()?);
+    }
+    let stacked = Tensor::stack(&diag, 2)?; // [b, h, n_blocks, blk, blk]
+    let inverted = neumann_inverse(
+        &stacked.reshape((batch * heads * n_blocks, blk, blk))?,
+        blk,
+    )?
+    .reshape((batch, heads, n_blocks, blk, blk))?;
+
+    // Block forward substitution:
+    //   X_i = Dinv_i (rhs_i - n[i, :i*blk] X_{:i*blk})
+    let mut acc: Option<Tensor> = None;
+    for i in 0..n_blocks {
+        let d_inv = inverted.narrow(2, i, 1)?.squeeze(2)?.contiguous()?; // [b, h, blk, blk]
+        let rhs_i = rhs.narrow(2, i * blk, blk)?.contiguous()?; // [b, h, blk, d]
+        let corrected = match &acc {
+            None => rhs_i,
+            Some(prev) => {
+                let coeff = n
+                    .narrow(2, i * blk, blk)?
+                    .narrow(3, 0, i * blk)?
+                    .contiguous()?; // [b, h, blk, i*blk]
+                (rhs_i - coeff.matmul(prev)?)?
+            }
+        };
+        let x_i = d_inv.matmul(&corrected)?;
+        acc = Some(match acc {
+            None => x_i,
+            Some(prev) => Tensor::cat(&[&prev, &x_i], 2)?,
+        });
+    }
+    acc.ok_or_else(|| candle_core::Error::Msg("empty chunk".into()))
+}
+
+/// Per-row forward substitution: `X_t = rhs_t - n[t, :t] X_{:t}`.
+///
+/// Exact and shape-agnostic, but one kernel launch per row. Used for ragged
+/// chunks and as the reference the blocked path is tested against.
+fn solve_unit_lower_rowwise(n: &Tensor, rhs: &Tensor, c: usize) -> Result<Tensor> {
     let mut acc: Option<Tensor> = None;
     for t in 0..c {
-        // Row t starts as e_t and is corrected by the rows already solved.
-        let mut row = basis_row(c, t, dtype, device)?
-            .reshape((1, 1, 1, c))?
-            .broadcast_as((batch, n_heads, 1, c))?
-            .contiguous()?;
-        if let Some(prev) = &acc {
-            let coeff = n.narrow(2, t, 1)?.narrow(3, 0, t)?.contiguous()?; // [b, h, 1, t]
-            row = (row - coeff.matmul(prev)?)?;
-        }
+        let rhs_t = rhs.narrow(2, t, 1)?.contiguous()?; // [b, h, 1, d]
+        let row = match &acc {
+            None => rhs_t,
+            Some(prev) => {
+                let coeff = n.narrow(2, t, 1)?.narrow(3, 0, t)?.contiguous()?; // [b, h, 1, t]
+                (rhs_t - coeff.matmul(prev)?)?
+            }
+        };
         acc = Some(match acc {
             None => row,
             Some(prev) => Tensor::cat(&[&prev, &row], 2)?,
         });
     }
     acc.ok_or_else(|| candle_core::Error::Msg("empty chunk".into()))
+}
+
+/// `(I + n)^-1` for strictly lower triangular blocks over the last two dims,
+/// by repeated squaring of the Neumann series:
+/// `Y_{j+1} = (I + P_j) Y_j`, `P_{j+1} = P_j^2`, so `Y_j = sum_{i<2^j} (-n)^i`.
+///
+/// Exact once the reach passes the block size, since `n^blk = 0`. Only valid for
+/// *small* blocks — the partial sums grow combinatorially, which is why this is
+/// applied per [`SOLVE_BLOCK`] rather than to the whole chunk.
+/// Takes `[flat_batch, blk, blk]`.
+fn neumann_inverse(n: &Tensor, blk: usize) -> Result<Tensor> {
+    let eye = identity(blk, n.dtype(), n.device())?.reshape((1, blk, blk))?;
+    let mut y = eye.broadcast_sub(n)?; // I - n
+    let mut p = n.matmul(n)?; // (-n)^2
+    let mut reach = 2usize;
+    while reach < blk {
+        y = (&y + p.matmul(&y)?)?;
+        p = p.matmul(&p)?;
+        reach *= 2;
+    }
+    Ok(y)
+}
+
+/// `[c, c]` identity.
+fn identity(c: usize, dtype: candle_core::DType, device: &candle_core::Device) -> Result<Tensor> {
+    let mut data = vec![0f32; c * c];
+    for i in 0..c {
+        data[i * c + i] = 1.0;
+    }
+    Tensor::from_vec(data, (c, c), device)?.to_dtype(dtype)
 }
 
 /// `[c, c]` causal mask: 1 where `s < t` (strict) or `s <= t` (inclusive).
@@ -412,13 +505,6 @@ fn tri_mask(c: usize, strict: bool, dtype: candle_core::DType, device: &candle_c
         }
     }
     Tensor::from_vec(data, (c, c), device)?.to_dtype(dtype)
-}
-
-/// `[c]` one-hot standard basis vector `e_idx`.
-fn basis_row(c: usize, idx: usize, dtype: candle_core::DType, device: &candle_core::Device) -> Result<Tensor> {
-    let mut data = vec![0f32; c];
-    data[idx] = 1.0;
-    Tensor::from_vec(data, c, device)?.to_dtype(dtype)
 }
 
 /// One gated delta-rule step for every (batch, head) pair.
@@ -806,28 +892,92 @@ mod tests {
         Ok(())
     }
 
-    /// The triangular solve must actually invert `I + n`.
-    #[test]
-    fn test_unit_lower_inverse_is_exact() -> Result<()> {
-        let device = Device::Cpu;
-        let c = 12;
-        // Strictly lower triangular n with entries of magnitude ~1 (worst case).
-        let full = Tensor::randn(0.0f32, 1.0, (1, 1, c, c), &device)?;
-        let mask = tri_mask(c, true, DType::F32, &device)?.reshape((1, 1, c, c))?;
-        let n = full.broadcast_mul(&mask)?;
+    /// Build a strictly lower triangular `n` with entries scaled by `scale`.
+    fn strict_lower(c: usize, scale: f64, device: &Device) -> Result<Tensor> {
+        let full = (Tensor::randn(0.0f32, 1.0, (1, 1, c, c), device)? * scale)?;
+        let mask = tri_mask(c, true, DType::F32, device)?.reshape((1, 1, c, c))?;
+        full.broadcast_mul(&mask)
+    }
 
-        let inv = unit_lower_inverse(&n, c)?;
-        let eye = {
-            let mut data = vec![0f32; c * c];
-            for i in 0..c {
-                data[i * c + i] = 1.0;
+    /// The solve must actually satisfy `(I + n) X = rhs`.
+    #[test]
+    fn test_solve_unit_lower_residual() -> Result<()> {
+        let device = Device::Cpu;
+        for &c in &[8usize, 16, 24, 64] {
+            // 0.09 is the realistic magnitude of beta * decay * (k_s . k_t) with
+            // L2-normalized keys in a high-dimensional head.
+            let n = strict_lower(c, 0.09, &device)?;
+            let rhs = Tensor::randn(0.0f32, 1.0, (1, 1, c, 5), &device)?;
+            let x = solve_unit_lower(&n, &rhs, c)?;
+
+            let eye = identity(c, DType::F32, &device)?.reshape((1, 1, c, c))?;
+            let residual = max_abs_diff(&(&n + &eye)?.matmul(&x)?, &rhs)?;
+            assert!(residual < 1e-4, "c={c}: solve residual {residual}");
+        }
+        Ok(())
+    }
+
+    /// The blocked solve must agree with per-row substitution, which is the
+    /// reference it replaces. Covers block-aligned and ragged `c`, and a range
+    /// of coupling strengths.
+    #[test]
+    fn test_blocked_solve_matches_rowwise() -> Result<()> {
+        let device = Device::Cpu;
+        for &c in &[16usize, 24, 32, 64] {
+            for &scale in &[0.05f64, 0.09, 0.3] {
+                let n = strict_lower(c, scale, &device)?;
+                let rhs = Tensor::randn(0.0f32, 1.0, (2, 3, c, 7), &device)?;
+                let n = n.broadcast_as((2, 3, c, c))?.contiguous()?;
+
+                let blocked = solve_unit_lower(&n, &rhs, c)?;
+                let rowwise = solve_unit_lower_rowwise(&n, &rhs, c)?;
+                let diff = max_abs_diff(&blocked, &rowwise)?;
+                assert!(
+                    diff < 1e-4,
+                    "c={c} scale={scale}: blocked solve differs from rowwise by {diff}"
+                );
             }
-            Tensor::from_vec(data, (1, 1, c, c), &device)?
-        };
-        let m = (&n + &eye)?;
-        let prod = m.matmul(&inv)?;
-        let diff = max_abs_diff(&prod, &eye)?;
-        assert!(diff < 1e-4, "(I+n) @ inv deviates from identity by {diff}");
+        }
+        Ok(())
+    }
+
+    /// The adversarial case that defeats a whole-chunk Neumann series must still
+    /// be handled: identical keys with beta = 1 makes every off-diagonal entry 1.
+    #[test]
+    fn test_blocked_solve_identical_keys() -> Result<()> {
+        let device = Device::Cpu;
+        let c = 32;
+        let ones = Tensor::ones((1, 1, c, c), DType::F32, &device)?;
+        let mask = tri_mask(c, true, DType::F32, &device)?.reshape((1, 1, c, c))?;
+        let n = ones.broadcast_mul(&mask)?;
+        let rhs = Tensor::randn(0.0f32, 1.0, (1, 1, c, 4), &device)?;
+
+        let blocked = solve_unit_lower(&n, &rhs, c)?;
+        let rowwise = solve_unit_lower_rowwise(&n, &rhs, c)?;
+        assert!(
+            max_abs_diff(&blocked, &rowwise)? < 1e-3,
+            "blocked solve diverged on the all-ones (identical keys, beta=1) case"
+        );
+
+        let eye = identity(c, DType::F32, &device)?.reshape((1, 1, c, c))?;
+        let residual = max_abs_diff(&(&n + &eye)?.matmul(&blocked)?, &rhs)?;
+        assert!(residual < 1e-3, "identical-keys solve residual {residual}");
+        Ok(())
+    }
+
+    /// `neumann_inverse` must be exact at the block size it is actually used at.
+    #[test]
+    fn test_neumann_inverse_exact_at_block_size() -> Result<()> {
+        let device = Device::Cpu;
+        let blk = SOLVE_BLOCK;
+        let n = strict_lower(blk, 1.0, &device)?.reshape((1, blk, blk))?;
+        let inv = neumann_inverse(&n, blk)?;
+        let eye = identity(blk, DType::F32, &device)?.reshape((1, blk, blk))?;
+        let residual = max_abs_diff(&(&n + &eye)?.matmul(&inv)?, &eye)?;
+        assert!(
+            residual < 1e-4,
+            "neumann inverse residual {residual} at block size {blk}"
+        );
         Ok(())
     }
 
