@@ -28,6 +28,14 @@ use candle_nn::VarBuilder;
 
 use crate::layers::{BitLinearSTE, RMSNormTrain};
 
+/// Chunk length for the chunkwise-parallel (WY) recurrence.
+///
+/// The sequential form issues O(seq_len) `[head_dim, head_dim]` state matmuls;
+/// the chunked form issues O(seq_len / CHUNK) of them and replaces the rest with
+/// `[CHUNK, CHUNK]` and `[CHUNK, head_dim]` matmuls. Larger is fewer state
+/// updates but more intra-chunk work, which grows as CHUNK^2.
+pub const DEFAULT_CHUNK_SIZE: usize = 64;
+
 /// Log-space decay rate at init. `exp(0.5) ≈ 1.6487`.
 const A_LOG_INIT: f64 = 0.5;
 
@@ -110,9 +118,18 @@ impl GatedDeltaNetTrain {
 
     /// Forward pass: x [batch, seq_len, dim] -> [batch, seq_len, dim]
     ///
-    /// Recurrent through sequence positions. Each position updates the
-    /// per-head state matrix S: [head_dim, head_dim].
+    /// Uses the chunkwise-parallel (WY) recurrence with [`DEFAULT_CHUNK_SIZE`].
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        self.forward_with_chunk(x, DEFAULT_CHUNK_SIZE)
+    }
+
+    /// Forward pass with an explicit chunk length.
+    ///
+    /// `chunk_size <= 1` selects the sequential reference path (one
+    /// `delta_rule_step` per timestep). Any larger value uses the chunkwise
+    /// form, which is mathematically equivalent — see
+    /// `test_chunked_matches_sequential`.
+    pub fn forward_with_chunk(&self, x: &Tensor, chunk_size: usize) -> Result<Tensor> {
         let (batch, seq_len, dim) = x.dims3()?;
         let n_heads = self.n_heads;
         let head_dim = self.head_dim;
@@ -151,33 +168,23 @@ impl GatedDeltaNetTrain {
         let gate = self.g_proj.forward(x)?; // [batch, seq, dim]
         let gate = silu(&gate)?;
 
-        // Recurrent loop over sequence positions
-        // State S: [batch, n_heads, head_dim, head_dim] — initialized to zero
-        let device = x.device();
-        let mut s = Tensor::zeros(
-            (batch, n_heads, head_dim, head_dim),
-            candle_core::DType::F32,
-            device,
-        )?;
-
-        let mut outputs = Vec::with_capacity(seq_len);
-
-        for t in 0..seq_len {
-            // Extract per-position tensors: [batch, n_heads, head_dim] or [batch, n_heads]
-            // contiguous() needed because narrow+squeeze produces non-contiguous views
-            let q_t = q.narrow(1, t, 1)?.squeeze(1)?.contiguous()?; // [batch, n_heads, head_dim]
-            let k_t = k.narrow(1, t, 1)?.squeeze(1)?.contiguous()?; // [batch, n_heads, head_dim]
-            let v_t = v.narrow(1, t, 1)?.squeeze(1)?.contiguous()?; // [batch, n_heads, head_dim]
-            let decay_t = decay.narrow(1, t, 1)?.squeeze(1)?.contiguous()?; // [batch, n_heads]
-            let beta_t = beta.narrow(1, t, 1)?.squeeze(1)?.contiguous()?; // [batch, n_heads]
-
-            let (s_next, o_t) = delta_rule_step(&s, &q_t, &k_t, &v_t, &beta_t, &decay_t)?;
-            s = s_next;
-            outputs.push(o_t);
-        }
-
-        // Stack outputs: [batch, seq_len, n_heads, head_dim]
-        let output = Tensor::stack(&outputs, 1)?; // [batch, seq, n_heads, head_dim]
+        // Recurrence: [batch, seq, n_heads, head_dim] out, either path.
+        let output = if chunk_size <= 1 {
+            sequential_recurrence(&q, &k, &v, &beta, &decay)?
+        } else {
+            // The chunked form batches over (batch, n_heads), so move heads next
+            // to batch: [b, seq, h, d] -> [b, h, seq, d].
+            let to_bh = |t: &Tensor| t.transpose(1, 2)?.contiguous();
+            let out_bh = chunked_recurrence(
+                &to_bh(&q)?,
+                &to_bh(&k)?,
+                &to_bh(&v)?,
+                &beta.transpose(1, 2)?.contiguous()?,
+                &g.transpose(1, 2)?.contiguous()?,
+                chunk_size,
+            )?;
+            out_bh.transpose(1, 2)?.contiguous()?
+        };
 
         // Apply RMSNorm per head (on head_dim dimension)
         let output = self.out_norm.forward(&output)?; // [batch, seq, n_heads, head_dim]
@@ -214,6 +221,204 @@ impl GatedDeltaNetTrain {
     pub fn norm_params(&self) -> Vec<&Tensor> {
         vec![self.out_norm.weight()]
     }
+}
+
+/// Sequential reference recurrence: one `delta_rule_step` per timestep.
+///
+/// Inputs are `[batch, seq, n_heads, head_dim]` (`beta`/`decay` are
+/// `[batch, seq, n_heads]`); output is `[batch, seq, n_heads, head_dim]`.
+/// Kept as the definition the chunked form is checked against.
+fn sequential_recurrence(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    beta: &Tensor,
+    decay: &Tensor,
+) -> Result<Tensor> {
+    let (batch, seq_len, n_heads, head_dim) = q.dims4()?;
+    let mut s = Tensor::zeros(
+        (batch, n_heads, head_dim, head_dim),
+        q.dtype(),
+        q.device(),
+    )?;
+    let mut outputs = Vec::with_capacity(seq_len);
+    for t in 0..seq_len {
+        // contiguous() needed because narrow+squeeze produces non-contiguous views
+        let q_t = q.narrow(1, t, 1)?.squeeze(1)?.contiguous()?;
+        let k_t = k.narrow(1, t, 1)?.squeeze(1)?.contiguous()?;
+        let v_t = v.narrow(1, t, 1)?.squeeze(1)?.contiguous()?;
+        let decay_t = decay.narrow(1, t, 1)?.squeeze(1)?.contiguous()?;
+        let beta_t = beta.narrow(1, t, 1)?.squeeze(1)?.contiguous()?;
+        let (s_next, o_t) = delta_rule_step(&s, &q_t, &k_t, &v_t, &beta_t, &decay_t)?;
+        s = s_next;
+        outputs.push(o_t);
+    }
+    Tensor::stack(&outputs, 1)
+}
+
+/// Chunkwise-parallel Gated DeltaNet recurrence via the WY representation.
+///
+/// Mathematically identical to [`sequential_recurrence`], but the expensive
+/// `[head_dim, head_dim]` state update runs once per *chunk* instead of once per
+/// timestep. Inputs are `[batch, n_heads, seq, head_dim]`; `beta` and `g` are
+/// `[batch, n_heads, seq]`, where `g = log(decay) <= 0`.
+///
+/// # Derivation
+///
+/// With state stored value-major as in [`delta_rule_step`], one step is
+///
+/// ```text
+/// S_t = a_t S_{t-1} + u_t k_t^T,   u_t = b_t (v_t - a_t S_{t-1} k_t)
+/// o_t = S_t q_t
+/// ```
+///
+/// Let `Gcum_t = sum_{s<=t} g_s` inside the chunk, so `Gamma_t = exp(Gcum_t)` is
+/// the cumulative decay and `Gamma_t / Gamma_s = exp(Gcum_t - Gcum_s) <= 1` for
+/// `t >= s`. Unrolling `S_{t-1}` and substituting gives a linear system in the
+/// per-step updates `u_t` that is *triangular*, because `u_t` depends only on
+/// `u_s` for `s < t`:
+///
+/// ```text
+/// u_t = b_t [ v_t - Gamma_t S_0 k_t - sum_{s<t} exp(Gcum_t - Gcum_s)(k_s . k_t) u_s ]
+/// ```
+///
+/// Writing `L[t,s] = exp(Gcum_t - Gcum_s)(k_s . k_t)` (strictly lower) and
+/// `N = diag(b) L`:
+///
+/// ```text
+/// (I + N) U = B (V - D K S_0^T)        =>  U = (I + N)^-1 B (V - D K S_0^T)
+/// O        = D (Q S_0^T) + M U,            M[t,s] = exp(Gcum_t-Gcum_s)(k_s . q_t), s <= t
+/// S_C      = Gamma_C S_0 + (R U)^T K,      R = diag(exp(Gcum_C - Gcum_t))
+/// ```
+///
+/// Every exponent used is `<= 0`, so no term can overflow; the anti-causal half
+/// of the difference matrix is clamped to `0` before `exp` and then masked away,
+/// which keeps it finite instead of `inf * 0 = NaN`.
+fn chunked_recurrence(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    beta: &Tensor,
+    g: &Tensor,
+    chunk_size: usize,
+) -> Result<Tensor> {
+    let (batch, n_heads, seq_len, head_dim) = q.dims4()?;
+    let device = q.device();
+    let dtype = q.dtype();
+
+    let mut s = Tensor::zeros((batch, n_heads, head_dim, head_dim), dtype, device)?;
+    let mut outputs = Vec::with_capacity(seq_len.div_ceil(chunk_size));
+    let mut start = 0usize;
+
+    while start < seq_len {
+        let c = (seq_len - start).min(chunk_size);
+
+        let qc = q.narrow(2, start, c)?.contiguous()?; // [b, h, c, d]
+        let kc = k.narrow(2, start, c)?.contiguous()?;
+        let vc = v.narrow(2, start, c)?.contiguous()?;
+        let bc = beta.narrow(2, start, c)?.unsqueeze(D::Minus1)?.contiguous()?; // [b, h, c, 1]
+        let gc = g.narrow(2, start, c)?.unsqueeze(D::Minus1)?.contiguous()?; // [b, h, c, 1]
+
+        // Cumulative log-decay within the chunk, as a matmul with a lower
+        // triangular ones matrix (differentiable, no cumsum dependency).
+        let incl = tri_mask(c, false, dtype, device)?.reshape((1, 1, c, c))?;
+        let strict = tri_mask(c, true, dtype, device)?.reshape((1, 1, c, c))?;
+        let gcum = incl.broadcast_matmul(&gc)?; // [b, h, c, 1]
+        let gamma = gcum.exp()?; // Gamma_t in (0, 1]
+
+        // dr[t,s] = exp(Gcum_t - Gcum_s). Clamped at 0 so the anti-causal half
+        // (where the exponent is positive) stays finite before masking.
+        let dr = gcum
+            .broadcast_sub(&gcum.transpose(2, 3)?)?
+            .minimum(0.0)?
+            .exp()?; // [b, h, c, c]
+
+        // N = diag(beta) * (dr .* K K^T) restricted to s < t.
+        let kkt = kc.matmul(&kc.transpose(2, 3)?)?;
+        let n = (&dr * &kkt)?
+            .broadcast_mul(&strict)?
+            .broadcast_mul(&bc)?;
+
+        // U = (I + N)^-1 B (V - Gamma K S^T)
+        let t_inv = unit_lower_inverse(&n, c)?;
+        let ks = kc.matmul(&s.transpose(2, 3)?)?; // [b, h, c, d]
+        let rhs = (&vc - &ks.broadcast_mul(&gamma)?)?.broadcast_mul(&bc)?;
+        let u = t_inv.matmul(&rhs)?;
+
+        // O = Gamma (Q S^T) + M U, with M causal-inclusive.
+        let qkt = qc.matmul(&kc.transpose(2, 3)?)?;
+        let m = (&dr * &qkt)?.broadcast_mul(&incl)?;
+        let qs = qc.matmul(&s.transpose(2, 3)?)?;
+        outputs.push((qs.broadcast_mul(&gamma)? + m.matmul(&u)?)?);
+
+        // S <- Gamma_C S + sum_t exp(Gcum_C - Gcum_t) u_t k_t^T
+        let g_last = gcum.narrow(2, c - 1, 1)?; // [b, h, 1, 1]
+        let r = g_last.broadcast_sub(&gcum)?.minimum(0.0)?.exp()?; // [b, h, c, 1]
+        let ru = u.broadcast_mul(&r)?;
+        s = (s.broadcast_mul(&g_last.exp()?)? + ru.transpose(2, 3)?.matmul(&kc)?)?;
+
+        start += c;
+    }
+
+    Tensor::cat(&outputs, 2)
+}
+
+/// Inverse of `I + n`, where `n` is strictly lower triangular over its last two
+/// dims (so `I + n` is unit lower triangular and the inverse is exact).
+///
+/// Built by forward substitution, `T[t] = e_t - n[t, :t] @ T[:t]`, which is
+/// `c` steps on single `[.., 1, c]` rows.
+///
+/// The tempting alternative — the truncated Neumann series
+/// `sum_i (-n)^i` accumulated by repeated squaring in `log2(c)` steps — is *not*
+/// used, because the partial sums grow combinatorially even though the inverse
+/// itself is bounded. With `c = 64`, identical keys and `beta = 1`, it reaches a
+/// relative error of ~1e2 in f64 (and f32 is ~1e9x worse), while forward
+/// substitution stays at ~1e-15.
+fn unit_lower_inverse(n: &Tensor, c: usize) -> Result<Tensor> {
+    let dims = n.dims4()?;
+    let (batch, n_heads) = (dims.0, dims.1);
+    let device = n.device();
+    let dtype = n.dtype();
+
+    let mut acc: Option<Tensor> = None;
+    for t in 0..c {
+        // Row t starts as e_t and is corrected by the rows already solved.
+        let mut row = basis_row(c, t, dtype, device)?
+            .reshape((1, 1, 1, c))?
+            .broadcast_as((batch, n_heads, 1, c))?
+            .contiguous()?;
+        if let Some(prev) = &acc {
+            let coeff = n.narrow(2, t, 1)?.narrow(3, 0, t)?.contiguous()?; // [b, h, 1, t]
+            row = (row - coeff.matmul(prev)?)?;
+        }
+        acc = Some(match acc {
+            None => row,
+            Some(prev) => Tensor::cat(&[&prev, &row], 2)?,
+        });
+    }
+    acc.ok_or_else(|| candle_core::Error::Msg("empty chunk".into()))
+}
+
+/// `[c, c]` causal mask: 1 where `s < t` (strict) or `s <= t` (inclusive).
+fn tri_mask(c: usize, strict: bool, dtype: candle_core::DType, device: &candle_core::Device) -> Result<Tensor> {
+    let mut data = vec![0f32; c * c];
+    for t in 0..c {
+        for s in 0..c {
+            let keep = if strict { s < t } else { s <= t };
+            if keep {
+                data[t * c + s] = 1.0;
+            }
+        }
+    }
+    Tensor::from_vec(data, (c, c), device)?.to_dtype(dtype)
+}
+
+/// `[c]` one-hot standard basis vector `e_idx`.
+fn basis_row(c: usize, idx: usize, dtype: candle_core::DType, device: &candle_core::Device) -> Result<Tensor> {
+    let mut data = vec![0f32; c];
+    data[idx] = 1.0;
+    Tensor::from_vec(data, c, device)?.to_dtype(dtype)
 }
 
 /// One gated delta-rule step for every (batch, head) pair.
@@ -515,6 +720,199 @@ mod tests {
             .expect("softplus input should have gradient")
             .to_vec1::<f32>()?;
         assert!(g[0].is_finite(), "softplus gradient is not finite: {:?}", g);
+        Ok(())
+    }
+
+    /// Max abs difference between two tensors of the same shape.
+    fn max_abs_diff(a: &Tensor, b: &Tensor) -> Result<f32> {
+        assert_eq!(a.dims(), b.dims(), "shape mismatch");
+        let a = a.flatten_all()?.to_vec1::<f32>()?;
+        let b = b.flatten_all()?.to_vec1::<f32>()?;
+        Ok(a.iter()
+            .zip(b.iter())
+            .map(|(p, q)| (p - q).abs())
+            .fold(0.0f32, f32::max))
+    }
+
+    /// The chunked WY recurrence must match the sequential reference.
+    ///
+    /// This is the correctness contract for the whole chunked path: it is only a
+    /// valid optimization if it computes the same function. Swept over chunk
+    /// sizes including ones that do not divide the sequence length, so the
+    /// ragged final chunk is covered too.
+    #[test]
+    fn test_chunked_matches_sequential() -> Result<()> {
+        let device = Device::Cpu;
+        for &(dim, heads, batch, seq) in &[(64, 4, 2, 32), (32, 2, 1, 17), (128, 8, 2, 40)] {
+            let varmap = VarMap::new();
+            let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+            let dn = GatedDeltaNetTrain::new(dim, heads, 64, vb.pp("t"))?;
+            let x = Tensor::randn(0.0f32, 1.0, (batch, seq, dim), &device)?;
+
+            let reference = dn.forward_with_chunk(&x, 1)?;
+            for &chunk in &[2usize, 3, 8, 16, 64, 128] {
+                let got = dn.forward_with_chunk(&x, chunk)?;
+                let diff = max_abs_diff(&reference, &got)?;
+                assert!(
+                    diff < 2e-3,
+                    "chunk={chunk} dim={dim} seq={seq}: diverged from sequential by {diff}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Equivalence must hold in the adversarial regime that breaks the
+    /// Neumann-series shortcut: identical keys with beta driven to 1, where the
+    /// intra-chunk triangular system is maximally coupled.
+    #[test]
+    fn test_chunked_matches_sequential_identical_keys() -> Result<()> {
+        let device = Device::Cpu;
+        let (batch, heads, seq, d) = (1, 2, 32, 8);
+
+        // Every key the same direction; beta = 1; no decay.
+        let mut kdata = vec![0f32; batch * heads * seq * d];
+        for i in 0..(batch * heads * seq) {
+            kdata[i * d] = 1.0; // unit vector along axis 0
+        }
+        let k = Tensor::from_vec(kdata, (batch, heads, seq, d), &device)?;
+        let q = k.clone();
+        let v = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, d), &device)?;
+        let beta = Tensor::ones((batch, heads, seq), DType::F32, &device)?;
+        let g = Tensor::zeros((batch, heads, seq), DType::F32, &device)?; // decay = 1
+
+        // Sequential reference wants [b, seq, h, d].
+        let to_bshd = |t: &Tensor| t.transpose(1, 2)?.contiguous();
+        let decay = g.exp()?;
+        let reference = sequential_recurrence(
+            &to_bshd(&q)?,
+            &to_bshd(&k)?,
+            &to_bshd(&v)?,
+            &beta.transpose(1, 2)?.contiguous()?,
+            &decay.transpose(1, 2)?.contiguous()?,
+        )?;
+
+        for &chunk in &[4usize, 8, 16, 32] {
+            let got = chunked_recurrence(&q, &k, &v, &beta, &g, chunk)?
+                .transpose(1, 2)?
+                .contiguous()?;
+            let diff = max_abs_diff(&reference, &got)?;
+            assert!(
+                diff < 2e-3,
+                "identical-keys chunk={chunk}: diverged by {diff} (this is the case \
+                 where a Neumann-series inverse fails)"
+            );
+        }
+        Ok(())
+    }
+
+    /// The triangular solve must actually invert `I + n`.
+    #[test]
+    fn test_unit_lower_inverse_is_exact() -> Result<()> {
+        let device = Device::Cpu;
+        let c = 12;
+        // Strictly lower triangular n with entries of magnitude ~1 (worst case).
+        let full = Tensor::randn(0.0f32, 1.0, (1, 1, c, c), &device)?;
+        let mask = tri_mask(c, true, DType::F32, &device)?.reshape((1, 1, c, c))?;
+        let n = full.broadcast_mul(&mask)?;
+
+        let inv = unit_lower_inverse(&n, c)?;
+        let eye = {
+            let mut data = vec![0f32; c * c];
+            for i in 0..c {
+                data[i * c + i] = 1.0;
+            }
+            Tensor::from_vec(data, (1, 1, c, c), &device)?
+        };
+        let m = (&n + &eye)?;
+        let prod = m.matmul(&inv)?;
+        let diff = max_abs_diff(&prod, &eye)?;
+        assert!(diff < 1e-4, "(I+n) @ inv deviates from identity by {diff}");
+        Ok(())
+    }
+
+    /// Chunking must not break autograd, and must give the same gradients as the
+    /// sequential path.
+    #[test]
+    fn test_chunked_gradients_match_sequential() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let dn = GatedDeltaNetTrain::new(64, 4, 64, vb.pp("t"))?;
+        let x = Tensor::randn(0.0f32, 1.0, (1, 24, 64), &device)?;
+
+        let grad_norms = |chunk: usize| -> Result<Vec<f32>> {
+            let y = dn.forward_with_chunk(&x, chunk)?;
+            let grads = y.sum_all()?.backward()?;
+            let mut out = Vec::new();
+            for t in [dn.wq.weight(), dn.wv.weight(), &dn.a_log, &dn.dt_bias] {
+                let g = grads.get(t).expect("missing gradient");
+                out.push(g.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?);
+            }
+            Ok(out)
+        };
+
+        let seq_norms = grad_norms(1)?;
+        let chunk_norms = grad_norms(8)?;
+        for (i, (a, b)) in seq_norms.iter().zip(chunk_norms.iter()).enumerate() {
+            assert!(a.is_finite() && b.is_finite(), "non-finite gradient");
+            assert!(*a > 0.0, "param {i} had zero gradient in sequential path");
+            let rel = (a - b).abs() / a.max(1e-6);
+            assert!(
+                rel < 2e-2,
+                "param {i}: gradient norm differs between paths, {a} vs {b} (rel {rel})"
+            );
+        }
+        Ok(())
+    }
+
+    /// A single chunk covering the whole sequence is the pure-parallel limit and
+    /// must still match.
+    #[test]
+    fn test_chunked_single_chunk_whole_sequence() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let dn = GatedDeltaNetTrain::new(32, 2, 32, vb.pp("t"))?;
+        let x = Tensor::randn(0.0f32, 1.0, (1, 16, 32), &device)?;
+        let reference = dn.forward_with_chunk(&x, 1)?;
+        let single = dn.forward_with_chunk(&x, 16)?;
+        let diff = max_abs_diff(&reference, &single)?;
+        assert!(diff < 2e-3, "single-chunk path diverged by {diff}");
+        Ok(())
+    }
+
+    /// Strong decay must not destabilize the chunked form: the cumulative-decay
+    /// ratios stay bounded by construction, and outputs must remain finite.
+    #[test]
+    fn test_chunked_strong_decay_is_finite() -> Result<()> {
+        let device = Device::Cpu;
+        let (batch, heads, seq, d) = (1, 2, 40, 16);
+        let q = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, d), &device)?;
+        let k = l2_normalize_last_dim(&q)?;
+        let v = Tensor::randn(0.0f32, 1.0, (batch, heads, seq, d), &device)?;
+        let beta = Tensor::ones((batch, heads, seq), DType::F32, &device)?;
+        // g = -20 per step: cumulative decay underflows hard within a chunk.
+        let g = (Tensor::ones((batch, heads, seq), DType::F32, &device)? * -20.0)?;
+
+        let out = chunked_recurrence(&q, &k, &v, &beta, &g, 16)?;
+        let vals = out.flatten_all()?.to_vec1::<f32>()?;
+        assert!(
+            vals.iter().all(|x| x.is_finite()),
+            "strong decay produced non-finite output"
+        );
+
+        let decay = g.exp()?;
+        let to_bshd = |t: &Tensor| t.transpose(1, 2)?.contiguous();
+        let reference = sequential_recurrence(
+            &to_bshd(&q)?,
+            &to_bshd(&k)?,
+            &to_bshd(&v)?,
+            &beta.transpose(1, 2)?.contiguous()?,
+            &decay.transpose(1, 2)?.contiguous()?,
+        )?;
+        let diff = max_abs_diff(&reference, &out.transpose(1, 2)?.contiguous()?)?;
+        assert!(diff < 2e-3, "strong-decay chunked diverged by {diff}");
         Ok(())
     }
 
