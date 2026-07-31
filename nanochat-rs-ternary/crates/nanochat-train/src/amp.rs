@@ -23,6 +23,24 @@
 //! `gemm_reduced_precision_bf16`, which we leave off), so products accumulate in
 //! f32 on the tensor cores. Inputs are bf16; the running sum is not.
 //!
+//! # Where this is deliberately *not* applied
+//!
+//! The Gated DeltaNet recurrence stays in f32. Three reasons, and they compound:
+//!
+//! - Its matmuls are small (`[128,128] x [128,128]` batched at the default chunk
+//!   size). Small GEMMs do not reach the tensor-core rates that make bf16 worth
+//!   it — the measured f32/bf16 gap shrinks from 4.8x to 1.6x as shapes get
+//!   smaller (`examples/bench_gemm.rs`). Each cast is also two extra kernels, and
+//!   this step is launch-bound, so casting small operands can cost more than it
+//!   saves.
+//! - The carried state `S` accumulates across the whole sequence. An 8-bit
+//!   significand there compounds over every chunk, unlike a single GEMM.
+//! - `kkt` feeds the triangular solve, whose accuracy depends on the
+//!   conditioning of `I + N`; perturbing its entries is amplified by the solve.
+//!
+//! The linear layers carry the overwhelming majority of the FLOPs *and* have
+//! exactly-representable operands, so that is where the win is.
+//!
 //! # CPU
 //!
 //! The policy is CUDA-only, and that is a **correctness** requirement rather than

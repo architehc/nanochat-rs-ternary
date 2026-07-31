@@ -239,7 +239,7 @@ enum Commands {
         ///
         /// Overrides the config setting when passed. `--bf16` enables,
         /// `--bf16=false` disables.
-        #[arg(long)]
+        #[arg(long, num_args = 0..=1, default_missing_value = "true")]
         bf16: Option<bool>,
     },
 

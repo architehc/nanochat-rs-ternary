@@ -13,7 +13,19 @@ use candle_core::{Device, Result, Tensor};
 ///
 /// This is a workaround for Candle not having CUDA sigmoid support.
 /// Copies tensor to CPU, applies sigmoid, copies back to GPU.
-/// The overhead is minimal since sigmoid is only used in mHC layers.
+///
+/// # Do not call this from a training path
+///
+/// Currently unused, and it should stay that way. The cost is not the sigmoid
+/// arithmetic — it is that each call forces a **full device synchronize** plus
+/// two PCIe transfers, which stalls the pipeline. Training steps here are
+/// launch- and sync-bound (see `docs/BLACKWELL_LOW_PRECISION.md`), so a handful
+/// of these per forward would dominate the step regardless of how little compute
+/// they represent.
+///
+/// Every live call site instead expands sigmoid on-device as
+/// `1 / (1 + exp(-x))` — see `mhc.rs`, `gated_deltanet.rs`, `engram.rs`,
+/// `loop_block.rs`. Do the same in new code.
 pub fn cuda_sigmoid(tensor: &Tensor) -> Result<Tensor> {
     if tensor.device().is_cuda() {
         // Copy to CPU, apply sigmoid, copy back

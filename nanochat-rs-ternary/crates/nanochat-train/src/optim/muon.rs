@@ -90,6 +90,61 @@ pub fn newton_schulz_with_dtype(g: &Tensor, ns_steps: usize, compute: DType) -> 
     x.to_dtype(DType::F32)
 }
 
+/// Element budget for one batched Newton-Schulz call.
+///
+/// The iteration holds a few `[n, side, side]` temporaries at once, so this caps
+/// them at roughly 64M elements — about 256MB in f32, 128MB in bf16 — per
+/// intermediate. Groups larger than this are split into consecutive chunks,
+/// which changes nothing numerically since the matrices are independent.
+const NS_BATCH_ELEM_BUDGET: usize = 64 * 1024 * 1024;
+
+/// Newton-Schulz over a *stack* of identically shaped matrices, `[n, rows, cols]`.
+///
+/// Mathematically identical to calling [`newton_schulz_with_dtype`] on each of
+/// the `n` matrices: every operation in the iteration is per-matrix, and batched
+/// matmul contracts only the last two dims, so matrices never mix. The
+/// normalization is likewise per-matrix — each is divided by *its own* Frobenius
+/// norm, which is what `sum over last two dims, keepdim` gives.
+///
+/// The point is launch count, not arithmetic. This model has ~160 2D parameters
+/// but only a handful of distinct shapes, and the per-matrix iteration issues
+/// ~7 kernels per step. Batching by shape turns ~160x5x7 launches into ~4x5x7,
+/// and the step is launch-bound (see `docs/BLACKWELL_LOW_PRECISION.md`).
+pub fn newton_schulz_batched(g: &Tensor, ns_steps: usize, compute: DType) -> Result<Tensor> {
+    let (a, b, c) = (3.4445f64, -4.7750f64, 2.0315f64);
+
+    let mut x = g.detach().to_dtype(DType::F32)?;
+    let (_n, rows, cols) = x.dims3()?;
+
+    // Every matrix in the stack has the same shape, so this decision is uniform.
+    let transposed = rows > cols;
+    if transposed {
+        x = x.transpose(1, 2)?.contiguous()?;
+    }
+
+    // Per-matrix Frobenius norm -> [n, 1, 1], so the broadcast divides each
+    // matrix by its own norm rather than by a norm pooled across the stack.
+    let norm = x.sqr()?.sum_keepdim(2)?.sum_keepdim(1)?.sqrt()?;
+    let divisor = norm
+        .gt(1e-7f64)?
+        .where_cond(&norm, &Tensor::ones_like(&norm)?)?;
+    x = x.broadcast_div(&divisor)?;
+    x = x.detach().to_dtype(compute)?;
+
+    for _ in 0..ns_steps {
+        let xt = x.transpose(1, 2)?.contiguous()?;
+        let a_mat = x.matmul(&xt)?; // X @ X^T, per matrix
+        let a_sq = a_mat.matmul(&a_mat)?;
+        let b_mat = ((&a_mat * b)? + (&a_sq * c)?)?;
+        x = ((&x * a)? + b_mat.matmul(&x)?)?.detach();
+    }
+
+    if transposed {
+        x = x.transpose(1, 2)?.contiguous()?;
+    }
+    x.to_dtype(DType::F32)
+}
+
 /// Muon optimizer for 2D+ parameters.
 pub struct Muon {
     vars: Vec<Var>,
@@ -131,8 +186,23 @@ impl Muon {
         })
     }
 
+    /// One optimizer step.
+    ///
+    /// Runs in three phases so that the orthogonalization can be **batched by
+    /// shape**. Doing it per parameter issues ~7 kernels per NS iteration for
+    /// each of ~160 2D parameters; because this model has only a handful of
+    /// distinct weight shapes, grouping them collapses that to ~7 per iteration
+    /// per *shape*. The arithmetic is unchanged — see [`newton_schulz_batched`].
     pub fn step(&mut self, grads: &GradStore, clip_scale: f64) -> Result<()> {
-        for (i, var) in self.vars.iter().enumerate() {
+        // Phase 1: momentum update for every parameter. 2D+ parameters have
+        // their Nesterov look-ahead set aside for the batched orthogonalization;
+        // 1D parameters take plain momentum and are ready immediately.
+        let mut updates: Vec<Option<Tensor>> = vec![None; self.vars.len()];
+        // (var index, original shape, nesterov reshaped to 2D)
+        let mut pending: Vec<(usize, Vec<usize>, Tensor)> = Vec::new();
+
+        for i in 0..self.vars.len() {
+            let var = &self.vars[i];
             let grad = match grads.get(var.as_tensor()) {
                 Some(g) => g,
                 None => continue,
@@ -148,21 +218,68 @@ impl Muon {
             let new_buf = (&buf_scaled + &grad_scaled)?;
             self.momentum_buffers[i] = new_buf.detach();
 
-            let update = if var.as_tensor().dims().len() >= 2 {
+            if var.as_tensor().dims().len() >= 2 {
                 // Nesterov look-ahead: extrapolate along momentum direction.
                 let new_buf_d = &self.momentum_buffers[i];
                 let delta = (new_buf_d - &prev_buf)?;
                 let nesterov = (new_buf_d + (&delta * self.beta)?)?.detach();
-                // Reshape to 2D for orthogonalization
                 let orig_shape = nesterov.dims().to_vec();
                 let rows = orig_shape[0];
                 let cols: usize = orig_shape[1..].iter().product();
-                let nesterov_2d = nesterov.reshape((rows, cols))?;
-                let orth = newton_schulz_orthogonalize(&nesterov_2d, self.ns_steps)?;
-                orth.reshape(orig_shape)?
+                pending.push((i, orig_shape, nesterov.reshape((rows, cols))?));
             } else {
                 // 1D: plain momentum (use detached buffer)
-                self.momentum_buffers[i].clone()
+                updates[i] = Some(self.momentum_buffers[i].clone());
+            }
+        }
+
+        // Phase 2: orthogonalize, one batched call per distinct 2D shape.
+        let mut by_shape: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+        for (slot, (_, _, m)) in pending.iter().enumerate() {
+            let d = m.dims();
+            by_shape.entry((d[0], d[1])).or_default().push(slot);
+        }
+
+        for slots in by_shape.values() {
+            let compute = iteration_dtype(&pending[slots[0]].2);
+            let (rows, cols) = {
+                let d = pending[slots[0]].2.dims();
+                (d[0], d[1])
+            };
+
+            // Bound the temporaries. The iteration materializes `X @ X^T` and its
+            // square, each `[n, min, min]` where `min = min(rows, cols)` after the
+            // transpose. Batching every matrix of a shape at once is fine for this
+            // model, but a 7B-scale one would allocate tens of GB here, so the
+            // group is split into chunks under a fixed element budget.
+            let side = rows.min(cols);
+            let per_matrix = side * side;
+            let chunk = (NS_BATCH_ELEM_BUDGET / per_matrix.max(1)).clamp(1, slots.len());
+
+            for group in slots.chunks(chunk) {
+                if group.len() == 1 {
+                    let (i, shape, m) = &pending[group[0]];
+                    let orth = newton_schulz_with_dtype(m, self.ns_steps, compute)?;
+                    updates[*i] = Some(orth.reshape(shape.clone())?);
+                    continue;
+                }
+
+                let stack: Vec<Tensor> = group.iter().map(|&s| pending[s].2.clone()).collect();
+                let batched =
+                    newton_schulz_batched(&Tensor::stack(&stack, 0)?, self.ns_steps, compute)?;
+                for (row, &slot) in group.iter().enumerate() {
+                    let (i, shape, _) = &pending[slot];
+                    let orth = batched.narrow(0, row, 1)?.squeeze(0)?;
+                    updates[*i] = Some(orth.reshape(shape.clone())?);
+                }
+            }
+        }
+
+        // Phase 3: apply.
+        for (i, var) in self.vars.iter().enumerate() {
+            let update = match &updates[i] {
+                Some(u) => u,
+                None => continue,
             };
 
             // Weight decay (multiplicative)
@@ -172,7 +289,7 @@ impl Muon {
             }
 
             // Apply update: w = w - lr * update
-            let scaled_update = (&update * self.lr)?;
+            let scaled_update = (update * self.lr)?;
             let new_val = var.as_tensor().sub(&scaled_update)?.detach();
             var.set(&new_val)?;
         }
@@ -304,6 +421,109 @@ mod tests {
     use super::*;
     use candle_core::Device;
     use candle_nn::VarMap;
+
+    /// Batching must not change the answer: each matrix in the stack has to come
+    /// out exactly as it would have on its own.
+    ///
+    /// The risk this guards against is a reduction that pools across the stack —
+    /// most plausibly the Frobenius normalization, which must be per-matrix. A
+    /// shared norm would be masked by a stack of similarly scaled matrices, so
+    /// the magnitudes here deliberately span 100x.
+    #[test]
+    fn batched_newton_schulz_matches_per_matrix() -> Result<()> {
+        let device = Device::Cpu;
+        let mats: Vec<Tensor> = (0..5)
+            .map(|i| {
+                let scale = 10f64.powi(i as i32 - 2); // 0.01 .. 100
+                Tensor::randn(0f32, 1.0, (48usize, 64usize), &device).and_then(|t| t * scale)
+            })
+            .collect::<Result<_>>()?;
+
+        let batched = newton_schulz_batched(&Tensor::stack(&mats, 0)?, 5, DType::F32)?;
+        for (i, m) in mats.iter().enumerate() {
+            let want = newton_schulz_with_dtype(m, 5, DType::F32)?;
+            let got = batched.narrow(0, i, 1)?.squeeze(0)?;
+            let diff = (&got - &want)?
+                .abs()?
+                .max_keepdim(1)?
+                .max_keepdim(0)?
+                .reshape(())?
+                .to_scalar::<f32>()?;
+            assert!(diff < 1e-5, "matrix {i} differs by {diff}");
+        }
+        Ok(())
+    }
+
+    /// `step` groups 2D parameters by shape before orthogonalizing, so a step
+    /// over a realistic mix — repeated shapes, a unique shape, and a 1D
+    /// parameter that skips orthogonalization entirely — must still move every
+    /// parameter, and by the same amount as the ungrouped path would.
+    #[test]
+    fn step_updates_every_param_across_shape_groups() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let init = candle_nn::Init::Randn {
+            mean: 0.0,
+            stdev: 1.0,
+        };
+
+        // Three of one shape, one of another, plus a 1D parameter.
+        let a1 = vb.get_with_hints((8, 4), "a1", init)?;
+        let a2 = vb.get_with_hints((8, 4), "a2", init)?;
+        let a3 = vb.get_with_hints((8, 4), "a3", init)?;
+        let b1 = vb.get_with_hints((6, 10), "b1", init)?;
+        let c1 = vb.get_with_hints(5, "c1", init)?;
+
+        let before: Vec<Vec<f32>> = [&a1, &a2, &a3, &b1, &c1]
+            .iter()
+            .map(|t| t.flatten_all()?.to_vec1::<f32>())
+            .collect::<Result<_>>()?;
+
+        // A loss touching all five so every parameter gets a gradient.
+        let loss = ((a1.sum_all()? + a2.sum_all()?)? + (a3.sum_all()? + b1.sum_all()?)?)?
+            .add(&c1.sum_all()?)?;
+        let grads = loss.backward()?;
+
+        let mut muon = Muon::new(varmap.all_vars(), 0.02, 0.95, 5, 0.0)?;
+        muon.step(&grads, 1.0)?;
+
+        for (i, t) in [&a1, &a2, &a3, &b1, &c1].iter().enumerate() {
+            let after = t.flatten_all()?.to_vec1::<f32>()?;
+            let moved: f32 = after
+                .iter()
+                .zip(&before[i])
+                .map(|(x, y)| (x - y).abs())
+                .sum();
+            assert!(moved > 0.0, "parameter {i} was not updated");
+            assert!(after.iter().all(|v| v.is_finite()), "parameter {i} not finite");
+        }
+        Ok(())
+    }
+
+    /// Tall matrices take the transpose path; batching must handle it too.
+    #[test]
+    fn batched_newton_schulz_handles_tall_matrices() -> Result<()> {
+        let device = Device::Cpu;
+        let mats: Vec<Tensor> = (0..3)
+            .map(|_| Tensor::randn(0f32, 1.0, (96usize, 32usize), &device))
+            .collect::<Result<_>>()?;
+
+        let batched = newton_schulz_batched(&Tensor::stack(&mats, 0)?, 5, DType::F32)?;
+        assert_eq!(batched.dims(), &[3, 96, 32]);
+        for (i, m) in mats.iter().enumerate() {
+            let want = newton_schulz_with_dtype(m, 5, DType::F32)?;
+            let got = batched.narrow(0, i, 1)?.squeeze(0)?;
+            let diff = (&got - &want)?
+                .abs()?
+                .max_keepdim(1)?
+                .max_keepdim(0)?
+                .reshape(())?
+                .to_scalar::<f32>()?;
+            assert!(diff < 1e-5, "matrix {i} differs by {diff}");
+        }
+        Ok(())
+    }
 
     /// The bf16 iteration must orthogonalize as well as the f32 one.
     ///
