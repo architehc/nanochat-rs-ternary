@@ -7,13 +7,15 @@ and `--example profile_step`.
 
 ## Summary
 
-| format | status | step-level effect |
+| format | status | measured step-level effect |
 |---|---|---|
-| **bf16** | **implemented** (`use_bf16_compute`) | GEMMs 3.2x faster, matmul operands halve in memory |
-| FP8 (E4M3) | candle has the dtype, no GEMM path | would save at most ~2% of the step |
-| **NVFP4** | **not reachable**: candle has no FP4 dtype | would save at most ~2% of the step |
+| **bf16** (cast at the matmul) | implemented, **off by default — it loses** | 1-1.5% *slower*, 8-11% *more* memory |
+| FP8 (E4M3) | candle has the dtype, no GEMM path | could save at most ~2% of the step |
+| **NVFP4** | **not reachable**: candle has no FP4 dtype | could save at most ~2% of the step |
 
-The hardware does have FP4 tensor cores. They are not the bottleneck.
+The hardware does have FP4 tensor cores. They are not the bottleneck. Neither,
+it turns out, is precision at all — see the bf16 result below, which is the same
+Amdahl argument arriving as an experimental fact.
 
 ## Why: this workload is not GEMM-bound
 
@@ -44,16 +46,37 @@ This is the same finding as the earlier DeltaNet work: the step is **launch- and
 bandwidth-bound, not FLOP-bound**. What moves the number is issuing fewer, larger
 kernels and moving fewer bytes.
 
-## Why bf16 is still worth it
+## bf16, as measured: a net loss with this implementation
 
-bf16 helps for reasons that are mostly *not* the 3.2x GEMM rate:
+The prediction was that bf16 would win on bandwidth and memory even though the
+GEMM slice is small. Measured on `qwen35-hybrid`, seq 512, `profile_step`:
 
-- **Bandwidth.** The elementwise ops that dominate the step are memory-bound.
-  Halving operand width halves their traffic.
-- **Memory.** candle's autograd holds both matmul operands for the backward pass.
-  In bf16 that is half the bytes, which buys batch size — and larger batches
-  amortize the per-op launch overhead that actually dominates.
-- **Accuracy cost is near zero here.** See below.
+| batch | f32 | bf16 |
+|---|---|---|
+| 2 | 1144 tok/s, 15.58 GB | 1131 tok/s, **16.86 GB** |
+| 4 | 1631 tok/s, 25.01 GB | 1606 tok/s, **27.84 GB** |
+
+Slower *and* larger, on both counts. Two reasons, and both are specific to
+casting at the matmul rather than to bf16 itself:
+
+1. **The casts add kernels to a launch-bound step.** `amp::matmul` inserts two
+   `to_dtype` kernels before the GEMM and one after. There are ~160 linear
+   layers, and the same casts recur in the backward pass. Saving 3.2x on 2% of
+   the step is worth ~0.6%; the added launches cost more than that.
+2. **Casting cannot save memory.** Autograd retains the *original* f32 operands
+   to compute the backward pass, so the bf16 copies are additive, not
+   substitutive — hence memory goes **up**, not down.
+
+The flag (`use_bf16_compute` / `--bf16`) is kept, defaulted off, because the
+implementation is correct and tested and the negative result is worth being able
+to re-run. Do not enable it expecting a speedup.
+
+**What would actually work:** build the model in bf16 at the `VarBuilder` — so
+the graph holds bf16 tensors and no f32 original exists to retain — and keep a
+separate f32 master copy of the weights for the optimizer to update. That halves
+activation memory for real and adds no cast kernels. It is a much larger change:
+every reduction, norm, and loss would need an explicit f32 island, and the
+checkpoint format would have to carry both copies.
 
 ## Why bf16 is nearly lossless for a ternary model
 
@@ -100,8 +123,29 @@ optimizer + bookkeeping 346 ms (28%)
 
 The productive levers, in order:
 
-1. Fewer/larger kernels in the DeltaNet recurrence (done once; more is possible).
-2. bf16 to cut bandwidth and free memory for larger batches (this change).
-3. Larger batch, which directly amortizes launch overhead.
+1. **Fewer, larger kernels.** This is the only thing that has actually moved the
+   number. Restructuring the DeltaNet recurrence so intra-chunk work batches
+   across all chunks took that layer from 71ms to 24ms; replacing `sum_all` and
+   the per-parameter `to_scalar` syncs took the gradient norm from 148ms to 16ms.
+2. **Larger batch**, which amortizes the per-op launch overhead directly.
+3. A genuinely fused kernel for the quantize/dequantize/STE chain, which is ~16
+   elementwise kernels per linear layer today (~2500 per forward). This is where
+   the remaining time is.
 
-A faster GEMM format is not on that list until the first three are exhausted.
+Changing numeric formats is not on that list. Two experiments now say so: the
+roofline (GEMM is ~2% of the step) and the bf16 measurement above.
+
+Two changes were tried and reverted for want of a measured win, recorded here so
+they are not retried blindly:
+
+- **Periodic (rather than per-step) CUDA pool trimming.** Hypothesis: trimming
+  right before the optimizer's thousands of allocations forces them all through
+  the driver. Measured 1595 -> 1603 tok/s, i.e. nothing, and it raises OOM risk
+  near the memory ceiling.
+- **Batching Newton-Schulz by weight shape.** Collapses ~5600 kernel launches
+  per step into ~350 and is numerically identical (tested). But it must hold
+  every parameter's Nesterov tensor live at once to group them, ~2GB extra, and
+  at batch 4 the trainer already sits at 30.1GB of 32GB — so it tipped into
+  host-memory thrashing and collapsed throughput to ~57 tok/s. In isolation
+  (`profile_step`, lower baseline memory) it was worth only ~19ms of a 1258ms
+  step. Worth revisiting only if the memory ceiling moves.

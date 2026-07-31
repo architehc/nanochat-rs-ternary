@@ -1,5 +1,28 @@
 //! Mixed-precision policy: bf16 compute with f32 master weights.
 //!
+//! # Status: measured, and it loses. Off by default.
+//!
+//! On `qwen35-hybrid` / RTX 5090 / seq 512, against the f32 baseline:
+//!
+//! ```text
+//!   batch 2:  f32 1144 tok/s 15.58 GB   ->   bf16 1131 tok/s 16.86 GB
+//!   batch 4:  f32 1631 tok/s 25.01 GB   ->   bf16 1606 tok/s 27.84 GB
+//! ```
+//!
+//! Slower *and* larger. Two reasons, both properties of casting at the matmul
+//! rather than of bf16:
+//!
+//! - The step is launch-bound and GEMM is only ~2% of it, so the 3.2x GEMM rate
+//!   is worth ~0.6% — less than the three `to_dtype` kernels this adds per
+//!   matmul, across ~160 linear layers, in forward *and* backward.
+//! - Casting cannot reduce memory. Autograd retains the original f32 operands
+//!   for the backward pass, so the bf16 copies are additive.
+//!
+//! Kept, defaulted off, because the implementation is correct and tested and the
+//! negative result is worth being able to reproduce. The approach that would
+//! actually pay is building the model in bf16 at the `VarBuilder` with a
+//! separate f32 master copy — see `docs/BLACKWELL_LOW_PRECISION.md`.
+//!
 //! # What runs where
 //!
 //! Master weights, optimizer state, reductions (RMSNorm variance, softmax, the
