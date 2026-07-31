@@ -52,6 +52,12 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 tokenizers = "0.20"
 rand = "0.8"
 
+[features]
+default = []
+# candle-core is a dev-dependency here, so its `cuda` feature cannot be named
+# directly; enabling it through nanochat-train turns it on for the whole graph.
+cuda = ["nanochat-train/cuda"]
+
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = "3"
@@ -110,3 +116,15 @@ path = "examples/train_rust_fixed.rs"
 [[example]]
 name = "test_generation"
 path = "examples/test_generation.rs"
+
+[[example]]
+name = "profile_step"
+path = "examples/profile_step.rs"
+
+[[example]]
+name = "profile_layers"
+path = "examples/profile_layers.rs"
+
+[[example]]
+name = "bench_gemm"
+path = "examples/bench_gemm.rs"

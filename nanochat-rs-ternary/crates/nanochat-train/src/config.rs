@@ -226,8 +226,21 @@ pub struct TrainConfig {
     #[serde(default = "default_entropy_weight")]
     pub entropy_weight: f64,
 
+    /// Run matmul operands in bf16 with f32 master weights (CUDA only).
+    ///
+    /// Halves the memory the autograd graph holds for matmul operands and puts
+    /// the GEMMs on the tensor cores, accumulating in f32. See [`crate::amp`]
+    /// for why this is close to lossless for a ternary QAT model.
+    #[serde(default)]
+    pub use_bf16_compute: bool,
+
     // FP4 mixed precision (Blackwell-oriented)
     /// Enable software-simulated FP4 activation quantization in training loop.
+    ///
+    /// NOTE: this is a *numerical simulation* — it rounds activations onto the
+    /// E2M1 lattice using f32 tensor ops. It does not use Blackwell's FP4 tensor
+    /// cores and is slower than not using it, since candle has no FP4 dtype.
+    /// See `docs/BLACKWELL_LOW_PRECISION.md`.
     #[serde(default)]
     pub use_fp4: bool,
     /// Use stochastic rounding behavior in FP4 module.
@@ -351,11 +364,11 @@ impl TrainConfig {
         if self.dim == 0 {
             errors.push("dim must be greater than 0".to_string());
         }
-        
+
         if self.n_layers == 0 {
             errors.push("n_layers must be greater than 0".to_string());
         }
-        
+
         if self.n_heads == 0 {
             errors.push("n_heads must be greater than 0".to_string());
         }
@@ -411,16 +424,20 @@ impl TrainConfig {
         if self.use_galore && self.galore_rank > self.dim / 2 {
             warnings.push(format!(
                 "GaLore rank ({}) > dim/2 ({}), memory savings minimal",
-                self.galore_rank, self.dim / 2
+                self.galore_rank,
+                self.dim / 2
             ));
         }
 
         if self.use_galore && self.galore_update_freq == 0 {
-            errors.push("galore_update_freq must be greater than 0 when use_galore is true".to_string());
+            errors.push(
+                "galore_update_freq must be greater than 0 when use_galore is true".to_string(),
+            );
         }
 
         if self.use_async_loader && self.async_n_workers == 0 {
-            warnings.push("async_n_workers is 0, async loader will not provide benefits".to_string());
+            warnings
+                .push("async_n_workers is 0, async loader will not provide benefits".to_string());
         }
 
         if self.use_mtp && self.mtp_n_tokens == 0 {
@@ -452,7 +469,11 @@ impl TrainConfig {
                     self.wavefield_ratio
                 ));
             }
-            let wf_heads = if self.wavefield_n_heads == 0 { self.n_heads } else { self.wavefield_n_heads };
+            let wf_heads = if self.wavefield_n_heads == 0 {
+                self.n_heads
+            } else {
+                self.wavefield_n_heads
+            };
             if self.dim > 0 && wf_heads > 0 && self.dim % wf_heads != 0 {
                 errors.push(format!(
                     "dim ({}) must be divisible by wavefield n_heads ({})",
@@ -625,6 +646,7 @@ impl TrainConfig {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -701,6 +723,7 @@ impl TrainConfig {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -797,6 +820,7 @@ impl TrainConfig {
             async_prefetch_size: 12,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
 
@@ -875,6 +899,7 @@ impl TrainConfig {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -961,6 +986,7 @@ impl TrainConfig {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None, // Can be set to teacher model path
@@ -1038,6 +1064,7 @@ impl TrainConfig {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -1114,6 +1141,7 @@ impl TrainConfig {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -1190,6 +1218,7 @@ impl TrainConfig {
             async_prefetch_size: 16,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -1266,6 +1295,7 @@ impl TrainConfig {
             async_prefetch_size: 16,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -1307,9 +1337,9 @@ impl TrainConfig {
     pub fn large_7b_6day() -> Self {
         let mut cfg = Self::large_7b();
         cfg.total_steps = 1_500;
-        cfg.warmup_steps = 150;       // 10% of total (was 8000 for 300K run)
-        cfg.decay_start_frac = 0.75;  // Start decay at step 1125
-        cfg.lr = 0.004;               // Halved from 0.008 — fewer steps need gentler LR
+        cfg.warmup_steps = 150; // 10% of total (was 8000 for 300K run)
+        cfg.decay_start_frac = 0.75; // Start decay at step 1125
+        cfg.lr = 0.004; // Halved from 0.008 — fewer steps need gentler LR
         cfg
     }
 
@@ -1379,7 +1409,7 @@ impl TrainConfig {
             dim: 768,
             n_layers: 16,
             n_heads: 12,
-            n_kv_heads: 4, // GQA 3:1
+            n_kv_heads: 4,    // GQA 3:1
             ffn_mult: 2.6667, // ffn_dim = 2048, aligned to 128
             vocab_size: 4096, // BPE tokenizer trained on Rust corpus
             max_seq_len: 2048,
@@ -1423,6 +1453,7 @@ impl TrainConfig {
 
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -1432,13 +1463,13 @@ impl TrainConfig {
             // Wave field: 50% Haar + 50% standard attention (interleaved)
             use_wave_field: true,
             wavefield_field_size: 256, // power-of-2, reduced for VRAM
-            wavefield_n_heads: 0, // use n_heads (12)
+            wavefield_n_heads: 0,      // use n_heads (12)
             wavefield_head_coupling: true,
             wavefield_ratio: 0.5, // 8 wavefield + 8 standard layers
             wavefield_convolve_mode: Some("haar".to_string()),
             wavefield_haar_levels: Some(6), // partial decomposition — drops uninformative global DC levels
-            wavefield_physics_lr: 5e-4, // faster than mhc_lr for spectral profile learning
-            wavefield_warmup_delay: 200, // freeze physics params for first 200 steps
+            wavefield_physics_lr: 5e-4,     // faster than mhc_lr for spectral profile learning
+            wavefield_warmup_delay: 200,    // freeze physics params for first 200 steps
             wavefield_haar_direct: true, // direct Haar-domain coefficients (not time-domain kernel)
 
             use_engram: false,
@@ -1474,9 +1505,9 @@ impl TrainConfig {
         Self {
             dim: 1024,
             n_layers: 20,
-            n_heads: 16,     // 1024/16 = 64 head_dim
-            n_kv_heads: 4,   // GQA 4:1
-            ffn_mult: 3.0,   // ffn_dim = 3072, aligned to 128
+            n_heads: 16,   // 1024/16 = 64 head_dim
+            n_kv_heads: 4, // GQA 4:1
+            ffn_mult: 3.0, // ffn_dim = 3072, aligned to 128
             vocab_size: 4096,
             max_seq_len: 1024,
             group_size: 128,
@@ -1485,7 +1516,7 @@ impl TrainConfig {
             rope_theta: 10000.0,
             loop_config: None,
 
-            lr: 0.012,       // scaled from 0.015 by sqrt(768/1024)
+            lr: 0.012, // scaled from 0.015 by sqrt(768/1024)
             mhc_lr: 1e-4,
             weight_decay: 0.0,
             batch_size: 2,
@@ -1516,6 +1547,7 @@ impl TrainConfig {
 
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -1526,7 +1558,7 @@ impl TrainConfig {
             wavefield_field_size: 256,
             wavefield_n_heads: 0,
             wavefield_head_coupling: true,
-            wavefield_ratio: 0.5,  // 10 wavefield + 10 standard layers
+            wavefield_ratio: 0.5, // 10 wavefield + 10 standard layers
             wavefield_convolve_mode: Some("haar".to_string()),
             wavefield_haar_levels: Some(6),
             wavefield_physics_lr: 5e-4,
@@ -1613,6 +1645,7 @@ impl TrainConfig {
 
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -1703,6 +1736,7 @@ impl TrainConfig {
 
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -1786,6 +1820,7 @@ impl TrainConfig {
 
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -2025,6 +2060,7 @@ impl TrainConfig {
 
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -2068,8 +2104,8 @@ impl TrainConfig {
             dim: 1280,
             n_layers: 16,
             n_heads: 16,
-            n_kv_heads: 4,     // GQA 4:1
-            ffn_mult: 2.6875,  // ffn_dim = 3456, aligned to 128
+            n_kv_heads: 4,    // GQA 4:1
+            ffn_mult: 2.6875, // ffn_dim = 3456, aligned to 128
             vocab_size: 4096,
             max_seq_len: 1024,
             group_size: 128,
@@ -2078,13 +2114,13 @@ impl TrainConfig {
             rope_theta: 10000.0,
             loop_config: None,
 
-            lr: 0.010,         // Conservative for long training (v14 best)
+            lr: 0.010, // Conservative for long training (v14 best)
             mhc_lr: 1e-4,
             weight_decay: 0.0,
-            batch_size: 4,     // 5090 has 32GB (vs 24GB on 4090)
+            batch_size: 4,       // 5090 has 32GB (vs 24GB on 4090)
             grad_accum_steps: 1, // Candle memory management
             warmup_steps: 2000,
-            total_steps: 100_000, // 7 days target
+            total_steps: 100_000,   // 7 days target
             decay_start_frac: 0.53, // Decay at ~53K steps (v14-style early decay)
             grad_clip: 1.0,
             ns_steps: 5,
@@ -2105,11 +2141,12 @@ impl TrainConfig {
             collider_threshold: 0.3,
             collider_sparsity: 0.35,
             use_async_loader: true,
-            async_n_workers: 8,   // 5090 system has many cores
+            async_n_workers: 8, // 5090 system has many cores
             async_prefetch_size: 16,
 
             label_smooth_eps: 0.1,
             entropy_weight: 0.01, // Gentle entropy regularization
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -2149,9 +2186,9 @@ impl TrainConfig {
     /// Based on v13/v14 (best losses) but extended for 5090's extra VRAM.
     pub fn nano_275m_engram_5090() -> Self {
         let mut cfg = Self::nano_275m_engram_only();
-        cfg.batch_size = 4;        // 5090 can handle this
+        cfg.batch_size = 4; // 5090 can handle this
         cfg.total_steps = 100_000; // 7-day training
-        cfg.lr = 0.010;            // v14 LR (stable)
+        cfg.lr = 0.010; // v14 LR (stable)
         cfg.warmup_steps = 2000;
         cfg.decay_start_frac = 0.53;
         cfg.use_mtp = true;
@@ -2172,7 +2209,7 @@ impl TrainConfig {
     /// 150K steps ≈ 7 days at ~1000 tok/s.
     pub fn nano_275m_engram_5090_v2() -> Self {
         let mut cfg = Self::nano_275m_engram_only();
-        cfg.total_steps = 150_000;   // ~7 days at 1000 tok/s
+        cfg.total_steps = 150_000; // ~7 days at 1000 tok/s
         cfg.warmup_steps = 2000;
         // v13 LR schedule (best: loss 2.19): lr=0.012, decay at 80%
         cfg.lr = 0.012;
@@ -2197,9 +2234,9 @@ impl TrainConfig {
     ///   - Steps 6K-30K: cosine decay → expected loss < 2.5
     pub fn nano_275m_engram_5090_v3() -> Self {
         let mut cfg = Self::nano_275m_engram_only();
-        cfg.total_steps = 30_000;    // 30K total (resume from 4K)
-        cfg.warmup_steps = 0;        // Already warmed up, resuming
-        cfg.lr = 0.008;              // Stable LR (no gnorm blowup)
+        cfg.total_steps = 30_000; // 30K total (resume from 4K)
+        cfg.warmup_steps = 0; // Already warmed up, resuming
+        cfg.lr = 0.008; // Stable LR (no gnorm blowup)
         cfg.decay_start_frac = 0.20; // Decay at step 6K (2K more exploration)
         cfg.engram_layers = vec![0, 10, 19];
         cfg.entropy_weight = 0.01;
@@ -2219,9 +2256,9 @@ impl TrainConfig {
     ///   - decay at 75% = step 41250 (11K stable steps to learn new data)
     pub fn nano_275m_engram_5090_v4() -> Self {
         let mut cfg = Self::nano_275m_engram_only();
-        cfg.total_steps = 55_000;    // 25K more steps after step 30K resume
-        cfg.warmup_steps = 500;      // Brief warmup for new data distribution
-        cfg.lr = 0.006;              // Stable LR for extended training
+        cfg.total_steps = 55_000; // 25K more steps after step 30K resume
+        cfg.warmup_steps = 500; // Brief warmup for new data distribution
+        cfg.lr = 0.006; // Stable LR for extended training
         cfg.decay_start_frac = 0.75; // Decay at step 41250 — 11K stable steps first
         cfg.engram_layers = vec![0, 10, 19];
         cfg.entropy_weight = 0.01;
@@ -2251,10 +2288,10 @@ impl TrainConfig {
     pub fn qwen35_hybrid() -> Self {
         Self {
             dim: 1024,
-            n_layers: 16,       // 12 DeltaNet + 4 Attention (~24GB, good throughput)
+            n_layers: 16, // 12 DeltaNet + 4 Attention (~24GB, good throughput)
             n_heads: 8,
-            n_kv_heads: 2,      // GQA 4:1 for attention layers
-            ffn_mult: 3.5,      // ffn_dim = 3584
+            n_kv_heads: 2, // GQA 4:1 for attention layers
+            ffn_mult: 3.5, // ffn_dim = 3584
             vocab_size: 4096,
             // 512 measured at 17.3GB on the 32GB 5090 with the chunkwise
             // recurrence. The earlier 256 was forced by the sequential form,
@@ -2296,6 +2333,7 @@ impl TrainConfig {
             async_prefetch_size: 16,
             label_smooth_eps: 0.1,
             entropy_weight: 0.01,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -2324,9 +2362,9 @@ impl TrainConfig {
 
             // Hybrid DeltaNet: [0,0,0,1] = 3 DeltaNet + 1 Attention, repeating
             use_deltanet: true,
-            deltanet_n_heads: 8,            // head_dim=128 (dim/n_heads)
+            deltanet_n_heads: 8,                // head_dim=128 (dim/n_heads)
             deltanet_pattern: vec![0, 0, 0, 1], // 75% DeltaNet, 25% attention
-            gated_attention: true,          // Output gating on attention layers
+            gated_attention: true,              // Output gating on attention layers
             deltanet_conv_kernel: 4,
         }
     }

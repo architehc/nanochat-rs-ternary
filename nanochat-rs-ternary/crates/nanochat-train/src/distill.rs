@@ -7,7 +7,7 @@
 //!
 //! Supports both local teacher (in-process) and remote teacher (HTTP endpoint).
 
-use candle_core::{DType, Device, D, Result, Tensor, Var};
+use candle_core::{DType, Device, Result, Tensor, Var, D};
 use candle_nn::VarMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -1027,6 +1027,7 @@ mod tests {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,

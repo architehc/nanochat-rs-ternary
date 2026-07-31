@@ -32,9 +32,25 @@ use crate::layers::{BitLinearSTE, RMSNormTrain};
 ///
 /// The sequential form issues O(seq_len) `[head_dim, head_dim]` state matmuls;
 /// the chunked form issues O(seq_len / CHUNK) of them and replaces the rest with
-/// `[CHUNK, CHUNK]` and `[CHUNK, head_dim]` matmuls. Larger is fewer state
-/// updates but more intra-chunk work, which grows as CHUNK^2.
-pub const DEFAULT_CHUNK_SIZE: usize = 64;
+/// `[CHUNK, CHUNK]` and `[CHUNK, head_dim]` matmuls.
+///
+/// Since the intra-chunk work is batched across all chunks (see [`ChunkTerms`]),
+/// the sequential depth of a forward pass is
+///
+/// ```text
+///   CHUNK / SOLVE_BLOCK   (triangular solve, paid once for all chunks)
+/// + seq_len / CHUNK       (the state carry)
+/// ```
+///
+/// which is minimized at `CHUNK = sqrt(seq_len * SOLVE_BLOCK)` — about 90 for
+/// seq_len 512 and SOLVE_BLOCK 16. Measured fwd+bwd for one layer at
+/// batch 2 x seq 512 on an RTX 5090, which agrees:
+///
+/// ```text
+///   chunk      32     64     128     256     512
+///   ms       32.9   26.4    23.8    29.4    41.7
+/// ```
+pub const DEFAULT_CHUNK_SIZE: usize = 128;
 
 /// Sub-block size for the two-level triangular solve.
 ///
@@ -49,11 +65,17 @@ pub const DEFAULT_CHUNK_SIZE: usize = 64;
 ///   identical keys, beta = 1    8.2e1     0.0      0.0      0.0
 /// ```
 ///
-/// B=8 matches forward substitution everywhere reachable; B=16 starts to drift.
+/// B=8 matches forward substitution everywhere reachable; B=16 is within 2e-6 of
+/// it in the worst reachable regime and *better* than B=8 in the realistic one.
 /// (A synthetic `|n| ~ 1` matrix has cond 3.7e8 and defeats *every* f32 method
 /// including forward substitution, but it is not reachable: `n` entries are
 /// `beta * decay * (k_s . k_t)` with L2-normalized keys.)
-const SOLVE_BLOCK: usize = 8;
+///
+/// B=16 is used because the solve's sequential depth is `CHUNK / SOLVE_BLOCK`:
+/// doubling the block halves the number of dependent block-steps, and the
+/// residuals above are orders of magnitude below the f32 noise the recurrence
+/// already carries. `test_blocked_solve_matches_rowwise` pins the accuracy.
+const SOLVE_BLOCK: usize = 16;
 
 /// Log-space decay rate at init. `exp(0.5) ≈ 1.6487`.
 const A_LOG_INIT: f64 = 0.5;
@@ -70,23 +92,18 @@ pub struct GatedDeltaNetTrain {
     pub wk: BitLinearSTE,
     pub wv: BitLinearSTE,
     pub wo: BitLinearSTE,
-    pub a_proj: BitLinearSTE,    // dim -> n_heads (alpha gate input)
-    pub b_proj: BitLinearSTE,    // dim -> n_heads (beta gate)
-    pub g_proj: BitLinearSTE,    // dim -> n_heads * head_dim (output gate)
-    pub a_log: Tensor,           // [n_heads] learnable log-space decay rate
-    pub dt_bias: Tensor,         // [n_heads] learnable bias for softplus
-    pub out_norm: RMSNormTrain,  // RMSNorm on output before gating
+    pub a_proj: BitLinearSTE,   // dim -> n_heads (alpha gate input)
+    pub b_proj: BitLinearSTE,   // dim -> n_heads (beta gate)
+    pub g_proj: BitLinearSTE,   // dim -> n_heads * head_dim (output gate)
+    pub a_log: Tensor,          // [n_heads] learnable log-space decay rate
+    pub dt_bias: Tensor,        // [n_heads] learnable bias for softplus
+    pub out_norm: RMSNormTrain, // RMSNorm on output before gating
     pub n_heads: usize,
     pub head_dim: usize,
 }
 
 impl GatedDeltaNetTrain {
-    pub fn new(
-        dim: usize,
-        n_heads: usize,
-        group_size: usize,
-        vb: VarBuilder,
-    ) -> Result<Self> {
+    pub fn new(dim: usize, n_heads: usize, group_size: usize, vb: VarBuilder) -> Result<Self> {
         assert!(n_heads > 0, "n_heads must be non-zero");
         assert!(
             dim % n_heads == 0,
@@ -115,7 +132,8 @@ impl GatedDeltaNetTrain {
         // of the state discarded per token — under two tokens of memory, which
         // starves the recurrent layers of any long-range capacity at init.
         let a_log = vb.get_with_hints(n_heads, "a_log", candle_nn::Init::Const(A_LOG_INIT))?;
-        let dt_bias = vb.get_with_hints(n_heads, "dt_bias", candle_nn::Init::Const(DT_BIAS_INIT))?;
+        let dt_bias =
+            vb.get_with_hints(n_heads, "dt_bias", candle_nn::Init::Const(DT_BIAS_INIT))?;
 
         let out_norm = RMSNormTrain::new(head_dim, vb.pp("out_norm"))?;
 
@@ -255,11 +273,7 @@ fn sequential_recurrence(
     decay: &Tensor,
 ) -> Result<Tensor> {
     let (batch, seq_len, n_heads, head_dim) = q.dims4()?;
-    let mut s = Tensor::zeros(
-        (batch, n_heads, head_dim, head_dim),
-        q.dtype(),
-        q.device(),
-    )?;
+    let mut s = Tensor::zeros((batch, n_heads, head_dim, head_dim), q.dtype(), q.device())?;
     let mut outputs = Vec::with_capacity(seq_len);
     for t in 0..seq_len {
         // contiguous() needed because narrow+squeeze produces non-contiguous views
@@ -324,61 +338,185 @@ fn chunked_recurrence(
     let (batch, n_heads, seq_len, head_dim) = q.dims4()?;
     let device = q.device();
     let dtype = q.dtype();
+    let bh = batch * n_heads;
 
-    let mut s = Tensor::zeros((batch, n_heads, head_dim, head_dim), dtype, device)?;
-    let mut outputs = Vec::with_capacity(seq_len.div_ceil(chunk_size));
-    let mut start = 0usize;
+    let c = chunk_size.clamp(1, seq_len);
+    let n_full = seq_len / c;
+    let tail = seq_len - n_full * c;
 
-    while start < seq_len {
-        let c = (seq_len - start).min(chunk_size);
+    let mut s = Tensor::zeros((bh, head_dim, head_dim), dtype, device)?;
+    let mut outputs = Vec::with_capacity(n_full + usize::from(tail > 0));
 
-        let qc = q.narrow(2, start, c)?.contiguous()?; // [b, h, c, d]
-        let kc = k.narrow(2, start, c)?.contiguous()?;
-        let vc = v.narrow(2, start, c)?.contiguous()?;
-        let bc = beta.narrow(2, start, c)?.unsqueeze(D::Minus1)?.contiguous()?; // [b, h, c, 1]
-        let gc = g.narrow(2, start, c)?.unsqueeze(D::Minus1)?.contiguous()?; // [b, h, c, 1]
+    if n_full > 0 {
+        ChunkTerms::compute(q, k, v, beta, g, 0, n_full, c)?.carry(&mut s, &mut outputs)?;
+    }
+    if tail > 0 {
+        ChunkTerms::compute(q, k, v, beta, g, n_full * c, 1, tail)?.carry(&mut s, &mut outputs)?;
+    }
+
+    Tensor::cat(&outputs, 1)?.reshape((batch, n_heads, seq_len, head_dim))
+}
+
+/// The part of the chunked recurrence that does not depend on the carried state.
+///
+/// `U` is affine in the incoming state `S_0`, which is what makes the whole
+/// recurrence parallelizable across chunks:
+///
+/// ```text
+/// U = T B (V - Gamma K S_0^T) = U_v - W S_0^T,   T = (I+N)^-1
+///     U_v = T (B V)                              (state-free)
+///     W   = T (B Gamma K)                        (state-free)
+/// ```
+///
+/// Substituting into the output and state-update equations collapses each chunk's
+/// state-dependent work to two small matmuls:
+///
+/// ```text
+/// O   = E S_0^T + A,        E = Gamma Q - M W,   A = M U_v
+/// S_C = S_0 (Gamma_C I - G) + term1,  G = (R W)^T K,  term1 = (R U_v)^T K
+/// ```
+///
+/// `E`, `A`, `G`, `term1` and `Gamma_C` are all chunk-local, so they are computed
+/// for *every* chunk in one batched pass with the chunk index folded into the
+/// batch dimension. Only the two matmuls in [`Self::carry`] stay sequential.
+///
+/// This matters because the recurrence is launch-bound, not FLOP-bound: the
+/// previous formulation solved `(I+N)U = rhs` separately per chunk, so the
+/// triangular solve's `chunk/SOLVE_BLOCK` sequential steps were paid
+/// `seq_len/chunk` times over — `seq_len/SOLVE_BLOCK` block-steps in total,
+/// independent of chunk size. Batching the solve pays `chunk/SOLVE_BLOCK` once.
+struct ChunkTerms {
+    /// `[bh, n_chunks, c, d]` — state coefficient of the output.
+    e: Tensor,
+    /// `[bh, n_chunks, c, d]` — state-free part of the output.
+    a: Tensor,
+    /// `[bh, n_chunks, d, d]` — state-free part of the state update.
+    term1: Tensor,
+    /// `[bh, n_chunks, d, d]` — state coefficient of the state update.
+    gmat: Tensor,
+    /// `[bh, n_chunks, 1, 1]` — whole-chunk decay `exp(Gcum_C)`.
+    gam_last: Tensor,
+    n_chunks: usize,
+}
+
+impl ChunkTerms {
+    /// Compute the state-free terms for `n_chunks` chunks of length `c` starting
+    /// at sequence position `start`.
+    fn compute(
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        beta: &Tensor,
+        g: &Tensor,
+        start: usize,
+        n_chunks: usize,
+        c: usize,
+    ) -> Result<Self> {
+        let (batch, n_heads, _, head_dim) = q.dims4()?;
+        let device = q.device();
+        let dtype = q.dtype();
+        let bh = batch * n_heads;
+        let span = n_chunks * c;
+        // Flat batch: the chunk index rides along with (batch, head) so every
+        // intra-chunk op below is a single batched kernel over all chunks.
+        let f = bh * n_chunks;
+
+        // [b, h, seq, d] -> [f, c, d]; [b, h, seq] -> [f, c, 1].
+        let fold = |t: &Tensor| -> Result<Tensor> {
+            t.narrow(2, start, span)?
+                .contiguous()?
+                .reshape((f, c, head_dim))
+        };
+        let fold1 = |t: &Tensor| -> Result<Tensor> {
+            t.narrow(2, start, span)?.contiguous()?.reshape((f, c, 1))
+        };
+
+        let qc = fold(q)?;
+        let kc = fold(k)?;
+        let vc = fold(v)?;
+        let bc = fold1(beta)?;
+        let gc = fold1(g)?;
 
         // Cumulative log-decay within the chunk, as a matmul with a lower
         // triangular ones matrix (differentiable, no cumsum dependency).
-        let incl = tri_mask(c, false, dtype, device)?.reshape((1, 1, c, c))?;
-        let strict = tri_mask(c, true, dtype, device)?.reshape((1, 1, c, c))?;
-        let gcum = incl.broadcast_matmul(&gc)?; // [b, h, c, 1]
+        let incl = tri_mask(c, false, dtype, device)?.reshape((1, c, c))?;
+        let strict = tri_mask(c, true, dtype, device)?.reshape((1, c, c))?;
+        let gcum = incl.broadcast_matmul(&gc)?; // [f, c, 1]
         let gamma = gcum.exp()?; // Gamma_t in (0, 1]
 
         // dr[t,s] = exp(Gcum_t - Gcum_s). Clamped at 0 so the anti-causal half
         // (where the exponent is positive) stays finite before masking.
         let dr = gcum
-            .broadcast_sub(&gcum.transpose(2, 3)?)?
+            .broadcast_sub(&gcum.transpose(1, 2)?)?
             .minimum(0.0)?
-            .exp()?; // [b, h, c, c]
+            .exp()?; // [f, c, c]
 
         // N = diag(beta) * (dr .* K K^T) restricted to s < t.
-        let kkt = kc.matmul(&kc.transpose(2, 3)?)?;
-        let n = (&dr * &kkt)?
-            .broadcast_mul(&strict)?
-            .broadcast_mul(&bc)?;
+        let kkt = kc.matmul(&kc.transpose(1, 2)?)?;
+        let n = (&dr * &kkt)?.broadcast_mul(&strict)?.broadcast_mul(&bc)?;
 
-        // Solve (I + N) U = B (V - Gamma K S^T) for U.
-        let ks = kc.matmul(&s.transpose(2, 3)?)?; // [b, h, c, d]
-        let rhs = (&vc - &ks.broadcast_mul(&gamma)?)?.broadcast_mul(&bc)?;
-        let u = solve_unit_lower(&n, &rhs, c)?;
+        // One solve for both right-hand sides: [B V | B Gamma K] shares the same
+        // triangular factor, so solving them together halves the block-step count.
+        let bv = vc.broadcast_mul(&bc)?;
+        let bgk = kc.broadcast_mul(&(&bc * &gamma)?)?;
+        let rhs = Tensor::cat(&[&bv, &bgk], 2)?; // [f, c, 2d]
+        let solved = solve_unit_lower(
+            &n.reshape((f, 1, c, c))?,
+            &rhs.reshape((f, 1, c, 2 * head_dim))?,
+            c,
+        )?
+        .reshape((f, c, 2 * head_dim))?;
+        let uv = solved.narrow(2, 0, head_dim)?.contiguous()?;
+        let w = solved.narrow(2, head_dim, head_dim)?.contiguous()?;
 
-        // O = Gamma (Q S^T) + M U, with M causal-inclusive.
-        let qkt = qc.matmul(&kc.transpose(2, 3)?)?;
+        // O = Gamma (Q S^T) + M U = E S^T + A, with M causal-inclusive.
+        let qkt = qc.matmul(&kc.transpose(1, 2)?)?;
         let m = (&dr * &qkt)?.broadcast_mul(&incl)?;
-        let qs = qc.matmul(&s.transpose(2, 3)?)?;
-        outputs.push((qs.broadcast_mul(&gamma)? + m.matmul(&u)?)?);
+        let a = m.matmul(&uv)?;
+        let e = (qc.broadcast_mul(&gamma)? - m.matmul(&w)?)?;
 
         // S <- Gamma_C S + sum_t exp(Gcum_C - Gcum_t) u_t k_t^T
-        let g_last = gcum.narrow(2, c - 1, 1)?; // [b, h, 1, 1]
-        let r = g_last.broadcast_sub(&gcum)?.minimum(0.0)?.exp()?; // [b, h, c, 1]
-        let ru = u.broadcast_mul(&r)?;
-        s = (s.broadcast_mul(&g_last.exp()?)? + ru.transpose(2, 3)?.matmul(&kc)?)?;
+        let g_last = gcum.narrow(1, c - 1, 1)?; // [f, 1, 1]
+        let r = g_last.broadcast_sub(&gcum)?.minimum(0.0)?.exp()?; // [f, c, 1]
+        let term1 = uv
+            .broadcast_mul(&r)?
+            .transpose(1, 2)?
+            .contiguous()?
+            .matmul(&kc)?;
+        let gmat = w
+            .broadcast_mul(&r)?
+            .transpose(1, 2)?
+            .contiguous()?
+            .matmul(&kc)?;
 
-        start += c;
+        Ok(Self {
+            e: e.reshape((bh, n_chunks, c, head_dim))?,
+            a: a.reshape((bh, n_chunks, c, head_dim))?,
+            term1: term1.reshape((bh, n_chunks, head_dim, head_dim))?,
+            gmat: gmat.reshape((bh, n_chunks, head_dim, head_dim))?,
+            gam_last: g_last.exp()?.reshape((bh, n_chunks, 1, 1))?,
+            n_chunks,
+        })
     }
 
-    Tensor::cat(&outputs, 2)
+    /// Thread the carried state through the chunks, appending `[bh, c, d]`
+    /// outputs. Two matmuls per chunk — the only sequential work left.
+    fn carry(&self, s: &mut Tensor, outputs: &mut Vec<Tensor>) -> Result<()> {
+        let pick = |t: &Tensor, i: usize| -> Result<Tensor> {
+            t.narrow(1, i, 1)?.squeeze(1)?.contiguous()
+        };
+        for i in 0..self.n_chunks {
+            let e = pick(&self.e, i)?;
+            let a = pick(&self.a, i)?;
+            outputs.push((e.matmul(&s.transpose(1, 2)?.contiguous()?)? + a)?);
+
+            let term1 = pick(&self.term1, i)?;
+            let gmat = pick(&self.gmat, i)?;
+            let gam_last = pick(&self.gam_last, i)?;
+            *s = ((s.broadcast_mul(&gam_last)? - s.matmul(&gmat)?)? + term1)?;
+        }
+        Ok(())
+    }
 }
 
 /// Solve `(I + n) X = rhs` for `X`, with `n` strictly lower triangular over its
@@ -406,14 +544,15 @@ fn solve_unit_lower(n: &Tensor, rhs: &Tensor, c: usize) -> Result<Tensor> {
     // flat batch rather than kept as a separate axis.
     let mut diag = Vec::with_capacity(n_blocks);
     for i in 0..n_blocks {
-        diag.push(n.narrow(2, i * blk, blk)?.narrow(3, i * blk, blk)?.contiguous()?);
+        diag.push(
+            n.narrow(2, i * blk, blk)?
+                .narrow(3, i * blk, blk)?
+                .contiguous()?,
+        );
     }
     let stacked = Tensor::stack(&diag, 2)?; // [b, h, n_blocks, blk, blk]
-    let inverted = neumann_inverse(
-        &stacked.reshape((batch * heads * n_blocks, blk, blk))?,
-        blk,
-    )?
-    .reshape((batch, heads, n_blocks, blk, blk))?;
+    let inverted = neumann_inverse(&stacked.reshape((batch * heads * n_blocks, blk, blk))?, blk)?
+        .reshape((batch, heads, n_blocks, blk, blk))?;
 
     // Block forward substitution:
     //   X_i = Dinv_i (rhs_i - n[i, :i*blk] X_{:i*blk})
@@ -494,7 +633,12 @@ fn identity(c: usize, dtype: candle_core::DType, device: &candle_core::Device) -
 }
 
 /// `[c, c]` causal mask: 1 where `s < t` (strict) or `s <= t` (inclusive).
-fn tri_mask(c: usize, strict: bool, dtype: candle_core::DType, device: &candle_core::Device) -> Result<Tensor> {
+fn tri_mask(
+    c: usize,
+    strict: bool,
+    dtype: candle_core::DType,
+    device: &candle_core::Device,
+) -> Result<Tensor> {
     let mut data = vec![0f32; c * c];
     for t in 0..c {
         for s in 0..c {
@@ -645,10 +789,7 @@ mod tests {
     }
 
     /// Build the [1, 1, D] per-step tensors `delta_rule_step` expects.
-    fn step_inputs(
-        vals: &[f32],
-        device: &Device,
-    ) -> Result<Tensor> {
+    fn step_inputs(vals: &[f32], device: &Device) -> Result<Tensor> {
         Tensor::new(vals, device)?.reshape((1, 1, vals.len()))
     }
 
@@ -705,7 +846,10 @@ mod tests {
         let got = o.flatten_all()?.to_vec1::<f32>()?;
         let want = v.flatten_all()?.to_vec1::<f32>()?;
         for (g, w) in got.iter().zip(want.iter()) {
-            assert!((g - w).abs() < 1e-5, "recall failed — got {got:?}, want {want:?}");
+            assert!(
+                (g - w).abs() < 1e-5,
+                "recall failed — got {got:?}, want {want:?}"
+            );
         }
         Ok(())
     }
@@ -730,7 +874,10 @@ mod tests {
         let got = o.flatten_all()?.to_vec1::<f32>()?;
         let want = v1.flatten_all()?.to_vec1::<f32>()?;
         for (g, w) in got.iter().zip(want.iter()) {
-            assert!((g - w).abs() < 1e-5, "interference — got {got:?}, want {want:?}");
+            assert!(
+                (g - w).abs() < 1e-5,
+                "interference — got {got:?}, want {want:?}"
+            );
         }
         Ok(())
     }
@@ -785,7 +932,10 @@ mod tests {
         let device = Device::Cpu;
         let x = Tensor::new(&[100.0f32, 500.0, -100.0], &device)?;
         let y = softplus(&x)?.to_vec1::<f32>()?;
-        assert!(y.iter().all(|v| v.is_finite()), "softplus overflowed: {y:?}");
+        assert!(
+            y.iter().all(|v| v.is_finite()),
+            "softplus overflowed: {y:?}"
+        );
         // softplus(x) ≈ x for large positive x
         assert!((y[0] - 100.0).abs() < 1e-3, "got {}", y[0]);
         assert!((y[1] - 500.0).abs() < 1e-2, "got {}", y[1]);
@@ -1171,10 +1321,18 @@ mod tests {
             "CUDA softplus overflowed: {vals:?}"
         );
         assert!((vals[0] - 120.0).abs() < 1e-2, "got {}", vals[0]);
-        assert!((vals[1] - std::f32::consts::LN_2).abs() < 1e-4, "got {}", vals[1]);
+        assert!(
+            (vals[1] - std::f32::consts::LN_2).abs() < 1e-4,
+            "got {}",
+            vals[1]
+        );
 
         let grads = y.sum_all()?.backward()?;
-        let g = grads.get(&x).expect("no gradient").to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let g = grads
+            .get(&x)
+            .expect("no gradient")
+            .to_device(&Device::Cpu)?
+            .to_vec1::<f32>()?;
         assert!(
             g.iter().all(|v| v.is_finite()),
             "CUDA softplus gradient not finite: {g:?}"

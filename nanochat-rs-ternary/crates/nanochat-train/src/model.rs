@@ -53,23 +53,24 @@ impl NanochatTrainModel {
         let tok_embed = candle_nn::Embedding::new(embed_weights, config.dim);
 
         // Helper: optionally create Engram for a given unique layer index
-        let make_engram = |layer_idx: usize, vb_layer: &VarBuilder| -> Result<Option<EngramTrain>> {
-            if config.use_engram && config.engram_layers.contains(&layer_idx) {
-                Ok(Some(EngramTrain::new(
-                    config.dim,
-                    config.engram_d_mem,
-                    &config.engram_n_gram_orders,
-                    config.engram_n_heads,
-                    config.engram_table_size,
-                    config.engram_conv_kernel,
-                    config.group_size,
-                    config.vocab_size,
-                    vb_layer.pp("engram"),
-                )?))
-            } else {
-                Ok(None)
-            }
-        };
+        let make_engram =
+            |layer_idx: usize, vb_layer: &VarBuilder| -> Result<Option<EngramTrain>> {
+                if config.use_engram && config.engram_layers.contains(&layer_idx) {
+                    Ok(Some(EngramTrain::new(
+                        config.dim,
+                        config.engram_d_mem,
+                        &config.engram_n_gram_orders,
+                        config.engram_n_heads,
+                        config.engram_table_size,
+                        config.engram_conv_kernel,
+                        config.group_size,
+                        config.vocab_size,
+                        vb_layer.pp("engram"),
+                    )?))
+                } else {
+                    Ok(None)
+                }
+            };
 
         // Build architecture based on loop_config
         let (blocks, local_blocks_before, shared_loop_block, local_blocks_after) =
@@ -204,7 +205,9 @@ impl NanochatTrainModel {
             let (batch, seq) = token_ids.dims2()?;
             let ids_flat: Vec<u32> = token_ids.flatten_all()?.to_vec1()?;
             // Use the first block's engram config (all blocks share the same settings)
-            let first_engram = self.blocks.iter()
+            let first_engram = self
+                .blocks
+                .iter()
                 .chain(self.local_blocks_before.iter())
                 .find_map(|b| b.engram.as_ref());
             if let Some(engram) = first_engram {
@@ -282,7 +285,9 @@ impl NanochatTrainModel {
         let engram_indices: Option<Vec<Tensor>> = if self.config.use_engram {
             let (batch, seq) = token_ids.dims2()?;
             let ids_flat: Vec<u32> = token_ids.flatten_all()?.to_vec1()?;
-            let first_engram = self.blocks.iter()
+            let first_engram = self
+                .blocks
+                .iter()
                 .chain(self.local_blocks_before.iter())
                 .find_map(|b| b.engram.as_ref());
             if let Some(engram) = first_engram {
@@ -474,6 +479,7 @@ mod tests {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,

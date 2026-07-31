@@ -7,6 +7,20 @@
 //! - **Nearest** (deterministic): snap to closest E2M1 level
 //! - **Stochastic**: probabilistically round up/down proportional to distance,
 //!   preserving E[Q(x)] = x in expectation (unbiased)
+//!
+//! # This does not use FP4 hardware
+//!
+//! Everything here is a *numerical* simulation of the E2M1 lattice using f32
+//! tensor ops. It models FP4's accuracy, not its speed: values are rounded to
+//! FP4 levels but still stored and multiplied as f32, so enabling it makes
+//! training **slower**, not faster, and saves no memory.
+//!
+//! Blackwell's FP4 tensor cores are not reachable from here — candle's `DType`
+//! has no FP4 variant, so there is nothing to dispatch a GEMM on. See
+//! `docs/BLACKWELL_LOW_PRECISION.md` for what that would take and for the
+//! measurement showing the step is not GEMM-bound anyway. For an actual
+//! speedup on this hardware use [`crate::amp`] (bf16), which is a real dtype
+//! with a real cuBLAS tensor-core path.
 
 use candle_core::{DType, Result, Tensor};
 

@@ -327,10 +327,10 @@ impl Trainer {
         if let Some(ref mtp_vm) = self.mtp_varmap {
             let mtp_path = format!("{}/mtp.safetensors", checkpoint_dir);
             if std::path::Path::new(&mtp_path).exists() {
-                let tensors = candle_core::safetensors::load(&mtp_path, &self.device)
-                    .map_err(|e| candle_core::Error::Msg(format!(
-                        "MTP state load {}: {}", mtp_path, e
-                    )))?;
+                let tensors =
+                    candle_core::safetensors::load(&mtp_path, &self.device).map_err(|e| {
+                        candle_core::Error::Msg(format!("MTP state load {}: {}", mtp_path, e))
+                    })?;
                 let data = mtp_vm.data().lock().unwrap_or_else(|e| e.into_inner());
                 for (name, var) in data.iter() {
                     if let Some(tensor) = tensors.get(name) {
@@ -356,6 +356,10 @@ impl Trainer {
             crate::checkpoint::load_checkpoint(checkpoint_dir, &device).map_err(|e| {
                 candle_core::Error::Msg(format!("Failed to load checkpoint: {}", e))
             })?;
+
+        // Precision policy must be live before the first forward. Callers that
+        // want to override the checkpoint's setting re-apply it after this returns.
+        crate::amp::set_bf16_compute(config.use_bf16_compute);
 
         // Create MTP varbuilder before model (if needed)
         let mtp_varmap = if config.use_mtp {
@@ -491,6 +495,11 @@ impl Trainer {
     }
 
     pub fn new(config: TrainConfig, device: Device) -> Result<Self> {
+        // Precision policy is process-wide and read inside layer forwards, so it
+        // must be set before the first forward. Master weights stay f32 either
+        // way — this only affects matmul operands.
+        crate::amp::set_bf16_compute(config.use_bf16_compute);
+
         let varmap = VarMap::new();
 
         // Create MTP varmap if needed (separate from model varmap)
@@ -651,10 +660,7 @@ impl Trainer {
                 // Reset non-finite values to 0.0 (balanced mixing) to prevent silent corruption.
                 let vals = t.flatten_all()?.to_vec1::<f32>()?;
                 if vals.iter().any(|v| !v.is_finite()) {
-                    tracing::warn!(
-                        "Non-finite value detected in {}, resetting to 0.0",
-                        name
-                    );
+                    tracing::warn!("Non-finite value detected in {}, resetting to 0.0", name);
                     let zeros = Tensor::zeros_like(t)?;
                     var.set(&zeros)?;
                 } else {
@@ -677,11 +683,15 @@ impl Trainer {
             if !name.contains("wavefield") {
                 continue;
             }
-            if let Ok(vals) = var.as_tensor().flatten_all().and_then(|t| t.to_vec1::<f32>()) {
+            if let Ok(vals) = var
+                .as_tensor()
+                .flatten_all()
+                .and_then(|t| t.to_vec1::<f32>())
+            {
                 if name.contains("omega") {
-                    let (min, max) = vals.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &v| {
-                        (mn.min(v), mx.max(v))
-                    });
+                    let (min, max) = vals
+                        .iter()
+                        .fold((f32::MAX, f32::MIN), |(mn, mx), &v| (mn.min(v), mx.max(v)));
                     omega_stats.push((name.clone(), min, max));
                 } else if name.contains("alpha_raw") {
                     // Show softplus(alpha_raw) = actual damping coefficient
@@ -692,9 +702,9 @@ impl Trainer {
                             v.max(0.0) + (1.0 + (-abs_v).exp()).ln()
                         })
                         .collect();
-                    let (min, max) = sp.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &v| {
-                        (mn.min(v), mx.max(v))
-                    });
+                    let (min, max) = sp
+                        .iter()
+                        .fold((f32::MAX, f32::MIN), |(mn, mx), &v| (mn.min(v), mx.max(v)));
                     alpha_stats.push((name.clone(), min, max));
                 } else if name.contains("kernel_haar_coeffs") {
                     let norm: f32 = vals.iter().map(|v| v * v).sum::<f32>().sqrt();
@@ -1218,9 +1228,12 @@ impl Trainer {
                         let weights_path = format!("{}/model.safetensors", ckpt_path);
                         // Use device-aware loading (VarMap::load hardcodes CPU)
                         let tensors = candle_core::safetensors::load(&weights_path, &self.device)
-                            .map_err(|e| candle_core::Error::Msg(format!(
-                                "NaN recovery weight reload failed: {}", e
-                            )))?;
+                            .map_err(|e| {
+                            candle_core::Error::Msg(format!(
+                                "NaN recovery weight reload failed: {}",
+                                e
+                            ))
+                        })?;
                         {
                             let data = self.varmap.data().lock().unwrap_or_else(|e| e.into_inner());
                             for (name, var) in data.iter() {
@@ -1232,7 +1245,10 @@ impl Trainer {
                         // Read step from checkpoint meta
                         let meta_path = format!("{}/meta.json", ckpt_path);
                         if let Ok(meta_json) = std::fs::read_to_string(&meta_path) {
-                            if let Ok(meta) = serde_json::from_str::<crate::checkpoint::CheckpointMeta>(&meta_json) {
+                            if let Ok(meta) = serde_json::from_str::<
+                                crate::checkpoint::CheckpointMeta,
+                            >(&meta_json)
+                            {
                                 self.global_step = meta.step;
                             }
                         }
@@ -1271,7 +1287,10 @@ impl Trainer {
                 interval_steps += 1;
                 batch_idx += 1;
 
-                if self.global_step > 0 && self.global_step.is_multiple_of(log_interval) && interval_steps > 0 {
+                if self.global_step > 0
+                    && self.global_step.is_multiple_of(log_interval)
+                    && interval_steps > 0
+                {
                     let avg_loss = running_loss / interval_steps as f64;
                     let avg_entropy = running_entropy / interval_steps as f64;
                     let avg_gnorm = running_gnorm / interval_steps as f64;
@@ -1295,15 +1314,16 @@ impl Trainer {
                     interval_steps = 0;
 
                     // Wavefield diagnostics: log physics params every 5x log_interval
-                    if self.config.use_wave_field
-                        && self.global_step % (log_interval * 5) == 0
-                    {
+                    if self.config.use_wave_field && self.global_step % (log_interval * 5) == 0 {
                         self.log_wavefield_diagnostics();
                     }
                 }
 
                 // Checkpoint with disk monitoring and cleanup
-                if checkpoint_interval > 0 && self.global_step > 0 && self.global_step.is_multiple_of(checkpoint_interval) {
+                if checkpoint_interval > 0
+                    && self.global_step > 0
+                    && self.global_step.is_multiple_of(checkpoint_interval)
+                {
                     if let Some(dir) = checkpoint_dir {
                         // Check disk space before saving
                         if let Ok((total, avail)) =
@@ -1458,15 +1478,13 @@ fn trim_cuda_memory_pool(device: &Device) {
                 if res == sys::CUresult::CUDA_SUCCESS && !pool.is_null() {
                     let trim_res = sys::cuMemPoolTrimTo(pool, 0);
                     if trim_res != sys::CUresult::CUDA_SUCCESS {
-                        tracing::warn!(
-                            "cuMemPoolTrimTo failed on GPU {}: {:?}",
-                            gpu_id, trim_res
-                        );
+                        tracing::warn!("cuMemPoolTrimTo failed on GPU {}: {:?}", gpu_id, trim_res);
                     }
                 } else {
                     tracing::warn!(
                         "cuDeviceGetDefaultMemPool failed on GPU {}: {:?}",
-                        gpu_id, res
+                        gpu_id,
+                        res
                     );
                 }
             }
@@ -1570,13 +1588,28 @@ fn accumulate_grad_store(dst: &mut GradStore, src: &GradStore, varmap: &VarMap) 
 
 /// Compute total gradient norm across all variables.
 pub fn compute_grad_norm(grads: &candle_core::backprop::GradStore, varmap: &VarMap) -> Result<f64> {
-    let mut total = 0.0f64;
+    // Accumulate the per-parameter sums of squares ON DEVICE and read back once.
+    //
+    // The obvious loop — `total += g.sqr()?.sum_all()?.to_scalar::<f32>()?` —
+    // costs one full device synchronize per parameter. At 382 parameters that
+    // measured 148 ms/step (9% of the whole step) on the 5090, essentially all
+    // of it the GPU draining and refilling 382 times rather than any arithmetic.
+    // Accumulating into a device scalar keeps the same f64 summation order and
+    // drops the step cost to a single sync.
+    let mut acc: Option<Tensor> = None;
     for var in sorted_vars(varmap) {
         if let Some(g) = grads.get(var.as_tensor()) {
-            total += g.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
+            let sq = crate::reduce::sum_squares(g)?.to_dtype(DType::F64)?;
+            acc = Some(match acc {
+                Some(a) => (a + sq)?,
+                None => sq,
+            });
         }
     }
-    Ok(total.sqrt())
+    match acc {
+        Some(a) => Ok(a.to_scalar::<f64>()?.sqrt()),
+        None => Ok(0.0),
+    }
 }
 
 #[cfg(test)]
@@ -1626,6 +1659,7 @@ mod tests {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -1967,11 +2001,22 @@ mod tests {
         let stats_ent = trainer_ent.train_step(&input_ids, &target_ids)?;
 
         // Both should produce finite losses
-        assert!(stats_no_ent.loss.is_finite(), "no-ent loss not finite: {}", stats_no_ent.loss);
-        assert!(stats_ent.loss.is_finite(), "ent loss not finite: {}", stats_ent.loss);
+        assert!(
+            stats_no_ent.loss.is_finite(),
+            "no-ent loss not finite: {}",
+            stats_no_ent.loss
+        );
+        assert!(
+            stats_ent.loss.is_finite(),
+            "ent loss not finite: {}",
+            stats_ent.loss
+        );
 
         // Both must have non-zero gradient norms (training is working)
-        assert!(stats_no_ent.grad_norm > 0.0, "no-ent grad_norm should be > 0");
+        assert!(
+            stats_no_ent.grad_norm > 0.0,
+            "no-ent grad_norm should be > 0"
+        );
         assert!(stats_ent.grad_norm > 0.0, "ent grad_norm should be > 0");
 
         Ok(())

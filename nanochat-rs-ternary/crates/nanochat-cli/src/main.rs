@@ -448,6 +448,7 @@ mod tests {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: false,
             use_wave_field: false,

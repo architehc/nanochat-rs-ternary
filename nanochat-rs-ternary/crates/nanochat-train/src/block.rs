@@ -199,7 +199,8 @@ impl TransformerBlockTrain {
                 let attn_in = self.mhc_attn.prepare_input(x_exp, self.dim)?;
 
                 // Apply Engram enrichment before attention (if present)
-                let attn_in = if let (Some(engram), Some(indices)) = (&self.engram, engram_indices) {
+                let attn_in = if let (Some(engram), Some(indices)) = (&self.engram, engram_indices)
+                {
                     engram.forward(&attn_in, indices)?
                 } else {
                     attn_in
@@ -208,7 +209,9 @@ impl TransformerBlockTrain {
                 let attn_normed = self.norm_attn.forward(&attn_in)?;
                 let attn_out = match &self.attention {
                     AttentionTrainLayer::Standard(attn) => attn.forward(&attn_normed, cos, sin)?,
-                    AttentionTrainLayer::WaveField(wf) => wf.forward(&attn_normed, self.max_seq_len)?,
+                    AttentionTrainLayer::WaveField(wf) => {
+                        wf.forward(&attn_normed, self.max_seq_len)?
+                    }
                     AttentionTrainLayer::GatedDeltaNet(dn) => dn.forward(&attn_normed)?,
                 };
                 self.mhc_attn.apply(x_exp, &attn_out, self.dim)?
@@ -325,6 +328,7 @@ mod tests {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,

@@ -9,6 +9,34 @@ use std::collections::HashMap;
 /// Computes the polar factor of G (nearest orthogonal matrix).
 /// Quintic coefficients (3.4445, -4.7750, 2.0315) are tuned for fast convergence.
 pub fn newton_schulz_orthogonalize(g: &Tensor, ns_steps: usize) -> Result<Tensor> {
+    newton_schulz_with_dtype(g, ns_steps, iteration_dtype(g))
+}
+
+/// Precision the quintic iteration runs at.
+///
+/// On CUDA the iteration runs in bf16 so the matmuls reach the tensor cores;
+/// in f32 they fall back to the much slower CUDA-core path. This mirrors the
+/// reference Muon implementation, which also orthogonalizes in bfloat16.
+///
+/// The iteration tolerates it because it is *self-correcting*: the quintic map
+/// contracts toward the polar factor, so a rounding error at step `i` is pulled
+/// back toward the orthogonal manifold by step `i+1`. Only the direction of the
+/// update matters, not its precise magnitude — and the input is a stochastic
+/// gradient estimate to begin with.
+///
+/// CPU keeps f32, both because there is no tensor-core payoff and so that the
+/// portable tests stay exact.
+fn iteration_dtype(g: &Tensor) -> DType {
+    if g.device().is_cuda() {
+        DType::BF16
+    } else {
+        DType::F32
+    }
+}
+
+/// [`newton_schulz_orthogonalize`] with the iteration precision pinned, so tests
+/// can compare precisions against each other on one device.
+pub fn newton_schulz_with_dtype(g: &Tensor, ns_steps: usize, compute: DType) -> Result<Tensor> {
     let (a, b, c) = (3.4445f64, -4.7750f64, 2.0315f64);
 
     // Detach input — we don't need second-order gradients through the optimizer.
@@ -24,14 +52,22 @@ pub fn newton_schulz_orthogonalize(g: &Tensor, ns_steps: usize) -> Result<Tensor
         x = x.t()?.contiguous()?;
     }
 
-    // Normalize by Frobenius norm
-    let norm = x.sqr()?.sum_all()?.sqrt()?;
-    let norm_val = norm.to_scalar::<f32>()?;
-    if norm_val > 1e-7 {
-        x = (&x / (norm_val as f64))?;
-    }
-    // Detach after normalization to start iterations graph-free.
-    x = x.detach();
+    // Normalize by Frobenius norm.
+    //
+    // Done entirely on-device: reading the norm back to the host costs a full
+    // device synchronize, and this runs once per 2D parameter per step (~160
+    // times). `where_cond` reproduces the previous branch exactly — divide by
+    // the norm when it exceeds 1e-7, otherwise leave `x` untouched (divide by
+    // 1) so a near-zero matrix is not amplified.
+    let norm = crate::reduce::sum_squares(&x)?.sqrt()?;
+    let divisor = norm
+        .gt(1e-7f64)?
+        .where_cond(&norm, &Tensor::ones_like(&norm)?)?;
+    x = x.broadcast_div(&divisor.reshape((1, 1))?)?;
+    // Detach after normalization to start iterations graph-free. The norm above
+    // stays in f32 — it spans the full dynamic range of the gradient, which is
+    // exactly what bf16's 8-bit mantissa would lose.
+    x = x.detach().to_dtype(compute)?;
 
     // Quintic NS iteration — detach at each step to prevent graph accumulation.
     // Without detach, each iteration's matmuls chain to all previous iterations,
@@ -51,7 +87,7 @@ pub fn newton_schulz_orthogonalize(g: &Tensor, ns_steps: usize) -> Result<Tensor
         x = x.t()?.contiguous()?;
     }
 
-    Ok(x)
+    x.to_dtype(DType::F32)
 }
 
 /// Muon optimizer for 2D+ parameters.
@@ -268,6 +304,67 @@ mod tests {
     use super::*;
     use candle_core::Device;
     use candle_nn::VarMap;
+
+    /// The bf16 iteration must orthogonalize as well as the f32 one.
+    ///
+    /// Orthogonality — not agreement with the f32 result — is the property Muon
+    /// depends on, so that is what this measures: `||X X^T - I||_max`.
+    ///
+    /// Note the bar is *relative*. Muon's quintic coefficients are tuned for
+    /// fast convergence to a band around the orthogonal manifold, not to it
+    /// exactly, so even the f32 iteration leaves a residual near 0.2 after 5
+    /// steps. The claim being tested is that dropping to bf16 does not make that
+    /// materially worse, and that the resulting update still points the same way.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn bf16_iteration_orthogonalizes_like_f32() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let (rows, cols) = (256usize, 512usize);
+        let g = Tensor::randn(0f32, 1.0, (rows, cols), &device)?;
+
+        let residual = |x: &Tensor| -> Result<f32> {
+            // x is [rows, cols] with rows < cols, so X X^T is the square one.
+            let xxt = x.matmul(&x.t()?.contiguous()?)?;
+            let n = xxt.dim(0)?;
+            let eye = Tensor::from_vec(
+                (0..n * n)
+                    .map(|i| if i / n == i % n { 1f32 } else { 0f32 })
+                    .collect::<Vec<_>>(),
+                (n, n),
+                xxt.device(),
+            )?;
+            (xxt - eye)?
+                .abs()?
+                .max_keepdim(1)?
+                .max_keepdim(0)?
+                .reshape(())?
+                .to_scalar::<f32>()
+        };
+
+        let f32_out = newton_schulz_with_dtype(&g, 5, DType::F32)?;
+        let bf16_out = newton_schulz_with_dtype(&g, 5, DType::BF16)?;
+
+        let r_f32 = residual(&f32_out)?;
+        let r_bf16 = residual(&bf16_out)?;
+        assert!(
+            r_bf16 < r_f32 * 1.5 + 0.05,
+            "bf16 residual {r_bf16} materially worse than f32 {r_f32}"
+        );
+
+        // And the two updates must point the same way — a Muon step is a
+        // direction, so a large angle between them would change training.
+        let dot = (&f32_out * &bf16_out)?;
+        let dot = crate::reduce::sum_all_fast(&dot)?.to_scalar::<f32>()?;
+        let n1 = crate::reduce::sum_squares(&f32_out)?
+            .to_scalar::<f32>()?
+            .sqrt();
+        let n2 = crate::reduce::sum_squares(&bf16_out)?
+            .to_scalar::<f32>()?
+            .sqrt();
+        let cosine = dot / (n1 * n2);
+        assert!(cosine > 0.99, "bf16 update diverged from f32: cos={cosine}");
+        Ok(())
+    }
 
     #[test]
     fn test_newton_schulz_orthogonal() -> Result<()> {

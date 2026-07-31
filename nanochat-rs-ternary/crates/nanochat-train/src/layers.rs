@@ -40,25 +40,40 @@ impl BitLinearSTE {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // Weight quantization with STE
-        let (w_ternary, scales) = absmean_quantize(&self.weight, self.group_size)?;
+        // Weight quantization with STE.
+        //
+        // The quantization is a *constant* as far as autograd is concerned — the
+        // STE sends the gradient straight through to the shadow weight — so it is
+        // computed on detached tensors. Quantizing the live `weight` instead
+        // builds graph nodes for every intermediate (abs/mean/div/round/clamp/mul),
+        // each pinning a weight-sized f32 buffer alive until backward runs. On
+        // the 250M-param model that measured as ~2.2 GB of VRAM held for nothing.
+        let w_detached = self.weight.detach();
+        let (w_ternary, scales) = absmean_quantize(&w_detached, self.group_size)?;
         let w_deq = dequantize_ternary(&w_ternary, &scales, self.group_size)?;
-        // STE: forward = quantized, backward = identity to shadow weight
-        let w_ste = (&self.weight + (&w_deq - &self.weight)?.detach())?;
+        // STE: forward = quantized, backward = identity to shadow weight.
+        let w_ste = (&self.weight + (&w_deq - &w_detached)?)?;
 
-        // Activation quantization with STE
-        let (x_q, act_scales) = per_token_absmax_quantize(x)?;
+        // Activation quantization with STE — same reasoning as above.
+        let x_detached = x.detach();
+        let (x_q, act_scales) = per_token_absmax_quantize(&x_detached)?;
         let x_deq = dequantize_activations(&x_q, &act_scales)?;
-        let x_ste = (x + (&x_deq - x)?.detach())?;
+        let x_ste = (x + (&x_deq - &x_detached)?)?;
 
-        // Linear: x_ste @ w_ste^T (handles 3D+ batched input)
+        // Linear: x_ste @ w_ste^T (handles 3D+ batched input).
+        //
+        // Runs in bf16 under the mixed-precision policy. Both operands are
+        // already quantized here — ternary weights and int8-range activations —
+        // and bf16 holds those exactly, so the cast costs far less than the
+        // quantization the values have already been through. See `crate::amp`.
         let w = w_ste.t()?;
         let x_dims = x_ste.dims().to_vec();
         if x_dims.len() == 3 {
             let (b, m, k) = (x_dims[0], x_dims[1], x_dims[2]);
-            x_ste.reshape((b * m, k))?.matmul(&w)?.reshape((b, m, ()))
+            let flat = x_ste.reshape((b * m, k))?;
+            crate::amp::matmul(&flat, &w)?.reshape((b, m, ()))
         } else {
-            x_ste.matmul(&w)
+            crate::amp::matmul(&x_ste, &w)
         }
     }
 

@@ -27,14 +27,15 @@
 //! # }
 //! ```
 
+pub mod amp;
 pub mod attention;
 pub mod block;
 pub mod checkpoint;
 pub mod collider;
 pub mod config;
 pub mod data;
-pub mod engram;
 pub mod distill;
+pub mod engram;
 pub mod error;
 pub mod export;
 pub mod ffn;
@@ -49,6 +50,7 @@ pub mod model;
 pub mod mtp;
 pub mod optim;
 pub mod quantize;
+pub mod reduce;
 pub mod sensitivity;
 pub mod train;
 pub mod wavefield;

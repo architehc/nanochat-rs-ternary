@@ -185,19 +185,17 @@ pub fn export_gguf(model: &NanochatTrainModel, config: &TrainConfig, path: &str)
     );
 
     // Helper to export a BitLinearSTE as a ternary tensor
-    let export_ternary_layer = |writer: &mut GgufWriter,
-                                 name: &str,
-                                 layer: &crate::layers::BitLinearSTE|
-     -> Result<()> {
-        let (w_ternary, scales) = layer.get_ternary_weights()?;
-        let w_deq = dequantize_ternary(&w_ternary, &scales, layer.group_size)?;
-        let w_flat = w_deq.flatten_all()?.to_vec1::<f32>()?;
-        let rows = layer.out_features;
-        let cols = layer.in_features;
-        let pw = PlanarWeights::from_row_major(&w_flat, rows, cols, config.group_size);
-        writer.add_ternary_tensor(name, &pw);
-        Ok(())
-    };
+    let export_ternary_layer =
+        |writer: &mut GgufWriter, name: &str, layer: &crate::layers::BitLinearSTE| -> Result<()> {
+            let (w_ternary, scales) = layer.get_ternary_weights()?;
+            let w_deq = dequantize_ternary(&w_ternary, &scales, layer.group_size)?;
+            let w_flat = w_deq.flatten_all()?.to_vec1::<f32>()?;
+            let rows = layer.out_features;
+            let cols = layer.in_features;
+            let pw = PlanarWeights::from_row_major(&w_flat, rows, cols, config.group_size);
+            writer.add_ternary_tensor(name, &pw);
+            Ok(())
+        };
 
     // Helper to export a single block's weights
     let export_block = |writer: &mut GgufWriter,
@@ -556,6 +554,7 @@ mod tests {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,

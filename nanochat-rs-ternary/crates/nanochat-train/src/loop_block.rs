@@ -401,6 +401,7 @@ mod tests {
             async_prefetch_size: 8,
             label_smooth_eps: 0.1,
             entropy_weight: 0.0,
+            use_bf16_compute: false,
             use_fp4: false,
             fp4_stochastic_rounding: true,
             distill_teacher: None,
@@ -520,7 +521,12 @@ mod tests {
         // All exit probs should be valid
         for (i, ep) in exit_probs.iter().enumerate() {
             let v = ep.to_scalar::<f32>()?;
-            assert!(v >= 0.0 && v <= 1.0, "iter {} exit_prob {} not in [0,1]", i, v);
+            assert!(
+                v >= 0.0 && v <= 1.0,
+                "iter {} exit_prob {} not in [0,1]",
+                i,
+                v
+            );
         }
 
         Ok(())
@@ -546,7 +552,10 @@ mod tests {
         // Backward through exit_prob should produce gradients for exit gate params
         let grads = exit_prob.backward()?;
         let gate_w_grad = grads.get(&block.exit_gate.linear_weight);
-        assert!(gate_w_grad.is_some(), "exit gate weight should have gradient");
+        assert!(
+            gate_w_grad.is_some(),
+            "exit gate weight should have gradient"
+        );
 
         Ok(())
     }

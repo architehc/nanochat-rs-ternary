@@ -7,9 +7,7 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
     match config {
         "d20" => Some(TrainConfig::d20()),
         "d20-mtp" | "d20_mtp" => Some(TrainConfig::d20_mtp()),
-        "d20-e3" | "d20_e3" | "d20-e3-full" | "d20_e3_full" => {
-            Some(TrainConfig::d20_e3_full())
-        }
+        "d20-e3" | "d20_e3" | "d20-e3-full" | "d20_e3_full" => Some(TrainConfig::d20_e3_full()),
         "d20-e3-fp4" | "d20_e3_fp4" => Some(TrainConfig::d20_e3_fp4()),
         "d20-loop" | "d20_loop" => Some(TrainConfig::d20_loop()),
         "nano-125m" | "nano_125m" => Some(TrainConfig::nano_125m()),
@@ -38,46 +36,31 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-500m-wave-haar" | "nano_500m_wave_haar" | "nano-500m" | "nano_500m" => {
             Some(TrainConfig::nano_500m_wave_haar())
         }
-        "nano-500m-baseline" | "nano_500m_baseline" => {
-            Some(TrainConfig::nano_500m_baseline())
-        }
+        "nano-500m-baseline" | "nano_500m_baseline" => Some(TrainConfig::nano_500m_baseline()),
         "nano-275m-wave-haar" | "nano_275m_wave_haar" | "nano-275m" | "nano_275m" => {
             Some(TrainConfig::nano_275m_wave_haar())
         }
-        "nano-275m-baseline" | "nano_275m_baseline" => {
-            Some(TrainConfig::nano_275m_baseline())
-        }
-        "nano-275m-wave-engram-loop" | "nano_275m_wave_engram_loop"
-        | "nano-275m-engram-loop" | "nano_275m_engram_loop" => {
-            Some(TrainConfig::nano_275m_wave_engram_loop())
-        }
+        "nano-275m-baseline" | "nano_275m_baseline" => Some(TrainConfig::nano_275m_baseline()),
+        "nano-275m-wave-engram-loop"
+        | "nano_275m_wave_engram_loop"
+        | "nano-275m-engram-loop"
+        | "nano_275m_engram_loop" => Some(TrainConfig::nano_275m_wave_engram_loop()),
         "nano-275m-loop-only" | "nano_275m_loop_only" | "nano-275m-loop" | "nano_275m_loop" => {
             Some(TrainConfig::nano_275m_loop_only())
         }
-        "nano-275m-engram-only" | "nano_275m_engram_only" | "nano-275m-engram" | "nano_275m_engram" => {
-            Some(TrainConfig::nano_275m_engram_only())
-        }
+        "nano-275m-engram-only"
+        | "nano_275m_engram_only"
+        | "nano-275m-engram"
+        | "nano_275m_engram" => Some(TrainConfig::nano_275m_engram_only()),
         "nano-275m-engram-mtp" | "nano_275m_engram_mtp" => {
             Some(TrainConfig::nano_275m_engram_mtp())
         }
-        "nano-275m-engram-v4" | "nano_275m_engram_v4" => {
-            Some(TrainConfig::nano_275m_engram_v4())
-        }
-        "nano-275m-engram-v5" | "nano_275m_engram_v5" => {
-            Some(TrainConfig::nano_275m_engram_v5())
-        }
-        "nano-275m-engram-v6" | "nano_275m_engram_v6" => {
-            Some(TrainConfig::nano_275m_engram_v6())
-        }
-        "nano-275m-engram-v7" | "nano_275m_engram_v7" => {
-            Some(TrainConfig::nano_275m_engram_v7())
-        }
-        "nano-275m-engram-v8" | "nano_275m_engram_v8" => {
-            Some(TrainConfig::nano_275m_engram_v8())
-        }
-        "nano-275m-engram-v9" | "nano_275m_engram_v9" => {
-            Some(TrainConfig::nano_275m_engram_v9())
-        }
+        "nano-275m-engram-v4" | "nano_275m_engram_v4" => Some(TrainConfig::nano_275m_engram_v4()),
+        "nano-275m-engram-v5" | "nano_275m_engram_v5" => Some(TrainConfig::nano_275m_engram_v5()),
+        "nano-275m-engram-v6" | "nano_275m_engram_v6" => Some(TrainConfig::nano_275m_engram_v6()),
+        "nano-275m-engram-v7" | "nano_275m_engram_v7" => Some(TrainConfig::nano_275m_engram_v7()),
+        "nano-275m-engram-v8" | "nano_275m_engram_v8" => Some(TrainConfig::nano_275m_engram_v8()),
+        "nano-275m-engram-v9" | "nano_275m_engram_v9" => Some(TrainConfig::nano_275m_engram_v9()),
         "nano-275m-engram-v10" | "nano_275m_engram_v10" => {
             Some(TrainConfig::nano_275m_engram_v10())
         }
@@ -102,9 +85,7 @@ fn resolve_train_config(config: &str) -> Option<TrainConfig> {
         "nano-275m-engram-wide" | "nano_275m_engram_wide" => {
             Some(TrainConfig::nano_275m_engram_wide())
         }
-        "nano-275m-haar-v3" | "nano_275m_haar_v3" => {
-            Some(TrainConfig::nano_275m_haar_v3())
-        }
+        "nano-275m-haar-v3" | "nano_275m_haar_v3" => Some(TrainConfig::nano_275m_haar_v3()),
         "nano-500m-engram-5090" | "nano_500m_engram_5090" => {
             Some(TrainConfig::nano_500m_engram_5090())
         }
@@ -133,16 +114,25 @@ fn resolve_device(device: &str) -> Result<candle_core::Device, String> {
             .map_err(|e| format!("Failed to initialize CUDA device 0: {}", e)),
         #[cfg(feature = "cuda")]
         s if s.starts_with("cuda:") => {
-            let id: usize = s.strip_prefix("cuda:").unwrap().parse()
+            let id: usize = s
+                .strip_prefix("cuda:")
+                .unwrap()
+                .parse()
                 .map_err(|_| format!("Invalid CUDA device id in '{}'", s))?;
             candle_core::Device::new_cuda(id)
                 .map_err(|e| format!("Failed to initialize CUDA device {}: {}", id, e))
         }
-        other => Err(format!("Unknown device: {}. Use 'cpu', 'cuda', or 'cuda:N'.", other)),
+        other => Err(format!(
+            "Unknown device: {}. Use 'cpu', 'cuda', or 'cuda:N'.",
+            other
+        )),
     }
 }
 
-fn apply_batch_size_override(cfg: &mut TrainConfig, batch_size: Option<usize>) -> Result<(), String> {
+fn apply_batch_size_override(
+    cfg: &mut TrainConfig,
+    batch_size: Option<usize>,
+) -> Result<(), String> {
     if let Some(bs) = batch_size {
         if bs == 0 {
             return Err("error: --batch-size must be > 0".to_string());
@@ -244,6 +234,13 @@ enum Commands {
 
         #[arg(long, default_value = "cpu")]
         device: String,
+
+        /// Run matmuls in bf16 with f32 master weights (CUDA only).
+        ///
+        /// Overrides the config setting when passed. `--bf16` enables,
+        /// `--bf16=false` disables.
+        #[arg(long)]
+        bf16: Option<bool>,
     },
 
     /// Train a BPE tokenizer on a text file and produce tokenizer.json + tokens.bin
@@ -339,6 +336,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             threads,
             n_samples,
             device,
+            bf16,
         } => {
             // Set thread count before anything else
             if let Some(n) = threads {
@@ -379,6 +377,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("{}", message);
                 std::process::exit(1);
             }
+            if let Some(b) = bf16 {
+                cfg.use_bf16_compute = b;
+            }
 
             // Resume from checkpoint if specified
             let mut trainer = if let Some(ref ckpt_dir) = resume {
@@ -389,7 +390,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let cli_decay_frac = cfg.decay_start_frac;
                 let cli_total_steps = cfg.total_steps;
 
-                let mut trainer = nanochat_train::train::Trainer::from_checkpoint(ckpt_dir, device)?;
+                let mut trainer =
+                    nanochat_train::train::Trainer::from_checkpoint(ckpt_dir, device)?;
                 let meta_json = std::fs::read_to_string(format!("{}/meta.json", ckpt_dir))?;
                 let meta: nanochat_train::checkpoint::CheckpointMeta =
                     serde_json::from_str(&meta_json)?;
@@ -407,6 +409,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cfg.warmup_steps = cli_warmup;
                 cfg.decay_start_frac = cli_decay_frac;
                 cfg.total_steps = cli_total_steps;
+                // Precision is a run-level choice, not a property of the saved
+                // weights, so an explicit --bf16 wins over the checkpoint's value.
+                // `from_checkpoint` already applied the checkpoint's setting, so
+                // the process-wide policy has to be corrected here too.
+                if let Some(b) = bf16 {
+                    cfg.use_bf16_compute = b;
+                    trainer.config.use_bf16_compute = b;
+                    nanochat_train::amp::set_bf16_compute(b);
+                }
                 // Sync all overrides back to trainer
                 trainer.config.batch_size = cfg.batch_size;
                 trainer.config.lr = cli_lr;
@@ -430,7 +441,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let old_total = trainer.config.total_steps;
                 trainer.config.total_steps = ts;
                 cfg.total_steps = ts;
-                tracing::info!("Extended total_steps: {} → {} (LR schedule updated)", old_total, ts);
+                tracing::info!(
+                    "Extended total_steps: {} → {} (LR schedule updated)",
+                    old_total,
+                    ts
+                );
             }
 
             let effective_seq_len = match effective_seq_len(seq_len, &cfg) {
@@ -462,33 +477,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             // Create dataset
-            let ds: Box<dyn nanochat_train::data::Dataset> = match resolve_dataset_spec(
-                &dataset,
-                data_path,
-            ) {
-                Ok(DatasetSpec::Synthetic) => Box::new(nanochat_train::data::SyntheticDataset::new(
-                    cfg.vocab_size as u32,
-                    effective_seq_len,
-                    n_samples,
-                    42,
-                )),
-                Ok(DatasetSpec::Tokens(path)) => {
-                    Box::new(
+            let ds: Box<dyn nanochat_train::data::Dataset> =
+                match resolve_dataset_spec(&dataset, data_path) {
+                    Ok(DatasetSpec::Synthetic) => {
+                        Box::new(nanochat_train::data::SyntheticDataset::new(
+                            cfg.vocab_size as u32,
+                            effective_seq_len,
+                            n_samples,
+                            42,
+                        ))
+                    }
+                    Ok(DatasetSpec::Tokens(path)) => Box::new(
                         nanochat_train::data::dataset::TokenFileDataset::from_binary_file(
                             std::path::Path::new(&path),
                             effective_seq_len,
                         )?,
-                    )
-                }
-                Err(message) => {
-                    if message.starts_with("Unknown dataset:") {
-                        tracing::error!("{}", message);
-                    } else {
-                        eprintln!("{}", message);
+                    ),
+                    Err(message) => {
+                        if message.starts_with("Unknown dataset:") {
+                            tracing::error!("{}", message);
+                        } else {
+                            eprintln!("{}", message);
+                        }
+                        std::process::exit(1);
                     }
-                    std::process::exit(1);
-                }
-            };
+                };
 
             tracing::info!("Dataset: {} samples", ds.len());
             let tokens_per_epoch = ds.len() as f64 * effective_seq_len as f64;
@@ -561,13 +574,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let device = match resolve_device(&device) {
                 Ok(d) => d,
-                Err(msg) => { eprintln!("{}", msg); std::process::exit(1); }
+                Err(msg) => {
+                    eprintln!("{}", msg);
+                    std::process::exit(1);
+                }
             };
 
             // Load tokenizer
             let tok = nanochat_train::data::tokenizer::NanochatTokenizer::from_file(
                 std::path::Path::new(&tokenizer),
-            ).map_err(|e| -> Box<dyn std::error::Error> { e })?;
+            )
+            .map_err(|e| -> Box<dyn std::error::Error> { e })?;
 
             // Load model from checkpoint
             tracing::info!("Loading checkpoint from {}...", checkpoint);
@@ -581,14 +598,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Load weights onto the correct device
             let tensors = candle_core::safetensors::load(
-                format!("{}/model.safetensors", checkpoint), &device
+                format!("{}/model.safetensors", checkpoint),
+                &device,
             )?;
             let mut data = varmap.data().lock().unwrap();
             let mut loaded = 0usize;
             let mut missing = Vec::new();
             for (name, var) in data.iter_mut() {
                 if let Some(t) = tensors.get(name) {
-                    var.set(t).map_err(|e| format!("Failed to set {}: {}", name, e))?;
+                    var.set(t)
+                        .map_err(|e| format!("Failed to set {}: {}", name, e))?;
                     loaded += 1;
                 } else {
                     missing.push(name.clone());
@@ -598,11 +617,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let total_ckpt = tensors.len();
             drop(data);
 
-            tracing::info!("Loaded {}/{} model params from checkpoint ({} tensors in file)", loaded, total_model, total_ckpt);
+            tracing::info!(
+                "Loaded {}/{} model params from checkpoint ({} tensors in file)",
+                loaded,
+                total_model,
+                total_ckpt
+            );
             if !missing.is_empty() {
-                tracing::warn!("MISSING {} weights (still random!): {:?}",
+                tracing::warn!(
+                    "MISSING {} weights (still random!): {:?}",
                     missing.len(),
-                    if missing.len() <= 10 { &missing[..] } else { &missing[..10] }
+                    if missing.len() <= 10 {
+                        &missing[..]
+                    } else {
+                        &missing[..10]
+                    }
                 );
             }
 
@@ -616,45 +645,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tracing::info!(
                     "Wavefield model detected ({} wavefield + {} standard layers). \
                      Bypassing wavefield attention for causal generation.",
-                    n_wf, n_std
+                    n_wf,
+                    n_std
                 );
             }
 
             // Encode prompt
-            let mut token_ids: Vec<u32> = tok.encode(&prompt)
+            let mut token_ids: Vec<u32> = tok
+                .encode(&prompt)
                 .map_err(|e| -> Box<dyn std::error::Error> { e })?;
-            tracing::info!("Prompt: {} ({} tokens)", prompt.chars().take(60).collect::<String>(), token_ids.len());
+            tracing::info!(
+                "Prompt: {} ({} tokens)",
+                prompt.chars().take(60).collect::<String>(),
+                token_ids.len()
+            );
 
             // Context padding: wavefield layers are bidirectional and need a
             // well-populated field (~512 tokens) to produce good outputs. With short
             // prompts, the wavefield field is too sparse. Pad with training data prefix.
             let train_seq_len = meta.config.max_seq_len;
-            let _prefix_len = if false && token_ids.len() < train_seq_len && meta.config.use_wave_field {
-                let pad_needed = train_seq_len - token_ids.len();
-                let data_path = "data/rust_v2_prepared/tokens.bin";
-                if std::path::Path::new(data_path).exists() {
-                    let token_data = std::fs::read(data_path)?;
-                    let all_tokens: Vec<u32> = token_data.chunks_exact(4)
-                        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                        .collect();
-                    // Use a random offset for diverse context
-                    use rand::Rng;
-                    let mut rng = rand::thread_rng();
-                    let max_offset = all_tokens.len().saturating_sub(pad_needed + 1);
-                    let offset = if max_offset > 0 { rng.gen_range(0..max_offset) } else { 0 };
-                    let pad_tokens: Vec<u32> = all_tokens[offset..offset + pad_needed].to_vec();
-                    tracing::info!("Wavefield context padding: {} prefix tokens (total: {})",
-                        pad_needed, train_seq_len);
-                    let mut padded = pad_tokens;
-                    padded.extend_from_slice(&token_ids);
-                    token_ids = padded;
-                    pad_needed
+            let _prefix_len =
+                if false && token_ids.len() < train_seq_len && meta.config.use_wave_field {
+                    let pad_needed = train_seq_len - token_ids.len();
+                    let data_path = "data/rust_v2_prepared/tokens.bin";
+                    if std::path::Path::new(data_path).exists() {
+                        let token_data = std::fs::read(data_path)?;
+                        let all_tokens: Vec<u32> = token_data
+                            .chunks_exact(4)
+                            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                            .collect();
+                        // Use a random offset for diverse context
+                        use rand::Rng;
+                        let mut rng = rand::thread_rng();
+                        let max_offset = all_tokens.len().saturating_sub(pad_needed + 1);
+                        let offset = if max_offset > 0 {
+                            rng.gen_range(0..max_offset)
+                        } else {
+                            0
+                        };
+                        let pad_tokens: Vec<u32> = all_tokens[offset..offset + pad_needed].to_vec();
+                        tracing::info!(
+                            "Wavefield context padding: {} prefix tokens (total: {})",
+                            pad_needed,
+                            train_seq_len
+                        );
+                        let mut padded = pad_tokens;
+                        padded.extend_from_slice(&token_ids);
+                        token_ids = padded;
+                        pad_needed
+                    } else {
+                        0
+                    }
                 } else {
                     0
-                }
-            } else {
-                0
-            };
+                };
             let prompt_len = token_ids.len();
 
             // Print prompt (only the user's actual prompt, not padding)
@@ -666,11 +710,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let max_ctx = train_seq_len; // cap context to training window size
             for _ in 0..max_tokens {
                 // Use last max_ctx tokens as context window
-                let start = if token_ids.len() > max_ctx { token_ids.len() - max_ctx } else { 0 };
-                let input = candle_core::Tensor::new(
-                    &token_ids[start..],
-                    &device,
-                )?.unsqueeze(0)?; // [1, min(seq, max_ctx)]
+                let start = if token_ids.len() > max_ctx {
+                    token_ids.len() - max_ctx
+                } else {
+                    0
+                };
+                let input = candle_core::Tensor::new(&token_ids[start..], &device)?.unsqueeze(0)?; // [1, min(seq, max_ctx)]
 
                 let hidden = if use_causal {
                     model.forward_hidden_only_causal(&input)?
@@ -874,8 +919,7 @@ mod tests {
             DatasetSpec::Synthetic
         );
         assert_eq!(
-            resolve_dataset_spec("tokens", Some("data.bin".to_string()))
-                .expect("tokens dataset"),
+            resolve_dataset_spec("tokens", Some("data.bin".to_string())).expect("tokens dataset"),
             DatasetSpec::Tokens("data.bin".to_string())
         );
         let missing = resolve_dataset_spec("tokens", None).expect_err("missing data path");
