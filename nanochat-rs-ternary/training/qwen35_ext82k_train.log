@@ -730,3 +730,15 @@
 [ 81750/82000 ] loss=2.2790 H=2.40 lr=0.000804 gnorm=0.31 tok/s=2259 elapsed=28783s
 [ 81800/82000 ] loss=2.3456 H=2.48 lr=0.000803 gnorm=0.32 tok/s=2243 elapsed=28830s
 [ 81850/82000 ] loss=2.3142 H=2.45 lr=0.000801 gnorm=0.31 tok/s=2235 elapsed=28876s
+[ 81900/82000 ] loss=2.2522 H=2.38 lr=0.000801 gnorm=0.30 tok/s=2259 elapsed=28922s
+[ 81950/82000 ] loss=2.3059 H=2.44 lr=0.000800 gnorm=0.31 tok/s=2281 elapsed=28967s
+[ 82000/82000 ] loss=2.2980 H=2.43 lr=0.000800 gnorm=0.32 tok/s=2303 elapsed=29012s
+  Removing old checkpoint: step_76000
+  Cleaned 1 old checkpoint(s), keeping last 5
+  -> checkpoint saved to checkpoints/qwen35_hybrid_seq512/step_82000 (1.92GB)
+
+✓ Reached total_steps=82000, stopping training
+✓ Training complete at step 82000
+Final checkpoint saved to checkpoints/qwen35_hybrid_seq512/final
+
+Training complete! steps=82000 elapsed=29016.2s (483.6m)
