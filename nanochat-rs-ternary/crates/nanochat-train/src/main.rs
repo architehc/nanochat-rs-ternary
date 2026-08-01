@@ -300,6 +300,18 @@ enum Commands {
         #[arg(long, default_value = "50")]
         top_k: usize,
 
+        /// Repetition penalty (CTRL-style; 1.0 = off, ~1.2 typical).
+        ///
+        /// Tokens that already appear in the recent window have their logit
+        /// divided by this value when positive and multiplied when negative,
+        /// before temperature and top-k. Applies to greedy decoding too.
+        #[arg(long, default_value = "1.2")]
+        repetition_penalty: f32,
+
+        /// How many recent tokens the repetition penalty looks at.
+        #[arg(long, default_value = "128")]
+        repetition_window: usize,
+
         /// Device (cpu or cuda)
         #[arg(long, default_value = "cpu")]
         device: String,
@@ -564,6 +576,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_tokens,
             temperature,
             top_k,
+            repetition_penalty,
+            repetition_window,
             device,
             bypass_wavefield,
         } => {
@@ -729,6 +743,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let seq_len = last_logits.dim(0)?;
                 let last_logits = last_logits.get(seq_len - 1)?; // [vocab]
                 let mut logits_vec: Vec<f32> = last_logits.to_vec1()?;
+
+                // Repetition penalty (CTRL, Keskar et al. 2019): discount every
+                // token already present in the recent window. Division for
+                // positive logits and multiplication for negative both push the
+                // logit toward "less likely" — a plain subtraction would flip
+                // sign behaviour for negative logits. Applied before temperature
+                // and top-k so greedy decoding benefits as well.
+                if repetition_penalty > 1.0 {
+                    let win_start = token_ids.len().saturating_sub(repetition_window);
+                    let mut seen = std::collections::HashSet::new();
+                    for &t in &token_ids[win_start..] {
+                        seen.insert(t as usize);
+                    }
+                    for &t in &seen {
+                        if let Some(l) = logits_vec.get_mut(t) {
+                            if *l > 0.0 {
+                                *l /= repetition_penalty;
+                            } else {
+                                *l *= repetition_penalty;
+                            }
+                        }
+                    }
+                }
 
                 // Sample next token
                 let next_token = if temperature <= 0.0 || temperature < 1e-8 {
