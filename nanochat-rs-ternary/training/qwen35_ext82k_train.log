@@ -1,0 +1,4 @@
+
+🔧 Resumed with optimizer: Standard Muon
+[ 50050/82000 ] loss=2.4215 H=2.56 lr=0.008000 gnorm=0.33 tok/s=2314 elapsed=45s
+[ 50100/82000 ] loss=2.4017 H=2.51 lr=0.008000 gnorm=0.34 tok/s=2310 elapsed=90s
