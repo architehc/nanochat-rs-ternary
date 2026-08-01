@@ -1,3 +1,5 @@
 [2026-07-31 23:24:41] monitor started (total=82000, deadline=2026-08-01 08:24:41)
 [2026-07-31 23:24:41] TRAINER DOWN. last: 
 [2026-07-31 23:24:41] restarting from step_50000
+[2026-07-31 23:56:42] ok: [ 52100/82000 ] loss=2.5125 H=2.62 lr=0.008000 gnorm=0.34 tok/s=2257 elapsed=1878s | gpu: 60, 67 %, 30480 MiB
+[2026-08-01 00:26:42] ok: [ 54050/82000 ] loss=2.5056 H=2.63 lr=0.008000 gnorm=0.34 tok/s=2246 elapsed=3660s | gpu: 58, 65 %, 30478 MiB
