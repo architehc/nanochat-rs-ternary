@@ -14,8 +14,19 @@ use crate::planar::PlanarWeights;
 /// Custom GGUF quant type for ternary 1.58-bit weights.
 pub const GGUF_TYPE_Q1_58: u32 = 100;
 
-/// GGUF magic number: "GGUF" in little-endian.
-const GGUF_MAGIC: u32 = 0x46475547; // "GGUF"
+/// GGUF magic number: the ASCII bytes `G G U F`.
+///
+/// Derived from the bytes rather than written as a hex literal, because the hex
+/// literal was previously wrong: `0x46475547` has the middle two bytes
+/// transposed and lays down `GUGF`. Reader and writer shared the constant, so
+/// files round-tripped inside this crate while being rejected by every standard
+/// GGUF tool. `magic_is_ascii_gguf` pins it.
+const GGUF_MAGIC: u32 = u32::from_le_bytes(*b"GGUF");
+
+/// The transposed magic written before the fix.
+///
+/// Accepted on read so previously exported models still load; never written.
+const GGUF_MAGIC_LEGACY_TRANSPOSED: u32 = 0x46475547; // "GUGF"
 
 /// GGUF file version we support.
 const GGUF_VERSION: u32 = 3;
@@ -92,7 +103,7 @@ impl GgufFile {
 
         // Read header
         let magic = read_u32(&mut file)?;
-        if magic != GGUF_MAGIC {
+        if magic != GGUF_MAGIC && magic != GGUF_MAGIC_LEGACY_TRANSPOSED {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("invalid GGUF magic: {:#010x}", magic),
@@ -806,6 +817,42 @@ fn write_gguf_value(w: &mut impl Write, v: &GgufValue) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// The first four bytes of a written file must be ASCII `GGUF`.
+    ///
+    /// Checked against the literal bytes on purpose. The previous bug was a
+    /// wrong hex constant shared by the reader and the writer, so every
+    /// round-trip test passed while the files were unreadable by llama.cpp and
+    /// every other GGUF tool. Only comparing against the spelling catches that.
+    #[test]
+    fn magic_is_ascii_gguf() {
+        assert_eq!(
+            &GGUF_MAGIC.to_le_bytes(),
+            b"GGUF",
+            "GGUF magic must serialise to the ASCII bytes 'GGUF'"
+        );
+        // And the legacy value must not be mistaken for correct.
+        assert_ne!(GGUF_MAGIC, GGUF_MAGIC_LEGACY_TRANSPOSED);
+        assert_eq!(&GGUF_MAGIC_LEGACY_TRANSPOSED.to_le_bytes(), b"GUGF");
+    }
+
+    /// A file written by this crate must start with the correct bytes on disk —
+    /// the property a third-party reader actually checks.
+    #[test]
+    fn written_file_starts_with_gguf_bytes() -> io::Result<()> {
+        let dir = std::env::temp_dir().join("gguf_magic_check");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("m.gguf");
+
+        let mut w = GgufWriter::new();
+        w.add_metadata("general.architecture", GgufValue::String("test".into()));
+        w.write(&path)?;
+
+        let bytes = std::fs::read(&path)?;
+        assert_eq!(&bytes[0..4], b"GGUF", "on-disk magic must be 'GGUF'");
+        std::fs::remove_file(&path).ok();
+        Ok(())
+    }
 
     fn test_path(name: &str) -> PathBuf {
         PathBuf::from("/tmp/claude-1000/-home-habitat-ternary-clawd/95e7afdf-b472-41a0-a3d5-73532dc4ecb7/scratchpad")

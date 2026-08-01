@@ -128,3 +128,7 @@ path = "examples/profile_layers.rs"
 [[example]]
 name = "bench_gemm"
 path = "examples/bench_gemm.rs"
+
+[[example]]
+name = "eval_ce"
+path = "examples/eval_ce.rs"
