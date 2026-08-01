@@ -185,3 +185,94 @@
   Cleaned 1 old checkpoint(s), keeping last 5
   -> checkpoint saved to checkpoints/qwen35_hybrid_seq512/step_58000 (1.92GB)
 [ 58050/82000 ] loss=2.5241 H=2.63 lr=0.008000 gnorm=0.37 tok/s=2239 elapsed=7279s
+[ 58100/82000 ] loss=2.4906 H=2.62 lr=0.008000 gnorm=0.34 tok/s=2265 elapsed=7325s
+[ 58150/82000 ] loss=2.4732 H=2.59 lr=0.008000 gnorm=0.32 tok/s=2269 elapsed=7370s
+[ 58200/82000 ] loss=2.5513 H=2.66 lr=0.008000 gnorm=0.37 tok/s=2279 elapsed=7416s
+[ 58250/82000 ] loss=2.5126 H=2.64 lr=0.008000 gnorm=0.34 tok/s=2263 elapsed=7462s
+[ 58300/82000 ] loss=2.5007 H=2.63 lr=0.008000 gnorm=0.34 tok/s=2273 elapsed=7507s
+[ 58350/82000 ] loss=2.4498 H=2.56 lr=0.008000 gnorm=0.33 tok/s=2190 elapsed=7554s
+[ 58400/82000 ] loss=2.5228 H=2.64 lr=0.008000 gnorm=0.32 tok/s=2249 elapsed=7600s
+[ 58450/82000 ] loss=2.4515 H=2.57 lr=0.008000 gnorm=0.31 tok/s=2236 elapsed=7647s
+[ 58500/82000 ] loss=2.5451 H=2.65 lr=0.008000 gnorm=0.33 tok/s=2254 elapsed=7693s
+[ 58550/82000 ] loss=2.4826 H=2.60 lr=0.008000 gnorm=0.33 tok/s=2261 elapsed=7738s
+[ 58600/82000 ] loss=2.4912 H=2.61 lr=0.008000 gnorm=0.33 tok/s=2276 elapsed=7784s
+[ 58650/82000 ] loss=2.4676 H=2.59 lr=0.008000 gnorm=0.32 tok/s=2273 elapsed=7829s
+[ 58700/82000 ] loss=2.4853 H=2.59 lr=0.008000 gnorm=0.34 tok/s=2273 elapsed=7875s
+[ 58750/82000 ] loss=2.4887 H=2.61 lr=0.008000 gnorm=0.33 tok/s=2165 elapsed=7923s
+[ 58800/82000 ] loss=2.5142 H=2.64 lr=0.008000 gnorm=0.32 tok/s=2247 elapsed=7969s
+[ 58850/82000 ] loss=2.4740 H=2.58 lr=0.008000 gnorm=0.31 tok/s=2327 elapsed=8013s
+[ 58900/82000 ] loss=2.4332 H=2.55 lr=0.008000 gnorm=0.32 tok/s=2296 elapsed=8058s
+[ 58950/82000 ] loss=2.4551 H=2.56 lr=0.008000 gnorm=0.35 tok/s=2369 elapsed=8102s
+[ 59000/82000 ] loss=2.5118 H=2.63 lr=0.008000 gnorm=0.35 tok/s=2312 elapsed=8147s
+  Removing old checkpoint: step_53000
+  Cleaned 1 old checkpoint(s), keeping last 5
+  -> checkpoint saved to checkpoints/qwen35_hybrid_seq512/step_59000 (1.92GB)
+[ 59050/82000 ] loss=2.4547 H=2.58 lr=0.008000 gnorm=0.32 tok/s=2346 elapsed=8193s
+[ 59100/82000 ] loss=2.4510 H=2.57 lr=0.008000 gnorm=0.33 tok/s=2374 elapsed=8236s
+[ 59150/82000 ] loss=2.5412 H=2.64 lr=0.008000 gnorm=0.34 tok/s=2241 elapsed=8283s
+[ 59200/82000 ] loss=2.4945 H=2.62 lr=0.008000 gnorm=0.31 tok/s=2348 elapsed=8327s
+[ 59250/82000 ] loss=2.4920 H=2.61 lr=0.008000 gnorm=0.33 tok/s=2336 elapsed=8371s
+[ 59300/82000 ] loss=2.4980 H=2.61 lr=0.008000 gnorm=0.34 tok/s=2298 elapsed=8416s
+[ 59350/82000 ] loss=2.5151 H=2.64 lr=0.008000 gnorm=0.32 tok/s=2346 elapsed=8460s
+[ 59400/82000 ] loss=2.5101 H=2.64 lr=0.008000 gnorm=0.38 tok/s=2338 elapsed=8504s
+[ 59450/82000 ] loss=2.4839 H=2.60 lr=0.008000 gnorm=0.33 tok/s=2342 elapsed=8548s
+[ 59500/82000 ] loss=2.5096 H=2.62 lr=0.008000 gnorm=0.32 tok/s=2375 elapsed=8592s
+[ 59550/82000 ] loss=2.4735 H=2.61 lr=0.008000 gnorm=0.33 tok/s=2249 elapsed=8638s
+[ 59600/82000 ] loss=2.4413 H=2.55 lr=0.008000 gnorm=0.32 tok/s=2351 elapsed=8682s
+[ 59650/82000 ] loss=2.5183 H=2.63 lr=0.008000 gnorm=0.32 tok/s=2308 elapsed=8727s
+[ 59700/82000 ] loss=2.4527 H=2.55 lr=0.008000 gnorm=0.32 tok/s=2294 elapsed=8772s
+[ 59750/82000 ] loss=2.4763 H=2.61 lr=0.008000 gnorm=0.32 tok/s=2351 elapsed=8816s
+[ 59800/82000 ] loss=2.4468 H=2.56 lr=0.008000 gnorm=0.31 tok/s=2356 elapsed=8860s
+[ 59850/82000 ] loss=2.4512 H=2.57 lr=0.008000 gnorm=0.33 tok/s=2322 elapsed=8904s
+[ 59900/82000 ] loss=2.4635 H=2.58 lr=0.008000 gnorm=0.36 tok/s=2369 elapsed=8948s
+[ 59950/82000 ] loss=2.4838 H=2.59 lr=0.008000 gnorm=0.36 tok/s=2258 elapsed=8994s
+[ 60000/82000 ] loss=2.5344 H=2.66 lr=0.008000 gnorm=0.31 tok/s=2333 elapsed=9038s
+  Removing old checkpoint: step_54000
+  Cleaned 1 old checkpoint(s), keeping last 5
+  -> checkpoint saved to checkpoints/qwen35_hybrid_seq512/step_60000 (1.92GB)
+[ 60050/82000 ] loss=2.4568 H=2.59 lr=0.008000 gnorm=0.33 tok/s=2265 elapsed=9086s
+[ 60100/82000 ] loss=2.4161 H=2.53 lr=0.008000 gnorm=0.32 tok/s=2278 elapsed=9131s
+[ 60150/82000 ] loss=2.5045 H=2.64 lr=0.008000 gnorm=0.34 tok/s=2343 elapsed=9175s
+[ 60200/82000 ] loss=2.4637 H=2.58 lr=0.008000 gnorm=0.31 tok/s=2347 elapsed=9220s
+[ 60250/82000 ] loss=2.4896 H=2.60 lr=0.008000 gnorm=0.33 tok/s=2314 elapsed=9264s
+[ 60300/82000 ] loss=2.4432 H=2.54 lr=0.008000 gnorm=0.35 tok/s=2365 elapsed=9308s
+[ 60350/82000 ] loss=2.4434 H=2.57 lr=0.008000 gnorm=0.32 tok/s=2273 elapsed=9354s
+[ 60400/82000 ] loss=2.5110 H=2.63 lr=0.008000 gnorm=0.33 tok/s=2344 elapsed=9398s
+[ 60450/82000 ] loss=2.4712 H=2.59 lr=0.008000 gnorm=0.32 tok/s=2296 elapsed=9443s
+[ 60500/82000 ] loss=2.4509 H=2.57 lr=0.008000 gnorm=0.34 tok/s=2310 elapsed=9488s
+[ 60550/82000 ] loss=2.5011 H=2.62 lr=0.008000 gnorm=0.32 tok/s=2332 elapsed=9532s
+[ 60600/82000 ] loss=2.4268 H=2.56 lr=0.008000 gnorm=0.34 tok/s=2338 elapsed=9576s
+[ 60650/82000 ] loss=2.4654 H=2.58 lr=0.008000 gnorm=0.36 tok/s=2345 elapsed=9620s
+[ 60700/82000 ] loss=2.4655 H=2.59 lr=0.008000 gnorm=0.38 tok/s=2362 elapsed=9664s
+[ 60750/82000 ] loss=2.4691 H=2.58 lr=0.008000 gnorm=0.33 tok/s=2224 elapsed=9711s
+[ 60800/82000 ] loss=2.4643 H=2.58 lr=0.008000 gnorm=0.34 tok/s=2275 elapsed=9756s
+[ 60850/82000 ] loss=2.4496 H=2.57 lr=0.008000 gnorm=0.32 tok/s=2209 elapsed=9803s
+[ 60900/82000 ] loss=2.4986 H=2.62 lr=0.008000 gnorm=0.32 tok/s=2268 elapsed=9849s
+[ 60950/82000 ] loss=2.4767 H=2.60 lr=0.008000 gnorm=0.34 tok/s=2310 elapsed=9893s
+[ 61000/82000 ] loss=2.5116 H=2.63 lr=0.008000 gnorm=0.32 tok/s=2300 elapsed=9938s
+  Removing old checkpoint: step_55000
+  Cleaned 1 old checkpoint(s), keeping last 5
+  -> checkpoint saved to checkpoints/qwen35_hybrid_seq512/step_61000 (1.92GB)
+[ 61050/82000 ] loss=2.4638 H=2.58 lr=0.008000 gnorm=0.32 tok/s=2297 elapsed=9985s
+[ 61100/82000 ] loss=2.4598 H=2.58 lr=0.008000 gnorm=0.32 tok/s=2313 elapsed=10030s
+[ 61150/82000 ] loss=2.5042 H=2.63 lr=0.008000 gnorm=0.35 tok/s=2199 elapsed=10077s
+[ 61200/82000 ] loss=2.4738 H=2.59 lr=0.008000 gnorm=0.33 tok/s=2286 elapsed=10122s
+[ 61250/82000 ] loss=2.4414 H=2.56 lr=0.008000 gnorm=0.31 tok/s=2213 elapsed=10169s
+[ 61300/82000 ] loss=2.4897 H=2.60 lr=0.008000 gnorm=0.32 tok/s=2249 elapsed=10215s
+[ 61350/82000 ] loss=2.4947 H=2.61 lr=0.008000 gnorm=0.32 tok/s=2294 elapsed=10260s
+[ 61400/82000 ] loss=2.4743 H=2.60 lr=0.008000 gnorm=0.32 tok/s=2282 elapsed=10306s
+[ 61450/82000 ] loss=2.4872 H=2.60 lr=0.008000 gnorm=0.32 tok/s=2290 elapsed=10351s
+[ 61500/82000 ] loss=2.4449 H=2.57 lr=0.008000 gnorm=0.33 tok/s=2318 elapsed=10395s
+[ 61550/82000 ] loss=2.4962 H=2.61 lr=0.008000 gnorm=0.35 tok/s=2193 elapsed=10442s
+[ 61600/82000 ] loss=2.4264 H=2.54 lr=0.008000 gnorm=0.30 tok/s=2273 elapsed=10488s
+[ 61650/82000 ] loss=2.5372 H=2.66 lr=0.008000 gnorm=0.37 tok/s=2252 elapsed=10534s
+[ 61700/82000 ] loss=2.5247 H=2.64 lr=0.008000 gnorm=0.34 tok/s=2268 elapsed=10580s
+[ 61750/82000 ] loss=2.4551 H=2.57 lr=0.008000 gnorm=0.32 tok/s=2290 elapsed=10625s
+[ 61800/82000 ] loss=2.4816 H=2.60 lr=0.008000 gnorm=0.44 tok/s=2290 elapsed=10670s
+[ 61850/82000 ] loss=2.4244 H=2.55 lr=0.008000 gnorm=0.31 tok/s=2294 elapsed=10715s
+[ 61900/82000 ] loss=2.4114 H=2.53 lr=0.008000 gnorm=0.32 tok/s=2305 elapsed=10760s
+[ 61950/82000 ] loss=2.4649 H=2.59 lr=0.008000 gnorm=0.34 tok/s=2195 elapsed=10807s
+[ 62000/82000 ] loss=2.4729 H=2.59 lr=0.008000 gnorm=0.34 tok/s=2257 elapsed=10853s
+  Removing old checkpoint: step_56000
+  Cleaned 1 old checkpoint(s), keeping last 5
+  -> checkpoint saved to checkpoints/qwen35_hybrid_seq512/step_62000 (1.92GB)
