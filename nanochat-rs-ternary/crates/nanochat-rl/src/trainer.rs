@@ -15,7 +15,7 @@ use crate::reward::compute_reward;
 use crate::RLConfig;
 
 use anyhow::{Context, Result};
-use candle_core::{backprop::GradStore, Device, IndexOp, Tensor, D};
+use candle_core::{Device, IndexOp, Tensor, D};
 use candle_nn::{VarBuilder, VarMap};
 use nanochat_train::checkpoint::{load_checkpoint, save_checkpoint};
 use nanochat_train::config::TrainConfig;
@@ -137,9 +137,14 @@ impl RLTrainer {
                 for (prompt_idx, prompt) in prompts.iter().enumerate() {
                     println!("\nPrompt {}: {}", prompt_idx + 1, prompt);
 
-                    for sample_idx in 0..self.config.n_samples {
-                        let sample =
-                            Self::sample_completion(runtime, prompt, max_tokens, temperature)?;
+                    let samples = Self::sample_completions_batched(
+                        runtime,
+                        prompt,
+                        self.config.n_samples,
+                        max_tokens,
+                        temperature,
+                    )?;
+                    for (sample_idx, sample) in samples.into_iter().enumerate() {
                         println!(
                             "  Sample {}: {} chars (log_prob={:.2})",
                             sample_idx + 1,
@@ -147,12 +152,13 @@ impl RLTrainer {
                             sample.log_prob
                         );
 
-                        // Evaluate with compiler
-                        let compile_result = self.compiler.compile(&sample.completion)?;
+                        // The prompt is the leading code (doc comment + signature),
+                        // so compile and analyze prompt + completion together.
+                        let full_code = format!("{}{}", prompt, sample.completion);
+                        let compile_result = self.compiler.compile(&full_code)?;
                         let compile_success = compile_result.success;
 
-                        // Analyze AST
-                        let ast_metrics = analyze_ast(&sample.completion)?;
+                        let ast_metrics = analyze_ast(&full_code)?;
                         let parse_success = ast_metrics.parseable;
 
                         // Compute base reward
@@ -363,76 +369,92 @@ impl RLTrainer {
         }
     }
 
-    fn sample_completion(
+    /// Sample `n_samples` completions for one prompt in a single batched
+    /// autoregressive loop. All rows share the same prompt, so the batch stays
+    /// rectangular with no padding. Rows that hit EOS receive EOS filler to
+    /// keep the batch aligned and are trimmed before returning; sequential
+    /// per-sample decoding left the GPU nearly idle (~5 min/sample).
+    fn sample_completions_batched(
         runtime: &PolicyRuntime,
         prompt: &str,
+        n_samples: usize,
         max_tokens: usize,
         temperature: f32,
-    ) -> Result<GeneratedSample> {
+    ) -> Result<Vec<GeneratedSample>> {
         let encoding = runtime
             .tokenizer
             .encode(prompt, false)
             .map_err(|e| anyhow::anyhow!("Tokenizer error for prompt: {}", e))?;
-        let mut full_tokens: Vec<u32> = encoding.get_ids().to_vec();
-        if full_tokens.is_empty() {
-            full_tokens.push(0);
+        let mut prompt_tokens: Vec<u32> = encoding.get_ids().to_vec();
+        if prompt_tokens.is_empty() {
+            prompt_tokens.push(0);
         }
-        let prompt_len = full_tokens.len();
+        let prompt_len = prompt_tokens.len();
         let eos_id = runtime
             .tokenizer
             .token_to_id("<|endoftext|>")
+            .or_else(|| runtime.tokenizer.token_to_id("<eos>"))
             .unwrap_or(EOS_FALLBACK_ID);
 
-        let mut total_log_prob = 0.0f64;
-        let mut total_entropy = 0.0f64;
-        let mut n_generated = 0usize;
+        let mut rows: Vec<Vec<u32>> = vec![prompt_tokens; n_samples];
+        let mut finished = vec![false; n_samples];
+        let mut log_probs = vec![0.0f64; n_samples];
+        let mut entropies = vec![0.0f64; n_samples];
+        let mut n_generated = vec![0usize; n_samples];
 
         for _ in 0..max_tokens {
-            if full_tokens.len() + 1 >= runtime.train_config.max_seq_len {
+            let seq_len = rows[0].len();
+            if seq_len + 1 >= runtime.train_config.max_seq_len || finished.iter().all(|&f| f) {
                 break;
             }
 
-            let input = Tensor::new(full_tokens.as_slice(), &runtime.device)?.unsqueeze(0)?;
+            let flat: Vec<u32> = rows.iter().flat_map(|r| r.iter().copied()).collect();
+            let input = Tensor::from_vec(flat, (n_samples, seq_len), &runtime.device)?;
             let logits = runtime.model.forward(&input)?;
-            let last_logits = logits.get(0)?.get(full_tokens.len() - 1)?;
-            let logits_vec = last_logits.to_vec1::<f32>()?;
+            let last = logits.i((.., seq_len - 1, ..))?.to_vec2::<f32>()?;
 
-            let (next_token, log_prob, entropy) =
-                Self::sample_token_with_stats(&logits_vec, temperature);
-
-            if next_token as u32 == eos_id {
-                break;
+            for (i, row_logits) in last.iter().enumerate() {
+                if finished[i] {
+                    rows[i].push(eos_id);
+                    continue;
+                }
+                let (next_token, log_prob, entropy) =
+                    Self::sample_token_with_stats(row_logits, temperature);
+                rows[i].push(next_token as u32);
+                if next_token as u32 == eos_id {
+                    finished[i] = true;
+                } else {
+                    log_probs[i] += log_prob;
+                    entropies[i] += entropy;
+                    n_generated[i] += 1;
+                }
             }
-
-            full_tokens.push(next_token as u32);
-            total_log_prob += log_prob;
-            total_entropy += entropy;
-            n_generated += 1;
         }
 
-        let completion_tokens = if full_tokens.len() > prompt_len {
-            &full_tokens[prompt_len..]
-        } else {
-            &[]
-        };
-        let completion = runtime
-            .tokenizer
-            .decode(completion_tokens, true)
-            .unwrap_or_default();
-
-        let avg_entropy = if n_generated > 0 {
-            total_entropy / n_generated as f64
-        } else {
-            0.0
-        };
-
-        Ok(GeneratedSample {
-            completion,
-            full_tokens,
-            prompt_len,
-            log_prob: total_log_prob,
-            entropy: avg_entropy,
-        })
+        let mut samples = Vec::with_capacity(n_samples);
+        for i in 0..n_samples {
+            let mut full_tokens = std::mem::take(&mut rows[i]);
+            // Trim the terminating EOS and any filler, matching the semantics
+            // of single-sample decoding (EOS is never part of the trajectory).
+            full_tokens.truncate(prompt_len + n_generated[i]);
+            let completion = runtime
+                .tokenizer
+                .decode(&full_tokens[prompt_len..], true)
+                .unwrap_or_default();
+            let avg_entropy = if n_generated[i] > 0 {
+                entropies[i] / n_generated[i] as f64
+            } else {
+                0.0
+            };
+            samples.push(GeneratedSample {
+                completion,
+                full_tokens,
+                prompt_len,
+                log_prob: log_probs[i],
+                entropy: avg_entropy,
+            });
+        }
+        Ok(samples)
     }
 
     fn sample_token_with_stats(logits: &[f32], temperature: f32) -> (usize, f64, f64) {
@@ -548,10 +570,31 @@ impl RLTrainer {
         trajectories: &[Vec<GeneratedSample>],
         cfg: &RLConfig,
     ) -> Result<PolicyUpdateStats> {
-        let mut total_loss = Tensor::new(0.0f32, &runtime.device)?;
+        // Total sample count up front so each per-sample loss can be pre-scaled
+        // by 1/n. Backward runs per sample and gradients accumulate into
+        // detached tensors, so peak VRAM holds one autograd graph instead of
+        // n_samples of them (which overflowed 32GB at 8 samples of ~700 tokens).
+        let n_samples: usize = batch
+            .prompts
+            .iter()
+            .enumerate()
+            .map(|(i, _)| trajectories[i].len().min(batch.completions[i].len()))
+            .sum();
+
+        if n_samples == 0 {
+            return Ok(PolicyUpdateStats {
+                loss: 0.0,
+                grad_norm: 0.0,
+                kl_div: 0.0,
+                entropy: 0.0,
+            });
+        }
+
+        let vars = runtime.varmap.all_vars();
+        let mut grad_acc: Vec<Option<Tensor>> = vec![None; vars.len()];
+        let mut loss_sum = 0.0f64;
         let mut approx_kl_sum = 0.0f64;
         let mut entropy_sum = 0.0f64;
-        let mut n_samples = 0usize;
 
         for (prompt_idx, prompt_trajs) in trajectories.iter().enumerate().take(batch.prompts.len())
         {
@@ -585,69 +628,45 @@ impl RLTrainer {
                     approx_kl_sum += traj.log_prob - ref_log_prob;
                 }
 
-                total_loss = (&total_loss + &sample_loss)?;
+                let sample_loss = (sample_loss / n_samples as f64)?;
+                loss_sum += sample_loss.to_scalar::<f32>()? as f64;
+                let grads = sample_loss.backward()?;
+                for (vi, var) in vars.iter().enumerate() {
+                    if let Some(g) = grads.get(var.as_tensor()) {
+                        let g = g.detach();
+                        grad_acc[vi] = Some(match grad_acc[vi].take() {
+                            Some(acc) => (&acc + &g)?,
+                            None => g,
+                        });
+                    }
+                }
                 entropy_sum += traj.entropy;
-                n_samples += 1;
             }
         }
 
-        if n_samples == 0 {
-            return Ok(PolicyUpdateStats {
-                loss: 0.0,
-                grad_norm: 0.0,
-                kl_div: 0.0,
-                entropy: 0.0,
-            });
+        let mut total_norm_sq = 0.0f64;
+        for g in grad_acc.iter().flatten() {
+            total_norm_sq += g.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
+        }
+        let grad_norm = total_norm_sq.sqrt();
+        let clip_scale = if grad_norm > cfg.grpo.max_grad_norm && cfg.grpo.max_grad_norm > 0.0 {
+            cfg.grpo.max_grad_norm / grad_norm
+        } else {
+            1.0
+        };
+        for (vi, var) in vars.iter().enumerate() {
+            if let Some(g) = &grad_acc[vi] {
+                let update = (g * (cfg.grpo.learning_rate * clip_scale))?;
+                var.set(&var.as_tensor().sub(&update)?)?;
+            }
         }
 
-        total_loss = (&total_loss / n_samples as f64)?;
-        let loss_val = total_loss.to_scalar::<f32>()? as f64;
-        let grads = total_loss.backward()?;
-        let grad_norm = Self::apply_sgd_step(
-            &runtime.varmap,
-            &grads,
-            cfg.grpo.learning_rate,
-            cfg.grpo.max_grad_norm,
-        )?;
-
         Ok(PolicyUpdateStats {
-            loss: loss_val,
+            loss: loss_sum,
             grad_norm,
             kl_div: approx_kl_sum / n_samples as f64,
             entropy: entropy_sum / n_samples as f64,
         })
-    }
-
-    fn apply_sgd_step(
-        varmap: &VarMap,
-        grads: &GradStore,
-        lr: f64,
-        max_grad_norm: f64,
-    ) -> candle_core::Result<f64> {
-        let vars = varmap.all_vars();
-
-        let mut total_norm_sq = 0.0f64;
-        for var in &vars {
-            if let Some(g) = grads.get(var.as_tensor()) {
-                total_norm_sq += g.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
-            }
-        }
-        let grad_norm = total_norm_sq.sqrt();
-        let clip_scale = if grad_norm > max_grad_norm && max_grad_norm > 0.0 {
-            max_grad_norm / grad_norm
-        } else {
-            1.0
-        };
-
-        for var in vars {
-            if let Some(g) = grads.get(var.as_tensor()) {
-                let update = (g * (lr * clip_scale))?;
-                let new_val = var.as_tensor().sub(&update)?;
-                var.set(&new_val)?;
-            }
-        }
-
-        Ok(grad_norm)
     }
 
     fn flatten_batch_for_grpo(
@@ -692,75 +711,50 @@ impl RLTrainer {
         Ok(())
     }
 
-    /// Generate coding prompts (tasks for the model).
+    /// Code-prefix prompts: doc comment + item signature the model completes.
+    ///
+    /// The base model is a pure code LM pretrained on raw Rust source — it has
+    /// never seen natural-language instructions, so prompts must look like the
+    /// start of a source file. The prompt is prepended to the completion
+    /// before compilation, so each prefix must itself be valid leading code.
     fn generate_prompts(&self, n_prompts: usize) -> Vec<String> {
         let prompts: Vec<String> = vec![
-            // === Core Language ===
-            "Write a function to calculate the factorial of a number using recursion.",
-            "Implement a struct representing a 2D point with methods for distance calculation.",
-            "Create a function that filters even numbers from a vector using iterators.",
-            "Write a function that reads a file and returns its contents as a String, handling errors properly.",
-            "Implement a simple binary search tree with insert and search methods.",
-            // Pattern matching
-            "Write a function that uses pattern matching to parse a simple command string into an enum with variants like Quit, Echo(String), and Move { x: i32, y: i32 }.",
-            "Implement a function that uses if let and while let to process a sequence of Option values.",
-            // Error handling
-            "Define a custom error enum with multiple variants and implement std::fmt::Display and std::error::Error for it. Write functions that return Result with this error type.",
-            "Write a function that chains multiple fallible operations using the ? operator, converting between different error types with From implementations.",
-            // Ownership & borrowing
-            "Write a function that demonstrates ownership transfer, borrowing, and mutable borrowing. Include a struct with lifetime annotations.",
-            "Implement a function that takes a closure as an argument with appropriate Fn/FnMut/FnOnce bounds and demonstrate each.",
-            // Iterators
-            "Implement a custom iterator that generates the Fibonacci sequence. Use it with map, filter, take, and collect.",
-            "Write a function using iterator combinators (chain, zip, enumerate, flat_map, fold) to process two vectors into a HashMap.",
-            // Traits & generics
-            "Define a trait called Summary with a default method. Implement it for multiple structs. Write a function that accepts impl Summary and another that accepts &dyn Summary.",
-            "Write a generic function with multiple trait bounds using where clauses. Demonstrate associated types in a trait.",
-            // === Data Structures ===
-            "Implement a stack data structure using a Vec with push, pop, peek, and is_empty methods.",
-            "Implement a queue using two stacks (Vec) with enqueue and dequeue operations.",
-            "Implement a singly linked list with push_front, pop_front, peek, and an iterator.",
-            "Implement a HashMap from scratch using separate chaining with Vec<Vec<(K,V)>> buckets, with insert, get, and remove methods.",
-            "Implement a min-heap with push, pop, and peek operations.",
-            "Implement a trie (prefix tree) with insert, search, and starts_with methods.",
-            "Implement a disjoint set (Union-Find) with path compression and union by rank.",
-            "Implement an LRU cache with get and put operations using a HashMap and a doubly-linked list.",
-            // === Algorithms ===
-            "Implement quicksort for a Vec<i32> with a partition function.",
-            "Implement merge sort for a Vec<i32>.",
-            "Implement binary search that returns the index of a target in a sorted slice.",
-            "Implement BFS and DFS on an adjacency list graph representation.",
-            "Implement Dijkstra's shortest path algorithm using a BinaryHeap.",
-            "Implement dynamic programming for the 0/1 knapsack problem.",
-            "Implement the longest common subsequence algorithm for two strings.",
-            "Implement the edit distance (Levenshtein distance) between two strings.",
-            "Implement topological sort for a directed acyclic graph.",
-            "Implement a function to find all strongly connected components using Tarjan's algorithm.",
-            "Implement the Sieve of Eratosthenes to find all primes up to n.",
-            "Implement matrix multiplication for Vec<Vec<f64>> matrices.",
-            // === Rust Idioms & Patterns ===
-            "Implement the Builder pattern for a Config struct with multiple optional fields.",
-            "Implement a newtype wrapper around String that validates its contents (e.g., Email, Username).",
-            "Implement a state machine using enums and methods that consume self and return the next state.",
-            "Implement the RAII pattern with a custom struct that acquires a resource in new() and releases it in Drop.",
-            "Demonstrate interior mutability using RefCell inside an Rc for a shared mutable tree structure.",
-            "Implement From and Into conversions between multiple related types.",
-            "Implement Display and Debug traits for a custom struct with formatted output.",
-            "Write a struct that uses Cow<str> to avoid unnecessary cloning.",
-            // === Systems Programming ===
-            "Write a multi-threaded program that uses std::sync::mpsc channels to send messages between threads.",
-            "Implement a simple thread pool that executes closures submitted to it.",
-            "Write a program that uses Arc<Mutex<T>> to safely share and modify data across threads.",
-            "Write a function that uses std::sync::atomic types (AtomicUsize, Ordering) to implement a lock-free counter.",
-            "Write a program that reads a CSV file line by line, parses each line into a struct, and collects results into a Vec.",
-            "Implement a simple command-line argument parser without external crates.",
-            // === Advanced ===
-            "Implement a generic sorting function that works on any type implementing Ord, with a custom comparator option.",
-            "Write a recursive descent parser for simple arithmetic expressions (numbers, +, -, *, /, parentheses).",
-            "Implement a simple event system using trait objects: an EventBus that can register handlers and dispatch events.",
-            "Write a function that uses closures and higher-order functions to implement a pipeline of transformations on data.",
+            "/// Compute the factorial of n recursively.\nfn factorial(n: u64) -> u64 {\n",
+            "/// A 2D point.\npub struct Point {\n    x: f64,\n    y: f64,\n}\n\nimpl Point {\n    /// Euclidean distance between two points.\n    pub fn distance(&self, other: &Point) -> f64 {\n",
+            "/// Return only the even numbers from the input.\nfn filter_even(nums: &[i32]) -> Vec<i32> {\n",
+            "use std::fs;\nuse std::io;\n\n/// Read a file to a String.\nfn read_file(path: &str) -> io::Result<String> {\n",
+            "/// A binary search tree node.\npub struct Node {\n    value: i32,\n    left: Option<Box<Node>>,\n    right: Option<Box<Node>>,\n}\n\nimpl Node {\n    pub fn insert(&mut self, value: i32) {\n",
+            "/// Binary search over a sorted slice; returns the index of target.\nfn binary_search(arr: &[i32], target: i32) -> Option<usize> {\n",
+            "/// Stack backed by a Vec.\npub struct Stack<T> {\n    items: Vec<T>,\n}\n\nimpl<T> Stack<T> {\n    pub fn push(&mut self, item: T) {\n",
+            "/// Sieve of Eratosthenes: all primes up to n.\nfn primes_up_to(n: usize) -> Vec<usize> {\n",
+            "/// Fibonacci sequence iterator.\nstruct Fib {\n    a: u64,\n    b: u64,\n}\n\nimpl Iterator for Fib {\n    type Item = u64;\n    fn next(&mut self) -> Option<u64> {\n",
+            "/// Longest common subsequence length of two strings.\nfn lcs(a: &str, b: &str) -> usize {\n",
+            "/// Edit distance between two strings.\nfn edit_distance(a: &str, b: &str) -> usize {\n",
+            "/// Min-heap over a Vec.\npub struct MinHeap {\n    data: Vec<i32>,\n}\n\nimpl MinHeap {\n    pub fn push(&mut self, x: i32) {\n",
+            "use std::collections::HashMap;\n\n/// Count word frequencies in the input text.\nfn word_counts(text: &str) -> HashMap<String, usize> {\n",
+            "/// Reverse a string, respecting char boundaries.\nfn reverse(s: &str) -> String {\n",
+            "/// Quicksort a mutable slice in place.\nfn quicksort(arr: &mut [i32]) {\n",
+            "/// Merge two sorted vectors into one sorted vector.\nfn merge(a: Vec<i32>, b: Vec<i32>) -> Vec<i32> {\n",
+            "/// A queue built from two stacks.\npub struct Queue<T> {\n    front: Vec<T>,\n    back: Vec<T>,\n}\n\nimpl<T> Queue<T> {\n    pub fn enqueue(&mut self, item: T) {\n",
+            "/// Check whether a string is a palindrome.\nfn is_palindrome(s: &str) -> bool {\n",
+            "/// Greatest common divisor via Euclid's algorithm.\nfn gcd(a: u64, b: u64) -> u64 {\n",
+            "/// Builder for Config.\n#[derive(Default)]\npub struct Config {\n    name: String,\n    retries: u32,\n    verbose: bool,\n}\n\npub struct ConfigBuilder {\n    config: Config,\n}\n\nimpl ConfigBuilder {\n    pub fn name(mut self, name: &str) -> Self {\n",
+            "use std::fmt;\n\n/// Error type for the parser.\n#[derive(Debug)]\npub enum ParseError {\n    UnexpectedEof,\n    InvalidToken(String),\n}\n\nimpl fmt::Display for ParseError {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {\n",
+            "/// Singly linked list node.\npub struct ListNode {\n    val: i32,\n    next: Option<Box<ListNode>>,\n}\n\n/// Push a value onto the front of the list.\nfn push_front(head: Option<Box<ListNode>>, val: i32) -> Option<Box<ListNode>> {\n",
+            "/// Multiply two square matrices.\nfn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {\n",
+            "/// Flatten a vector of vectors.\nfn flatten<T>(vv: Vec<Vec<T>>) -> Vec<T> {\n",
+            "/// Maximum element of a slice, if any.\nfn max_element(xs: &[i32]) -> Option<i32> {\n",
+            "/// Apply a function to every element of a slice.\nfn map_all<T, U, F: Fn(&T) -> U>(xs: &[T], f: F) -> Vec<U> {\n",
+            "/// Count vowels in a string.\nfn count_vowels(s: &str) -> usize {\n",
+            "/// Sum all elements of a slice.\nfn sum(xs: &[i64]) -> i64 {\n",
+            "/// Tokens of a simple arithmetic expression.\n#[derive(Debug, PartialEq)]\nenum Token {\n    Num(f64),\n    Plus,\n    Minus,\n    Star,\n    Slash,\n    LParen,\n    RParen,\n}\n\nfn tokenize(input: &str) -> Vec<Token> {\n",
+            "/// n-th triangular number.\nfn triangular(n: u64) -> u64 {\n",
         ].into_iter().map(|s| s.to_string()).collect();
-        prompts.into_iter().cycle().take(n_prompts).collect()
+        // Rotate through the pool so successive iterations see different prompts.
+        let start = (self.iteration * n_prompts) % prompts.len();
+        (0..n_prompts)
+            .map(|i| prompts[(start + i) % prompts.len()].clone())
+            .collect()
     }
 
     /// Template code generator retained for offline/unit-test paths.
