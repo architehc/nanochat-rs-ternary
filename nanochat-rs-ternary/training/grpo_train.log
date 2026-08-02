@@ -6559,3 +6559,34 @@ Iteration 128/250
 Prompt 1: /// Quicksort a mutable slice in place.
 fn quicksort(arr: &mut [i32]) {
 
+  Sample 1: 678 chars (log_prob=-90.34)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 461 chars (log_prob=-161.31)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 683 chars (log_prob=-206.70)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 658 chars (log_prob=-109.54)
+    Compile: ✗ | Parse: ✓ | Reward: -3.00
+  Sample 5: 669 chars (log_prob=-166.73)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 682 chars (log_prob=-169.41)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Prompt 2: /// Merge two sorted vectors into one sorted vector.
+fn merge(a: Vec<i32>, b: Vec<i32>) -> Vec<i32> {
+
+═══════════════════════════════════════════════════════════
+  GRPO/GSPO Reinforcement Learning Training
+═══════════════════════════════════════════════════════════
+
+Configuration:
+  Base checkpoint:  checkpoints/rl-iter-120
+  N samples:        8
+  N iterations:     130
+  Batch size:       2
+  Device:           cuda:0
+  Qwen3 endpoint:   None
+
+───────────────────────────────────────────────────────────
+Iteration 1/130
+───────────────────────────────────────────────────────────
