@@ -16,12 +16,13 @@ LOG=$DIR/training/grpo_train.log
 MON=$DIR/training/monitor_grpo.log
 PIDF=$DIR/training/grpo_train.pid
 CSV=$DIR/rl_training.log
-BASE=checkpoints/qwen35_hybrid_seq512/step_82000
-# n_samples=8 peaked at 32028/32607 MiB during batched generation (candle
-# retains the full activation graph); 6 leaves real headroom for the
-# unattended run. ~162s/iter measured at 8 samples → 250 iters ≈ 10h.
-ITERATIONS=250
-N_SAMPLES=6
+BASE=checkpoints/rl-iter-120
+# Detached-weights generation retains no autograd graph, so VRAM no longer
+# scales with rows x tokens and n_samples=8 is safe. 120 iterations of the
+# original 250 completed under the old config; this resumes from rl-iter-120
+# for the remaining 130.
+ITERATIONS=130
+N_SAMPLES=8
 BATCH=2
 DEADLINE=$(( $(date +%s) + 16*3600 ))   # hard stop: 16h wall
 
@@ -45,11 +46,12 @@ launch() {
 }
 
 restart() {
+    # Newest by mtime, not by number: a resumed run renumbers its
+    # checkpoints from 10, so numeric order lies across restarts.
     local ckpt
-    ckpt=$(ls -d checkpoints/rl-iter-* 2>/dev/null \
-           | sed 's/.*rl-iter-//' | sort -n | tail -1)
+    ckpt=$(ls -td checkpoints/rl-iter-* 2>/dev/null | head -1)
     if [ -n "$ckpt" ]; then
-        launch "checkpoints/rl-iter-$ckpt"
+        launch "$ckpt"
     else
         launch "$BASE"
     fi

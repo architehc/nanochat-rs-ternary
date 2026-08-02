@@ -128,91 +128,133 @@ impl RLTrainer {
                 .map(|_| Vec::with_capacity(self.config.n_samples))
                 .collect();
 
-            {
+            // Generate every prompt's sample group in ONE ragged batch on a
+            // detached-weights copy of the policy: no autograd graph is
+            // retained during decoding, so VRAM stays near the weight
+            // footprint instead of scaling with rows x tokens.
+            let all_samples = {
                 let runtime = self
                     .runtime
-                    .as_mut()
+                    .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("policy runtime not initialized"))?;
+                let gen_model = Self::detached_inference_model(runtime)?;
+                Self::sample_groups(
+                    &gen_model,
+                    runtime,
+                    &prompts,
+                    self.config.n_samples,
+                    max_tokens,
+                    temperature,
+                )?
+            };
 
-                for (prompt_idx, prompt) in prompts.iter().enumerate() {
-                    println!("\nPrompt {}: {}", prompt_idx + 1, prompt);
-
-                    let samples = Self::sample_completions_batched(
-                        runtime,
-                        prompt,
-                        self.config.n_samples,
-                        max_tokens,
-                        temperature,
-                    )?;
-                    for (sample_idx, sample) in samples.into_iter().enumerate() {
-                        println!(
-                            "  Sample {}: {} chars (log_prob={:.2})",
-                            sample_idx + 1,
-                            sample.completion.len(),
-                            sample.log_prob
-                        );
-
-                        // The prompt is the leading code (doc comment + signature),
-                        // so compile and analyze prompt + completion together.
-                        let full_code = format!("{}{}", prompt, sample.completion);
-                        let compile_result = self.compiler.compile(&full_code)?;
-                        let compile_success = compile_result.success;
-
-                        let ast_metrics = analyze_ast(&full_code)?;
-                        let parse_success = ast_metrics.parseable;
-
-                        // Compute base reward
-                        let mut reward =
-                            compute_reward(&compile_result, &ast_metrics, &self.config.reward);
-
-                        // Optional: Add Qwen3 evaluation
-                        if let Some(qwen) = &self.qwen {
-                            match qwen.evaluate_code(&sample.completion, prompt).await {
-                                Ok(eval) => {
-                                    let qwen_reward = qwen_to_reward(&eval, 2.0);
-                                    reward += qwen_reward;
-                                    println!(
-                                        "    Qwen3: {:.1}/10 (reward: {:.2})",
-                                        (eval.quality_score
-                                            + eval.correctness_score
-                                            + eval.idiomaticity_score)
-                                            / 3.0,
-                                        qwen_reward
+            // rustc runs in parallel across all samples of the iteration —
+            // the sequential version left the GPU idle for the whole
+            // compile phase. CompilerFeedback::compile is thread-safe
+            // (unique temp file per invocation).
+            let evals: Vec<Vec<Result<(bool, bool, f64)>>> = std::thread::scope(|scope| {
+                let handles: Vec<Vec<_>> = all_samples
+                    .iter()
+                    .enumerate()
+                    .map(|(prompt_idx, samples)| {
+                        samples
+                            .iter()
+                            .map(|sample| {
+                                let prompt = &prompts[prompt_idx];
+                                let compiler = &self.compiler;
+                                let reward_cfg = &self.config.reward;
+                                scope.spawn(move || -> Result<(bool, bool, f64)> {
+                                    let full_code = format!("{}{}", prompt, sample.completion);
+                                    let compile_result = compiler.compile(&full_code)?;
+                                    let ast_metrics = analyze_ast(&full_code)?;
+                                    let reward = compute_reward(
+                                        &compile_result,
+                                        &ast_metrics,
+                                        reward_cfg,
                                     );
-                                }
-                                Err(e) => {
-                                    eprintln!("    Qwen3 evaluation failed: {}", e);
-                                }
+                                    Ok((compile_result.success, ast_metrics.parseable, reward))
+                                })
+                            })
+                            .collect()
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|hs| {
+                        hs.into_iter()
+                            .map(|h| {
+                                h.join()
+                                    .unwrap_or_else(|_| Err(anyhow::anyhow!("eval thread panicked")))
+                            })
+                            .collect()
+                    })
+                    .collect()
+            });
+
+            for ((prompt_idx, samples), prompt_evals) in
+                all_samples.into_iter().enumerate().zip(evals)
+            {
+                let prompt = &prompts[prompt_idx];
+                println!("\nPrompt {}: {}", prompt_idx + 1, prompt);
+
+                for ((sample_idx, sample), eval) in
+                    samples.into_iter().enumerate().zip(prompt_evals)
+                {
+                    let (compile_success, parse_success, mut reward) = eval?;
+                    println!(
+                        "  Sample {}: {} chars (log_prob={:.2})",
+                        sample_idx + 1,
+                        sample.completion.len(),
+                        sample.log_prob
+                    );
+
+                    // Optional: Add Qwen3 evaluation
+                    if let Some(qwen) = &self.qwen {
+                        match qwen.evaluate_code(&sample.completion, prompt).await {
+                            Ok(eval) => {
+                                let qwen_reward = qwen_to_reward(&eval, 2.0);
+                                reward += qwen_reward;
+                                println!(
+                                    "    Qwen3: {:.1}/10 (reward: {:.2})",
+                                    (eval.quality_score
+                                        + eval.correctness_score
+                                        + eval.idiomaticity_score)
+                                        / 3.0,
+                                    qwen_reward
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("    Qwen3 evaluation failed: {}", e);
                             }
                         }
-
-                        println!(
-                            "    Compile: {} | Parse: {} | Reward: {:.2}",
-                            if compile_success { "✓" } else { "✗" },
-                            if parse_success { "✓" } else { "✗" },
-                            reward
-                        );
-
-                        // Metadata for stats
-                        let mut metadata = HashMap::new();
-                        metadata.insert(
-                            "compile_success".to_string(),
-                            if compile_success { 1.0 } else { 0.0 },
-                        );
-                        metadata.insert(
-                            "parse_success".to_string(),
-                            if parse_success { 1.0 } else { 0.0 },
-                        );
-
-                        batch.add_completion(
-                            prompt_idx,
-                            sample.completion.clone(),
-                            reward,
-                            sample.log_prob,
-                            metadata,
-                        );
-                        trajectories[prompt_idx].push(sample);
                     }
+
+                    println!(
+                        "    Compile: {} | Parse: {} | Reward: {:.2}",
+                        if compile_success { "✓" } else { "✗" },
+                        if parse_success { "✓" } else { "✗" },
+                        reward
+                    );
+
+                    // Metadata for stats
+                    let mut metadata = HashMap::new();
+                    metadata.insert(
+                        "compile_success".to_string(),
+                        if compile_success { 1.0 } else { 0.0 },
+                    );
+                    metadata.insert(
+                        "parse_success".to_string(),
+                        if parse_success { 1.0 } else { 0.0 },
+                    );
+
+                    batch.add_completion(
+                        prompt_idx,
+                        sample.completion.clone(),
+                        reward,
+                        sample.log_prob,
+                        metadata,
+                    );
+                    trajectories[prompt_idx].push(sample);
                 }
             }
 
@@ -369,92 +411,142 @@ impl RLTrainer {
         }
     }
 
-    /// Sample `n_samples` completions for one prompt in a single batched
-    /// autoregressive loop. All rows share the same prompt, so the batch stays
-    /// rectangular with no padding. Rows that hit EOS receive EOS filler to
-    /// keep the batch aligned and are trimmed before returning; sequential
-    /// per-sample decoding left the GPU nearly idle (~5 min/sample).
-    fn sample_completions_batched(
+    /// Build an inference-only copy of the policy whose weights are detached
+    /// from autograd. Forwarding through it never records a graph, so
+    /// intermediate activations free as decoding proceeds. The tensors share
+    /// storage with the live Vars, so the copy always sees current weights;
+    /// it is rebuilt each iteration only because it is cheap.
+    fn detached_inference_model(runtime: &PolicyRuntime) -> Result<NanochatTrainModel> {
+        let tensors: HashMap<String, Tensor> = {
+            let data = runtime
+                .varmap
+                .data()
+                .lock()
+                .map_err(|e| anyhow::anyhow!("varmap lock poisoned: {}", e))?;
+            data.iter()
+                .map(|(name, var)| (name.clone(), var.as_tensor().detach()))
+                .collect()
+        };
+        let vb = VarBuilder::from_tensors(tensors, candle_core::DType::F32, &runtime.device);
+        NanochatTrainModel::new(&runtime.train_config, vb)
+            .context("building detached inference model")
+    }
+
+    /// Decode every prompt's sample group in one ragged batch. Rows are
+    /// right-padded to the current maximum length; with a causal model the
+    /// logits at each row's own last real position are unaffected by padding,
+    /// so no attention mask is needed. Finished rows drop out of the batch.
+    fn sample_groups(
+        gen_model: &NanochatTrainModel,
         runtime: &PolicyRuntime,
-        prompt: &str,
+        prompts: &[String],
         n_samples: usize,
         max_tokens: usize,
         temperature: f32,
-    ) -> Result<Vec<GeneratedSample>> {
-        let encoding = runtime
-            .tokenizer
-            .encode(prompt, false)
-            .map_err(|e| anyhow::anyhow!("Tokenizer error for prompt: {}", e))?;
-        let mut prompt_tokens: Vec<u32> = encoding.get_ids().to_vec();
-        if prompt_tokens.is_empty() {
-            prompt_tokens.push(0);
-        }
-        let prompt_len = prompt_tokens.len();
+    ) -> Result<Vec<Vec<GeneratedSample>>> {
         let eos_id = runtime
             .tokenizer
             .token_to_id("<|endoftext|>")
             .or_else(|| runtime.tokenizer.token_to_id("<eos>"))
             .unwrap_or(EOS_FALLBACK_ID);
+        let max_seq_len = runtime.train_config.max_seq_len;
 
-        let mut rows: Vec<Vec<u32>> = vec![prompt_tokens; n_samples];
-        let mut finished = vec![false; n_samples];
-        let mut log_probs = vec![0.0f64; n_samples];
-        let mut entropies = vec![0.0f64; n_samples];
-        let mut n_generated = vec![0usize; n_samples];
+        struct Row {
+            group: usize,
+            tokens: Vec<u32>,
+            prompt_len: usize,
+            finished: bool,
+            log_prob: f64,
+            entropy: f64,
+            n_generated: usize,
+        }
+
+        let mut rows: Vec<Row> = Vec::with_capacity(prompts.len() * n_samples);
+        for (group, prompt) in prompts.iter().enumerate() {
+            let encoding = runtime
+                .tokenizer
+                .encode(prompt.as_str(), false)
+                .map_err(|e| anyhow::anyhow!("Tokenizer error for prompt: {}", e))?;
+            let mut tokens: Vec<u32> = encoding.get_ids().to_vec();
+            if tokens.is_empty() {
+                tokens.push(0);
+            }
+            let prompt_len = tokens.len();
+            for _ in 0..n_samples {
+                rows.push(Row {
+                    group,
+                    tokens: tokens.clone(),
+                    prompt_len,
+                    finished: false,
+                    log_prob: 0.0,
+                    entropy: 0.0,
+                    n_generated: 0,
+                });
+            }
+        }
 
         for _ in 0..max_tokens {
-            let seq_len = rows[0].len();
-            if seq_len + 1 >= runtime.train_config.max_seq_len || finished.iter().all(|&f| f) {
+            for row in rows.iter_mut() {
+                if !row.finished && row.tokens.len() + 1 >= max_seq_len {
+                    row.finished = true;
+                }
+            }
+            let active: Vec<usize> = (0..rows.len()).filter(|&i| !rows[i].finished).collect();
+            if active.is_empty() {
                 break;
             }
 
-            let flat: Vec<u32> = rows.iter().flat_map(|r| r.iter().copied()).collect();
-            let input = Tensor::from_vec(flat, (n_samples, seq_len), &runtime.device)?;
-            let logits = runtime.model.forward(&input)?;
-            let last = logits.i((.., seq_len - 1, ..))?.to_vec2::<f32>()?;
+            let max_len = active.iter().map(|&i| rows[i].tokens.len()).max().unwrap();
+            let mut flat: Vec<u32> = Vec::with_capacity(active.len() * max_len);
+            for &i in &active {
+                flat.extend_from_slice(&rows[i].tokens);
+                flat.extend(std::iter::repeat(eos_id).take(max_len - rows[i].tokens.len()));
+            }
+            let input = Tensor::from_vec(flat, (active.len(), max_len), &runtime.device)?;
+            let logits = gen_model.forward(&input)?;
 
-            for (i, row_logits) in last.iter().enumerate() {
-                if finished[i] {
-                    rows[i].push(eos_id);
-                    continue;
-                }
+            for (batch_idx, &row_idx) in active.iter().enumerate() {
+                let last_real = rows[row_idx].tokens.len() - 1;
+                let row_logits = logits.i((batch_idx, last_real, ..))?.to_vec1::<f32>()?;
                 let (next_token, log_prob, entropy) =
-                    Self::sample_token_with_stats(row_logits, temperature);
-                rows[i].push(next_token as u32);
+                    Self::sample_token_with_stats(&row_logits, temperature);
+                let row = &mut rows[row_idx];
+                row.tokens.push(next_token as u32);
                 if next_token as u32 == eos_id {
-                    finished[i] = true;
+                    row.finished = true;
                 } else {
-                    log_probs[i] += log_prob;
-                    entropies[i] += entropy;
-                    n_generated[i] += 1;
+                    row.log_prob += log_prob;
+                    row.entropy += entropy;
+                    row.n_generated += 1;
                 }
             }
         }
 
-        let mut samples = Vec::with_capacity(n_samples);
-        for i in 0..n_samples {
-            let mut full_tokens = std::mem::take(&mut rows[i]);
-            // Trim the terminating EOS and any filler, matching the semantics
-            // of single-sample decoding (EOS is never part of the trajectory).
-            full_tokens.truncate(prompt_len + n_generated[i]);
+        let mut groups: Vec<Vec<GeneratedSample>> =
+            (0..prompts.len()).map(|_| Vec::with_capacity(n_samples)).collect();
+        for row in rows {
+            let mut full_tokens = row.tokens;
+            // Trim the terminating EOS if present (EOS is never part of the
+            // trajectory, matching the previous samplers).
+            full_tokens.truncate(row.prompt_len + row.n_generated);
             let completion = runtime
                 .tokenizer
-                .decode(&full_tokens[prompt_len..], true)
+                .decode(&full_tokens[row.prompt_len..], true)
                 .unwrap_or_default();
-            let avg_entropy = if n_generated[i] > 0 {
-                entropies[i] / n_generated[i] as f64
+            let avg_entropy = if row.n_generated > 0 {
+                row.entropy / row.n_generated as f64
             } else {
                 0.0
             };
-            samples.push(GeneratedSample {
+            groups[row.group].push(GeneratedSample {
                 completion,
                 full_tokens,
-                prompt_len,
-                log_prob: log_probs[i],
+                prompt_len: row.prompt_len,
+                log_prob: row.log_prob,
                 entropy: avg_entropy,
             });
         }
-        Ok(samples)
+        Ok(groups)
     }
 
     fn sample_token_with_stats(logits: &[f32], temperature: f32) -> (usize, f64, f64) {
