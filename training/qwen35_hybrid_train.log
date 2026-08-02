@@ -1470,3 +1470,20 @@
 [ 49500/50000 ] loss=3.0894 H=3.24 lr=0.000844 gnorm=1.40 tok/s=125 elapsed=291683s
 [ 49550/50000 ] loss=3.0268 H=3.17 lr=0.000836 gnorm=1.42 tok/s=135 elapsed=291878s
 [ 49600/50000 ] loss=2.9952 H=3.16 lr=0.000828 gnorm=1.36 tok/s=123 elapsed=292097s
+[ 49650/50000 ] loss=3.0926 H=3.26 lr=0.000822 gnorm=1.41 tok/s=136 elapsed=292290s
+[ 49700/50000 ] loss=3.0413 H=3.21 lr=0.000816 gnorm=2.01 tok/s=125 elapsed=292505s
+[ 49750/50000 ] loss=3.0723 H=3.23 lr=0.000811 gnorm=1.47 tok/s=127 elapsed=292715s
+[ 49800/50000 ] loss=3.0652 H=3.24 lr=0.000807 gnorm=1.32 tok/s=133 elapsed=292914s
+[ 49850/50000 ] loss=3.1019 H=3.24 lr=0.000804 gnorm=1.36 tok/s=121 elapsed=293136s
+[ 49900/50000 ] loss=3.0404 H=3.19 lr=0.000802 gnorm=1.86 tok/s=136 elapsed=293329s
+[ 49950/50000 ] loss=3.1358 H=3.28 lr=0.000800 gnorm=1.47 tok/s=123 elapsed=293548s
+[ 50000/50000 ] loss=3.0858 H=3.25 lr=0.000800 gnorm=1.42 tok/s=133 elapsed=293748s
+  Removing old checkpoint: step_28000
+  Cleaned 1 old checkpoint(s), keeping last 10
+  -> checkpoint saved to checkpoints/qwen35_hybrid/step_50000 (1.92GB)
+
+✓ Reached total_steps=50000, stopping training
+✓ Training complete at step 50000
+Final checkpoint saved to checkpoints/qwen35_hybrid/final
+
+Training complete! steps=50000 elapsed=293753.4s (4895.9m)

@@ -117,3 +117,13 @@
 [2026-03-06 20:48:38] Pushed to 5090
 [2026-03-06 21:18:38] --- 30-min Check ---
 [2026-03-06 21:18:38] RUNNING: step=0 loss=3.1842 gnorm=1.74 temp=49C util=78%
+[2026-03-06 21:18:39] Pushed to 5090
+[2026-03-06 21:48:39] --- 30-min Check ---
+[2026-03-06 21:48:39] TRAINING NOT RUNNING! Checking if completed or crashed...
+[2026-03-06 21:48:39] Training crashed! Last lines:
+[2026-03-06 21:48:39]   -> checkpoint saved to checkpoints/5090_v4/step_36000 (2.10GB)
+[2026-03-06 21:48:39]   [ 36050/50000 ] loss=3.2548 H=3.37 lr=0.003004 gnorm=1.81 tok/s=243 elapsed=23655s
+[2026-03-06 21:48:39]   [ 36100/50000 ] loss=3.1842 H=3.32 lr=0.002990 gnorm=1.74 tok/s=231 elapsed=23887s
+[2026-03-06 21:48:39]   [ 36150/50000 ] loss=3.1716 H=3.28 lr=0.002976 gnorm=1.70 tok/s=243 elapsed=24106s
+[2026-03-06 21:48:39]   [ 36200/50000 ] loss=3.1966 H=3.35 lr=0.002962 gnorm=1.74 tok/s=244 elapsed=24322s
+[2026-03-06 21:48:39] Attempting restart...
