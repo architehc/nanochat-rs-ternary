@@ -1,0 +1,42 @@
+═══════════════════════════════════════════════════════════
+  GRPO/GSPO Reinforcement Learning Training
+═══════════════════════════════════════════════════════════
+
+Configuration:
+  Base checkpoint:  checkpoints/qwen35_hybrid_seq512/step_82000
+  N samples:        6
+  N iterations:     250
+  Batch size:       2
+  Device:           cuda:0
+  Qwen3 endpoint:   None
+
+───────────────────────────────────────────────────────────
+Iteration 1/250
+───────────────────────────────────────────────────────────
+
+Prompt 1: /// Compute the factorial of n recursively.
+fn factorial(n: u64) -> u64 {
+
+  Sample 1: 673 chars (log_prob=-323.94)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 807 chars (log_prob=-98.46)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 673 chars (log_prob=-135.40)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 749 chars (log_prob=-153.78)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 659 chars (log_prob=-143.62)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 669 chars (log_prob=-255.54)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Prompt 2: /// A 2D point.
+pub struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl Point {
+    /// Euclidean distance between two points.
+    pub fn distance(&self, other: &Point) -> f64 {
+
