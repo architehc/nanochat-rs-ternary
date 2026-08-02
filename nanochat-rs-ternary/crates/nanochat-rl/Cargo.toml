@@ -38,3 +38,7 @@ tempfile = "3.8"
 [[example]]
 name = "train_rl"
 path = "examples/train_rl.rs"
+
+[[example]]
+name = "eval_ab"
+path = "examples/eval_ab.rs"
