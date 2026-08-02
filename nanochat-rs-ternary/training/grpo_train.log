@@ -13667,3 +13667,666 @@ Iteration 119 Statistics:
 ───────────────────────────────────────────────────────────
 Iteration 120/130
 ───────────────────────────────────────────────────────────
+
+Prompt 1: /// Tokens of a simple arithmetic expression.
+#[derive(Debug, PartialEq)]
+enum Token {
+    Num(f64),
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    LParen,
+    RParen,
+}
+
+fn tokenize(input: &str) -> Vec<Token> {
+
+  Sample 1: 890 chars (log_prob=-166.87)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 2: 1135 chars (log_prob=-133.95)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 727 chars (log_prob=-131.51)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 4: 949 chars (log_prob=-151.90)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 789 chars (log_prob=-134.16)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 940 chars (log_prob=-159.48)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 7: 1030 chars (log_prob=-105.56)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 923 chars (log_prob=-234.00)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Prompt 2: /// n-th triangular number.
+fn triangular(n: u64) -> u64 {
+
+  Sample 1: 678 chars (log_prob=-236.04)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 622 chars (log_prob=-173.09)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 770 chars (log_prob=-135.82)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 741 chars (log_prob=-126.26)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 589 chars (log_prob=-108.96)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 746 chars (log_prob=-271.34)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 760 chars (log_prob=-192.11)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 660 chars (log_prob=-175.13)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Iteration 120 Statistics:
+  Policy loss:        0.0022
+  Avg Reward:         -3.38
+  Reward Std:         0.78
+  Entropy:            0.6494
+  Approx KL:          47.1991
+  Grad norm:          10.9573
+  Compile Success:    0.0%
+  Parse Success:      0.0%
+  Saving checkpoint...
+  Checkpoint saved to: checkpoints/rl-iter-120
+
+───────────────────────────────────────────────────────────
+Iteration 121/130
+───────────────────────────────────────────────────────────
+
+Prompt 1: /// Compute the factorial of n recursively.
+fn factorial(n: u64) -> u64 {
+
+  Sample 1: 512 chars (log_prob=-140.84)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 675 chars (log_prob=-238.15)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 659 chars (log_prob=-91.64)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 633 chars (log_prob=-83.39)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 724 chars (log_prob=-225.39)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 659 chars (log_prob=-130.61)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 706 chars (log_prob=-167.57)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 716 chars (log_prob=-270.69)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Prompt 2: /// A 2D point.
+pub struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl Point {
+    /// Euclidean distance between two points.
+    pub fn distance(&self, other: &Point) -> f64 {
+
+  Sample 1: 658 chars (log_prob=-144.14)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 706 chars (log_prob=-78.16)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 781 chars (log_prob=-67.36)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 714 chars (log_prob=-99.90)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 624 chars (log_prob=-75.25)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 791 chars (log_prob=-100.56)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 753 chars (log_prob=-136.01)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 793 chars (log_prob=-161.04)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Iteration 121 Statistics:
+  Policy loss:        0.0036
+  Avg Reward:         -3.00
+  Reward Std:         0.00
+  Entropy:            0.5547
+  Approx KL:          44.0988
+  Grad norm:          11.3895
+  Compile Success:    0.0%
+  Parse Success:      0.0%
+
+───────────────────────────────────────────────────────────
+Iteration 122/130
+───────────────────────────────────────────────────────────
+
+Prompt 1: /// Return only the even numbers from the input.
+fn filter_even(nums: &[i32]) -> Vec<i32> {
+
+  Sample 1: 849 chars (log_prob=-179.61)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 708 chars (log_prob=-225.04)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 801 chars (log_prob=-192.43)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 729 chars (log_prob=-303.65)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 781 chars (log_prob=-163.31)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 640 chars (log_prob=-119.11)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 699 chars (log_prob=-203.06)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 632 chars (log_prob=-147.87)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+
+Prompt 2: use std::fs;
+use std::io;
+
+/// Read a file to a String.
+fn read_file(path: &str) -> io::Result<String> {
+
+  Sample 1: 813 chars (log_prob=-170.30)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 2: 1023 chars (log_prob=-233.42)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 3: 732 chars (log_prob=-142.96)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 730 chars (log_prob=-105.96)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 872 chars (log_prob=-234.87)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 6: 898 chars (log_prob=-143.45)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 778 chars (log_prob=-127.68)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 660 chars (log_prob=-65.16)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Iteration 122 Statistics:
+  Policy loss:        -0.0697
+  Avg Reward:         -3.50
+  Reward Std:         0.87
+  Entropy:            0.6871
+  Approx KL:          47.0030
+  Grad norm:          11.3847
+  Compile Success:    0.0%
+  Parse Success:      0.0%
+
+───────────────────────────────────────────────────────────
+Iteration 123/130
+───────────────────────────────────────────────────────────
+
+Prompt 1: /// A binary search tree node.
+pub struct Node {
+    value: i32,
+    left: Option<Box<Node>>,
+    right: Option<Box<Node>>,
+}
+
+impl Node {
+    pub fn insert(&mut self, value: i32) {
+
+  Sample 1: 720 chars (log_prob=-128.69)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 862 chars (log_prob=-183.28)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 776 chars (log_prob=-96.09)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 4: 793 chars (log_prob=-205.80)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 924 chars (log_prob=-89.67)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 913 chars (log_prob=-126.83)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 834 chars (log_prob=-70.76)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 8: 898 chars (log_prob=-136.18)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Prompt 2: /// Binary search over a sorted slice; returns the index of target.
+fn binary_search(arr: &[i32], target: i32) -> Option<usize> {
+
+  Sample 1: 1072 chars (log_prob=-191.28)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 906 chars (log_prob=-197.97)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 762 chars (log_prob=-203.39)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 924 chars (log_prob=-169.62)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 772 chars (log_prob=-249.16)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 699 chars (log_prob=-193.19)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 751 chars (log_prob=-184.27)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 731 chars (log_prob=-159.13)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Iteration 123 Statistics:
+  Policy loss:        0.0439
+  Avg Reward:         -3.25
+  Reward Std:         0.66
+  Entropy:            0.6188
+  Approx KL:          44.4907
+  Grad norm:          10.8880
+  Compile Success:    0.0%
+  Parse Success:      0.0%
+
+───────────────────────────────────────────────────────────
+Iteration 124/130
+───────────────────────────────────────────────────────────
+
+Prompt 1: /// Stack backed by a Vec.
+pub struct Stack<T> {
+    items: Vec<T>,
+}
+
+impl<T> Stack<T> {
+    pub fn push(&mut self, item: T) {
+
+  Sample 1: 796 chars (log_prob=-112.06)
+    Compile: ✗ | Parse: ✓ | Reward: 1.80
+  Sample 2: 743 chars (log_prob=-126.41)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 741 chars (log_prob=-130.25)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 707 chars (log_prob=-67.05)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 707 chars (log_prob=-79.57)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 746 chars (log_prob=-76.54)
+    Compile: ✗ | Parse: ✗ | Reward: -7.00
+  Sample 7: 753 chars (log_prob=-191.05)
+    Compile: ✗ | Parse: ✓ | Reward: 5.60
+  Sample 8: 796 chars (log_prob=-269.19)
+    Compile: ✗ | Parse: ✓ | Reward: 1.60
+
+Prompt 2: /// Sieve of Eratosthenes: all primes up to n.
+fn primes_up_to(n: usize) -> Vec<usize> {
+
+  Sample 1: 589 chars (log_prob=-87.85)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 609 chars (log_prob=-258.31)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 701 chars (log_prob=-168.48)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 511 chars (log_prob=-191.06)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 634 chars (log_prob=-328.01)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 856 chars (log_prob=-12.82)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 1199 chars (log_prob=-169.66)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 642 chars (log_prob=-140.29)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Iteration 124 Statistics:
+  Policy loss:        0.0849
+  Avg Reward:         -2.12
+  Reward Std:         2.76
+  Entropy:            0.6005
+  Approx KL:          46.9535
+  Grad norm:          12.1087
+  Compile Success:    0.0%
+  Parse Success:      18.8%
+
+───────────────────────────────────────────────────────────
+Iteration 125/130
+───────────────────────────────────────────────────────────
+
+Prompt 1: /// Fibonacci sequence iterator.
+struct Fib {
+    a: u64,
+    b: u64,
+}
+
+impl Iterator for Fib {
+    type Item = u64;
+    fn next(&mut self) -> Option<u64> {
+
+  Sample 1: 690 chars (log_prob=-187.16)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 878 chars (log_prob=-202.32)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 3: 793 chars (log_prob=-349.87)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 741 chars (log_prob=-397.86)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 809 chars (log_prob=-116.01)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 727 chars (log_prob=-97.00)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 794 chars (log_prob=-117.21)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 695 chars (log_prob=-174.79)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Prompt 2: /// Longest common subsequence length of two strings.
+fn lcs(a: &str, b: &str) -> usize {
+
+  Sample 1: 673 chars (log_prob=-117.14)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 711 chars (log_prob=-194.59)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 900 chars (log_prob=-123.22)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 715 chars (log_prob=-176.78)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 802 chars (log_prob=-191.89)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 812 chars (log_prob=-190.09)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 702 chars (log_prob=-77.95)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 549 chars (log_prob=-235.64)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Iteration 125 Statistics:
+  Policy loss:        -0.0071
+  Avg Reward:         -3.12
+  Reward Std:         0.48
+  Entropy:            0.7408
+  Approx KL:          51.3047
+  Grad norm:          12.1527
+  Compile Success:    0.0%
+  Parse Success:      0.0%
+
+───────────────────────────────────────────────────────────
+Iteration 126/130
+───────────────────────────────────────────────────────────
+
+Prompt 1: /// Edit distance between two strings.
+fn edit_distance(a: &str, b: &str) -> usize {
+
+  Sample 1: 750 chars (log_prob=-200.97)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 768 chars (log_prob=-246.56)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 1029 chars (log_prob=-153.70)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 771 chars (log_prob=-232.60)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 636 chars (log_prob=-154.65)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 6: 853 chars (log_prob=-155.92)
+    Compile: ✗ | Parse: ✓ | Reward: 9.00
+  Sample 7: 696 chars (log_prob=-237.55)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 569 chars (log_prob=-84.76)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Prompt 2: /// Min-heap over a Vec.
+pub struct MinHeap {
+    data: Vec<i32>,
+}
+
+impl MinHeap {
+    pub fn push(&mut self, x: i32) {
+
+  Sample 1: 706 chars (log_prob=-122.55)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 629 chars (log_prob=-85.47)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 772 chars (log_prob=-167.04)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 829 chars (log_prob=-200.28)
+    Compile: ✗ | Parse: ✓ | Reward: 2.60
+  Sample 5: 675 chars (log_prob=-124.41)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 741 chars (log_prob=-207.77)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 618 chars (log_prob=-72.40)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 717 chars (log_prob=-120.06)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Iteration 126 Statistics:
+  Policy loss:        0.0012
+  Avg Reward:         -2.02
+  Reward Std:         3.20
+  Entropy:            0.6282
+  Approx KL:          47.0249
+  Grad norm:          11.5509
+  Compile Success:    0.0%
+  Parse Success:      12.5%
+
+───────────────────────────────────────────────────────────
+Iteration 127/130
+───────────────────────────────────────────────────────────
+
+Prompt 1: use std::collections::HashMap;
+
+/// Count word frequencies in the input text.
+fn word_counts(text: &str) -> HashMap<String, usize> {
+
+  Sample 1: 754 chars (log_prob=-213.47)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 706 chars (log_prob=-200.95)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 721 chars (log_prob=-191.41)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 891 chars (log_prob=-67.03)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 799 chars (log_prob=-199.27)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 868 chars (log_prob=-191.11)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 810 chars (log_prob=-195.30)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 557 chars (log_prob=-125.69)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+
+Prompt 2: /// Reverse a string, respecting char boundaries.
+fn reverse(s: &str) -> String {
+
+  Sample 1: 688 chars (log_prob=-142.00)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 726 chars (log_prob=-157.32)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 704 chars (log_prob=-118.13)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 588 chars (log_prob=-126.93)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 567 chars (log_prob=-172.49)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 677 chars (log_prob=-109.96)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 785 chars (log_prob=-165.26)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 830 chars (log_prob=-126.86)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Iteration 127 Statistics:
+  Policy loss:        0.0177
+  Avg Reward:         -3.12
+  Reward Std:         0.48
+  Entropy:            0.6247
+  Approx KL:          46.6543
+  Grad norm:          11.3702
+  Compile Success:    0.0%
+  Parse Success:      0.0%
+
+───────────────────────────────────────────────────────────
+Iteration 128/130
+───────────────────────────────────────────────────────────
+
+Prompt 1: /// Quicksort a mutable slice in place.
+fn quicksort(arr: &mut [i32]) {
+
+  Sample 1: 781 chars (log_prob=-227.26)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 680 chars (log_prob=-115.35)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 847 chars (log_prob=-217.28)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 630 chars (log_prob=-158.39)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 821 chars (log_prob=-273.75)
+    Compile: ✗ | Parse: ✓ | Reward: 1.00
+  Sample 6: 543 chars (log_prob=-121.78)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 640 chars (log_prob=-170.23)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 644 chars (log_prob=-202.24)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Prompt 2: /// Merge two sorted vectors into one sorted vector.
+fn merge(a: Vec<i32>, b: Vec<i32>) -> Vec<i32> {
+
+  Sample 1: 757 chars (log_prob=-135.03)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 700 chars (log_prob=-181.63)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 635 chars (log_prob=-182.80)
+    Compile: ✗ | Parse: ✓ | Reward: 5.10
+  Sample 4: 780 chars (log_prob=-158.79)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 810 chars (log_prob=-227.31)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 769 chars (log_prob=-245.54)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 628 chars (log_prob=-150.76)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 775 chars (log_prob=-101.86)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+
+Iteration 128 Statistics:
+  Policy loss:        0.0854
+  Avg Reward:         -2.37
+  Reward Std:         2.23
+  Entropy:            0.6907
+  Approx KL:          45.5166
+  Grad norm:          11.0866
+  Compile Success:    0.0%
+  Parse Success:      12.5%
+
+───────────────────────────────────────────────────────────
+Iteration 129/130
+───────────────────────────────────────────────────────────
+
+Prompt 1: /// A queue built from two stacks.
+pub struct Queue<T> {
+    front: Vec<T>,
+    back: Vec<T>,
+}
+
+impl<T> Queue<T> {
+    pub fn enqueue(&mut self, item: T) {
+
+  Sample 1: 747 chars (log_prob=-154.37)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 678 chars (log_prob=-80.71)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 674 chars (log_prob=-161.39)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 786 chars (log_prob=-233.48)
+    Compile: ✗ | Parse: ✓ | Reward: 6.80
+  Sample 5: 744 chars (log_prob=-123.96)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 760 chars (log_prob=-167.25)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 704 chars (log_prob=-115.29)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 802 chars (log_prob=-324.31)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Prompt 2: /// Check whether a string is a palindrome.
+fn is_palindrome(s: &str) -> bool {
+
+  Sample 1: 836 chars (log_prob=-196.03)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 860 chars (log_prob=-198.15)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 761 chars (log_prob=-274.06)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 724 chars (log_prob=-255.36)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 624 chars (log_prob=-145.31)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 732 chars (log_prob=-173.55)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 674 chars (log_prob=-157.22)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 741 chars (log_prob=-280.72)
+    Compile: ✓ | Parse: ✓ | Reward: 27.10
+
+Iteration 129 Statistics:
+  Policy loss:        0.0810
+  Avg Reward:         -0.51
+  Reward Std:         7.51
+  Entropy:            0.7359
+  Approx KL:          49.8402
+  Grad norm:          11.2655
+  Compile Success:    6.2%
+  Parse Success:      12.5%
+
+───────────────────────────────────────────────────────────
+Iteration 130/130
+───────────────────────────────────────────────────────────
+
+Prompt 1: /// Greatest common divisor via Euclid's algorithm.
+fn gcd(a: u64, b: u64) -> u64 {
+
+  Sample 1: 583 chars (log_prob=-241.62)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 505 chars (log_prob=-164.10)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 784 chars (log_prob=-285.91)
+    Compile: ✗ | Parse: ✗ | Reward: -5.00
+  Sample 4: 624 chars (log_prob=-407.00)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 618 chars (log_prob=-184.14)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 604 chars (log_prob=-287.17)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 628 chars (log_prob=-270.81)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 559 chars (log_prob=-191.74)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Prompt 2: /// Builder for Config.
+#[derive(Default)]
+pub struct Config {
+    name: String,
+    retries: u32,
+    verbose: bool,
+}
+
+pub struct ConfigBuilder {
+    config: Config,
+}
+
+impl ConfigBuilder {
+    pub fn name(mut self, name: &str) -> Self {
+
+  Sample 1: 865 chars (log_prob=-113.42)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 2: 834 chars (log_prob=-84.08)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 3: 939 chars (log_prob=-72.75)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 4: 829 chars (log_prob=-174.41)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 5: 740 chars (log_prob=-73.05)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 6: 770 chars (log_prob=-117.05)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 7: 821 chars (log_prob=-88.27)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+  Sample 8: 889 chars (log_prob=-83.98)
+    Compile: ✗ | Parse: ✗ | Reward: -3.00
+
+Iteration 130 Statistics:
+  Policy loss:        -0.0427
+  Avg Reward:         -3.12
+  Reward Std:         0.48
+  Entropy:            0.6981
+  Approx KL:          49.1117
+  Grad norm:          12.7146
+  Compile Success:    0.0%
+  Parse Success:      0.0%
+  Saving checkpoint...
+  Checkpoint saved to: checkpoints/rl-iter-130
+
+═══════════════════════════════════════════════════════════
+  Training Complete!
+═══════════════════════════════════════════════════════════
